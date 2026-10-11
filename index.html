@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Gestão de Clientes Pro</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="style.css">
+
+  <!-- Bibliotecas Oficiais do Firebase v9 (Compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+
+  <!-- Tela de Bloqueio por Assinatura Expirada (Paywall Pix) -->
+  <div id="subscriptionBlockScreen" class="auth-screen" style="display: none; z-index: 10000;">
+    <div class="auth-card paywall-card">
+      <div style="font-size: 2.2rem; margin-bottom: 6px;">🔒</div>
+      <h2>Período de Teste Expirado</h2>
+      <p>Seu período de teste de 7 dias chegou ao fim. Para continuar gerenciando seus clientes e usando todas as automações, ative sua assinatura mensal.</p>
+
+      <div class="paywall-pix-box">
+        <span class="paywall-pix-label">Chave Pix para Pagamento da Licença:</span>
+        <strong id="paywallPixDisplay" class="paywall-pix-key">Carregando Pix...</strong>
+        <button type="button" class="btn-tool" style="background-color: #0d9488; margin-top: 8px; width: 100%; font-weight: bold;" onclick="copyMasterPixKey(this)">📋 Copiar Chave Pix</button>
+      </div>
+
+      <a id="paywallWhatsAppBtn" href="#" target="_blank" rel="noopener noreferrer" class="btn-auth" style="background-color: #25d366; text-decoration: none; display: block; margin-top: 10px;">
+        💬 Enviar Comprovante no WhatsApp
+      </a>
+
+      <button type="button" class="btn-cancel" style="margin-top: 8px;" onclick="handleLogout()">Sair da Conta</button>
+    </div>
+  </div>
+
+  <!-- Tela de Autenticação / Login / Cadastro / Recuperação -->
+  <div id="loginScreen" class="auth-screen">
+    <div class="auth-card">
+      <h2>🔐 Acesso ao Sistema</h2>
+      <p id="authSubtitle">Entre com seus dados para continuar:</p>
+
+      <!-- Abas de Alternância -->
+      <div class="auth-nav-tabs">
+        <button type="button" id="tabAuthLogin" class="auth-tab active" onclick="switchAuthMode('login')">Entrar</button>
+        <button type="button" id="tabAuthRegister" class="auth-tab" onclick="switchAuthMode('register')">Criar Conta</button>
+        <button type="button" id="tabAuthReset" class="auth-tab" onclick="switchAuthMode('reset')">Recuperar</button>
+      </div>
+
+      <!-- Formulário 1: Login -->
+      <form id="authFormLogin" onsubmit="handleAuthLogin(event)">
+        <div class="field">
+          <label for="authEmail">E-mail</label>
+          <input type="email" id="authEmail" placeholder="seu-email@dominio.com" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label for="authPassword">Senha</label>
+          <div class="password-input-wrapper">
+            <input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password" required>
+            <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('authPassword', this)" title="Ver senha" aria-label="Mostrar/Ocultar Senha">👁️</button>
+          </div>
+        </div>
+        <button type="submit" id="authSubmitBtn" class="btn-auth">Entrar no Sistema</button>
+      </form>
+
+      <!-- Formulário 2: Auto-cadastro Simples com Trial de 7 Dias -->
+      <form id="authFormRegister" style="display: none;" onsubmit="handleAuthRegister(event)">
+        <div class="field">
+          <label for="regName">Nome / Nome da Operação</label>
+          <input type="text" id="regName" placeholder="Ex: Rodrigo / Mega Play" required>
+        </div>
+        <div class="field">
+          <label for="regPhone">WhatsApp (com DDD)</label>
+          <input type="tel" id="regPhone" placeholder="(11) 99999-9999" maxlength="15" oninput="applyPhoneMask(this)" required>
+        </div>
+        <div class="field">
+          <label for="regEmail">E-mail de Login</label>
+          <input type="email" id="regEmail" placeholder="seu-email@dominio.com" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label for="regPassword">Criar Senha (Mínimo 6 dígitos)</label>
+          <div class="password-input-wrapper">
+            <input type="password" id="regPassword" placeholder="••••••••" autocomplete="new-password" required>
+            <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('regPassword', this)" title="Ver senha" aria-label="Mostrar/Ocultar Senha">👁️</button>
+          </div>
+        </div>
+        <button type="submit" id="regSubmitBtn" class="btn-auth" style="background-color: #059669;">Criar Conta e Iniciar 7 Dias Grátis</button>
+      </form>
+
+      <!-- Formulário 3: Esqueci a Senha -->
+      <form id="authFormReset" style="display: none;" onsubmit="handleAuthReset(event)">
+        <div class="field">
+          <label for="resetEmail">E-mail Cadastrado</label>
+          <input type="email" id="resetEmail" placeholder="seu-email@dominio.com" autocomplete="email" required>
+        </div>
+        <button type="submit" id="resetSubmitBtn" class="btn-auth" style="background-color: #4b5563;">Enviar Link de Recuperação</button>
+      </form>
+
+      <p id="authError" class="auth-error"></p>
+      <p id="authSuccess" class="auth-success"></p>
+    </div>
+  </div>
+
+  <!-- Conteúdo Principal do Aplicativo -->
+  <div class="container" id="appContainer" style="display: none;">
+    <header>
+      <div class="header-bar">
+        <h1>Gestão de Clientes</h1>
+        <div class="header-actions">
+          <button id="privacyBtn" type="button" class="btn-circle" onclick="togglePrivacyMode()" title="Ocultar/Mostrar dados" aria-label="Alternar Privacidade">👁️</button>
+          <button type="button" class="btn-circle" onclick="handleLogout()" title="Sair da conta" aria-label="Sair">🚪</button>
+        </div>
+      </div>
+
+      <div id="userBadge" class="user-badge-bar"></div>
+      <div id="resellerTrialBadge" class="trial-indicator-bar" style="display: none;"></div>
+
+      <!-- Barra de Alerta quando estiver a visualizar a tela de um Revendedor -->
+      <div id="impersonationBanner" class="impersonation-bar" style="display: none;">
+        <span>👀 Visualizando painel de: <strong id="impersonatedEmail"></strong></span>
+        <button type="button" class="btn-back-master" onclick="exitResellerView()">Voltar ao Meu Painel</button>
+      </div>
+
+      <!-- Menu Principal Superior Exclusivo para o Administrador Master -->
+      <nav id="masterNav" class="master-nav" style="display: none;">
+        <button type="button" id="tabClientsBtn" class="nav-tab active" onclick="switchMasterView('clients')">📋 Meus Clientes</button>
+        <button type="button" id="tabResellersBtn" class="nav-tab" onclick="switchMasterView('resellers')">👥 Painel Revendedores</button>
+      </nav>
+
+      <!-- Botão de Instalação PWA -->
+      <button id="installAppBtn" type="button" class="btn-tool" style="display: none; background-color: #2563eb; width: 100%; margin-bottom: 8px; font-weight: bold; padding: 10px;" onclick="triggerInstallPrompt()">📲 Instalar Aplicativo no Celular</button>
+
+      <div id="syncStatus" class="backup-alert" style="margin-top: 4px; font-weight: bold; color: #2563eb;">🔄 Conectando à nuvem...</div>
+    </header>
+
+    <!-- ==================================================== -->
+    <!-- ABA 1: TELA OPERACIONAL DE CLIENTES -->
+    <!-- ==================================================== -->
+    <div id="viewClientsSection">
+
+      <!-- BLOCO: AÇÕES DO DIA (APENAS HOJE E VENCIDOS ATÉ 7 DIAS) -->
+      <section id="dailyActionsSection" class="daily-actions-box" style="display: none;">
+        <div class="daily-actions-header">
+          <div class="daily-title">⚡ Ações do Dia (Hoje e até 7d)</div>
+          <span id="dailyTotalBadge" class="daily-badge">0 pendências</span>
+        </div>
+        <p id="dailyActionsSummary" class="daily-desc">Carregando cobranças prioritárias...</p>
+        <div id="dailyActionsList" class="daily-list"></div>
+      </section>
+
+      <!-- Configuração Rápida da Chave Pix -->
+      <section class="pix-config">
+        <label for="pixKeyInput">🔑 Minha Chave Pix (para mensagens):</label>
+        <div class="pix-input-group">
+          <input type="text" id="pixKeyInput" placeholder="Ex: seu-email@pix.com ou telefone">
+          <button type="button" class="btn-pix-save" onclick="savePixKey()">Salvar Pix</button>
+        </div>
+      </section>
+
+      <!-- MARCADORES GERAIS DO MÊS: ATIVOS E INATIVOS/VENCIDOS -->
+      <section class="status-summary">
+        <div class="status-badge-card active-card">
+          <div class="status-icon">🟢</div>
+          <div class="status-info">
+            <span class="status-title">Ativos</span>
+            <strong id="countActiveTotal">0</strong>
+          </div>
+        </div>
+        <div class="status-badge-card inactive-card">
+          <div class="status-icon">🔴</div>
+          <div class="status-info">
+            <span class="status-title">Inativos / Vencidos</span>
+            <strong id="countInactiveTotal">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <!-- Resumo Financeiro / Operacional -->
+      <section class="dashboard">
+        <div class="dash-card">
+          <span class="dash-label">Previsão Total</span>
+          <strong id="dashTotal">R$ 0,00</strong>
+        </div>
+        <div class="dash-card ok">
+          <span class="dash-label">Em Dia</span>
+          <strong id="dashOk">R$ 0,00</strong>
+        </div>
+        <div class="dash-card expired">
+          <span class="dash-label">Vencidos</span>
+          <strong id="dashExpired">R$ 0,00</strong>
+        </div>
+      </section>
+
+      <!-- Formulário de Cadastro e Edição de Clientes -->
+      <form id="clientForm">
+        <h2 id="formTitle">Novo Cliente</h2>
+        <input type="hidden" id="clientId">
+
+        <div class="field">
+          <label for="name">Nome Completo</label>
+          <input type="text" id="name" placeholder="Ex: João da Silva" required>
+        </div>
+
+        <div class="field-group">
+          <div class="field">
+            <label for="username">Usuário / Login</label>
+            <input type="text" id="username" placeholder="Ex: joao.silva" required>
+          </div>
+          <div class="field">
+            <label for="price">Valor (R$)</label>
+            <input type="number" id="price" step="0.01" min="0" placeholder="Ex: 35.00" required>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <div class="field">
+            <label for="phone">WhatsApp (com DDD)</label>
+            <input type="tel" id="phone" placeholder="(11) 99999-9999" maxlength="15" oninput="applyPhoneMask(this)" required>
+          </div>
+          <div class="field">
+            <label for="dueDate">Vencimento</label>
+            <input type="date" id="dueDate" required>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="notes">Observações</label>
+          <input type="text" id="notes" placeholder="Ex: Prefere pagar via Pix / Contato à noite">
+        </div>
+
+        <div class="field-checkbox">
+          <input type="checkbox" id="hasPending">
+          <label for="hasPending">⚠️ Consta Pendência Financeira (bloqueia renovação)</label>
+        </div>
+
+        <div class="form-buttons">
+          <button type="submit" id="saveBtn">Salvar Cliente</button>
+          <button type="button" id="cancelEditBtn" class="btn-cancel" style="display: none;" onclick="cancelEdit()">Cancelar Edição</button>
+        </div>
+      </form>
+
+      <!-- Ferramentas de Backup e Excel -->
+      <div class="backup-tools">
+        <button type="button" class="btn-tool" onclick="exportToExcel()">📊 Exportar Excel</button>
+        <button type="button" class="btn-tool" onclick="exportBackup()">💾 Fazer Backup</button>
+        <label class="btn-tool btn-upload">
+          📥 Restaurar
+          <input type="file" id="importFile" accept=".json" class="hidden-input" onchange="importBackup(event)">
+        </label>
+      </div>
+
+      <!-- Busca e Opções de Ordenação -->
+      <div class="search-box">
+        <input type="text" id="search" placeholder="Buscar por nome, usuário ou observação...">
+        <div class="sort-box">
+          <label for="sortOrder">Ordenar por:</label>
+          <select id="sortOrder" onchange="changeSortOrder(this.value)">
+            <option value="dueAsc">📅 Vencimento (Mais urgentes primeiro)</option>
+            <option value="dueDesc">📅 Vencimento (Mais distantes primeiro)</option>
+            <option value="nameAsc">🔤 Nome (A-Z)</option>
+            <option value="priceDesc">💰 Maior Valor</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Abas de Filtro da Lista -->
+      <div class="filter-tabs">
+        <button class="tab active" onclick="setFilter('all', this)">Todos (<span id="countAll">0</span>)</button>
+        <button class="tab" onclick="setFilter('ok', this)">Em dia (<span id="countOk">0</span>)</button>
+        <button class="tab" onclick="setFilter('warning', this)">A vencer (<span id="countWarning">0</span>)</button>
+        <button class="tab" onclick="setFilter('expired', this)">Vencidos (<span id="countExpired">0</span>)</button>
+      </div>
+
+      <!-- Lista de Clientes Cadastrados -->
+      <section>
+        <div id="clientList" class="cards-list"></div>
+
+        <!-- PAGINAÇÃO (BLOCOS DE 20 CLIENTES) -->
+        <div id="paginationControls" class="pagination-bar" style="display: none;">
+          <button type="button" id="prevPageBtn" class="btn-page" onclick="prevPage()">← Anterior</button>
+          <span id="pageInfo" class="page-info">Página 1 de 1</span>
+          <button type="button" id="nextPageBtn" class="btn-page" onclick="nextPage()">Próxima →</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================================================== -->
+    <!-- ABA 2: PAINEL EXCLUSIVO DE GESTÃO DE REVENDEDORES -->
+    <!-- ==================================================== -->
+    <div id="viewResellersSection" style="display: none;">
+
+      <!-- Criar Novo Revendedor Manualmente -->
+      <section class="reseller-box">
+        <h2>➕ Cadastrar Novo Revendedor Manualmente</h2>
+        <p class="reseller-help">Você pode criar uma conta manual já com 30 dias de acesso:</p>
+        <div class="field">
+          <label for="newResellerName">Nome / Operação:</label>
+          <input type="text" id="newResellerName" placeholder="Ex: Rodrigo / Mega Play">
+        </div>
+        <div class="field-group">
+          <div class="field">
+            <label for="newResellerPhone">WhatsApp:</label>
+            <input type="tel" id="newResellerPhone" placeholder="(11) 99999-9999" maxlength="15" oninput="applyPhoneMask(this)">
+          </div>
+          <div class="field">
+            <label for="newResellerEmail">E-mail de Login:</label>
+            <input type="email" id="newResellerEmail" placeholder="revendedor@exemplo.com">
+          </div>
+        </div>
+        <div class="field">
+          <label for="newResellerPass">Senha (Mínimo 6 dígitos):</label>
+          <div class="password-input-wrapper">
+            <input type="password" id="newResellerPass" placeholder="••••••••">
+            <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('newResellerPass', this)" title="Ver senha" aria-label="Mostrar/Ocultar Senha">👁️</button>
+          </div>
+        </div>
+        <button type="button" class="btn-tool" style="background-color: #059669; font-size: 0.9rem; padding: 11px;" onclick="createNewResellerAccount()">Criar Acesso (30 Dias)</button>
+      </section>
+
+      <!-- Lista de Revendedores Cadastrados -->
+      <section class="reseller-list-box">
+        <h2>👥 Revendedores na Plataforma (<span id="resellerCount">0</span>)</h2>
+        <div id="resellerCardsContainer" class="cards-list">
+          <p style="text-align: center; color: #9ca3af; font-size: 0.85rem; padding: 16px;">Carregando revendedores...</p>
+        </div>
+      </section>
+    </div>
+
+  </div>
+
+  <!-- Inclusão com defer para carregamento resiliente após o DOM -->
+  <script defer src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW falhou:', err));
+      });
+    }
+  </script>
+</body>
+</html>
