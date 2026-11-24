@@ -1,1432 +1,853 @@
-// ==========================================
-// CONFIGURAÇÃO DO FIREBASE
-// ==========================================
-const firebaseConfig = {
-  apiKey: "AIzaSyCJa_EL7sljAIgf1dO3hWIxiWI8-hjHcZY",
-  authDomain: "gestao-clientes-2355c.firebaseapp.com",
-  projectId: "gestao-clientes-2355c",
-  storageBucket: "gestao-clientes-2355c.firebasestorage.app",
-  messagingSenderId: "979751049541",
-  appId: "1:979751049541:web:1900c445eaee6d442d862c"
-};
+// ============================================================
+// APP.JS - NAVEGAÇÃO, DARK MODE, FAB, OFFLINE & ATALHOS / APPS
+// ============================================================
 
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
-const auth = firebase.auth();
+// ------------------------------------------------------------
+// 1. TEMA ESCURO (DARK MODE) COM PERSISTÊNCIA
+// ------------------------------------------------------------
+function initTheme() {
+  const savedTheme = localStorage.getItem('user_theme');
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDark = savedTheme === 'dark' || (!savedTheme && prefersDark);
 
-// CONFIGURAÇÕES MASTER DA PLATAFORMA
-const MASTER_ADMIN_EMAIL = "rodrigo.h.silva90@gmail.com";
-const MASTER_ADMIN_PHONE = "5511999999999";
-
-// ==========================================
-// ELEMENTOS DO DOM (DECLARADOS NO TOPO)
-// ==========================================
-const syncStatus = document.getElementById('syncStatus');
-const privacyBtn = document.getElementById('privacyBtn');
-const loginScreen = document.getElementById('loginScreen');
-const appContainer = document.getElementById('appContainer');
-const subscriptionBlockScreen = document.getElementById('subscriptionBlockScreen');
-const paywallPixDisplay = document.getElementById('paywallPixDisplay');
-const paywallWhatsAppBtn = document.getElementById('paywallWhatsAppBtn');
-
-const authError = document.getElementById('authError');
-const authSuccess = document.getElementById('authSuccess');
-const authSubmitBtn = document.getElementById('authSubmitBtn');
-const userBadge = document.getElementById('userBadge');
-const resellerTrialBadge = document.getElementById('resellerTrialBadge');
-const masterNav = document.getElementById('masterNav');
-const impersonationBanner = document.getElementById('impersonationBanner');
-const impersonatedEmail = document.getElementById('impersonatedEmail');
-
-// Formulários de Autenticação
-const authFormLogin = document.getElementById('authFormLogin');
-const authFormRegister = document.getElementById('authFormRegister');
-const authFormReset = document.getElementById('authFormReset');
-const authSubtitle = document.getElementById('authSubtitle');
-
-// Seções Master
-const viewClientsSection = document.getElementById('viewClientsSection');
-const viewResellersSection = document.getElementById('viewResellersSection');
-const tabClientsBtn = document.getElementById('tabClientsBtn');
-const tabResellersBtn = document.getElementById('tabResellersBtn');
-
-// Ações do Dia
-const dailyActionsSection = document.getElementById('dailyActionsSection');
-const dailyTotalBadge = document.getElementById('dailyTotalBadge');
-const dailyActionsSummary = document.getElementById('dailyActionsSummary');
-const dailyActionsList = document.getElementById('dailyActionsList');
-
-// Paginação
-const paginationControls = document.getElementById('paginationControls');
-const prevPageBtn = document.getElementById('prevPageBtn');
-const nextPageBtn = document.getElementById('nextPageBtn');
-const pageInfo = document.getElementById('pageInfo');
-
-// Elementos de Clientes e Configuração Pix
-const pixKeyInput = document.getElementById('pixKeyInput');
-const form = document.getElementById('clientForm');
-const formTitle = document.getElementById('formTitle');
-const clientIdInput = document.getElementById('clientId');
-const saveBtn = document.getElementById('saveBtn');
-const cancelEditBtn = document.getElementById('cancelEditBtn');
-const sortOrderSelect = document.getElementById('sortOrder');
-const clientList = document.getElementById('clientList');
-const searchInput = document.getElementById('search');
-
-// Indicadores e Contadores
-const countActiveTotal = document.getElementById('countActiveTotal');
-const countInactiveTotal = document.getElementById('countInactiveTotal');
-const dashTotal = document.getElementById('dashTotal');
-const dashOk = document.getElementById('dashOk');
-const dashExpired = document.getElementById('dashExpired');
-const countAll = document.getElementById('countAll');
-const countOk = document.getElementById('countOk');
-const countWarning = document.getElementById('countWarning');
-const countExpired = document.getElementById('countExpired');
-
-// Variáveis de Estado
-let currentUser = null;
-let activeOwnerId = null;
-let unsubscribeFirestore = null;
-let unsubscribeResellers = null;
-let unsubscribeAllClients = null;
-let isPrivacyMode = localStorage.getItem('user_privacy_mode') === 'true';
-let myPixKey = '';
-let masterPixKey = '';
-
-const PAGE_SIZE = 20;
-let currentPage = 1;
-let totalPages = 1;
-
-let clients = [];
-let allSystemClients = [];
-let globalResellersList = [];
-let currentFilter = 'all';
-let currentSort = localStorage.getItem('user_sort_order') || 'dueAsc';
-
-if (sortOrderSelect) sortOrderSelect.value = currentSort;
-
-// ==========================================
-// FUNÇÕES UTILITÁRIAS
-// ==========================================
-function getTodayLocal() {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function addDaysToDate(dateStr, days) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const target = new Date(y, m - 1, d);
-  target.setDate(target.getDate() + days);
-  const ry = target.getFullYear();
-  const rm = String(target.getMonth() + 1).padStart(2, '0');
-  const rd = String(target.getDate()).padStart(2, '0');
-  return `${ry}-${rm}-${rd}`;
-}
-
-window.applyPhoneMask = function(input) {
-  let v = input.value.replace(/\D/g, "");
-  if (v.length > 11) v = v.slice(0, 11);
-
-  if (v.length > 10) {
-    input.value = `(${v.slice(0, 2)}) ${v.slice(2, 7)}-${v.slice(7)}`;
-  } else if (v.length > 6) {
-    input.value = `(${v.slice(0, 2)}) ${v.slice(2, 6)}-${v.slice(6)}`;
-  } else if (v.length > 2) {
-    input.value = `(${v.slice(0, 2)})${v.slice(2)}`;
-  } else if (v.length > 0) {
-    input.value = `(${v}`;
+  if (isDark) {
+    document.body.classList.add('dark-mode');
   } else {
-    input.value = "";
+    document.body.classList.remove('dark-mode');
   }
+  updateThemeButtonIcon();
+}
+
+window.toggleDarkMode = function() {
+  const isDarkNow = document.body.classList.toggle('dark-mode');
+  localStorage.setItem('user_theme', isDarkNow ? 'dark' : 'light');
+  updateThemeButtonIcon();
 };
 
-window.togglePasswordVisibility = function(inputId, btn) {
-  const input = document.getElementById(inputId);
-  if (!input) return;
-  if (input.type === "password") {
-    input.type = "text";
-    btn.textContent = "🙈";
+function updateThemeButtonIcon() {
+  const btn = document.getElementById('themeToggleBtn');
+  if (!btn) return;
+  const isDark = document.body.classList.contains('dark-mode');
+  btn.textContent = isDark ? '☀️' : '🌙';
+  btn.title = isDark ? 'Mudar para Modo Claro' : 'Mudar para Modo Escuro';
+}
+
+// ------------------------------------------------------------
+// 2. MONITORAMENTO DE REDE (ONLINE / OFFLINE)
+// ------------------------------------------------------------
+function initNetworkWatcher() {
+  const banner = document.getElementById('offlineBanner');
+
+  function updateStatus() {
+    if (!banner) return;
+    if (navigator.onLine) {
+      banner.style.display = 'none';
+    } else {
+      banner.style.display = 'block';
+    }
+  }
+
+  window.addEventListener('online', updateStatus);
+  window.addEventListener('offline', updateStatus);
+  updateStatus();
+}
+
+// ------------------------------------------------------------
+// 3. BOTÃO FLUTUANTE DE AÇÃO RÁPIDA (FAB)
+// ------------------------------------------------------------
+window.toggleFabMenu = function() {
+  const menu = document.getElementById('fabMenu');
+  const mainBtn = document.getElementById('fabMainBtn');
+  if (!menu) return;
+
+  const isOpen = menu.style.display === 'flex';
+  if (isOpen) {
+    menu.style.display = 'none';
+    if (mainBtn) mainBtn.textContent = '⚡';
   } else {
-    input.type = "password";
-    btn.textContent = "👁️";
+    menu.style.display = 'flex';
+    if (mainBtn) mainBtn.textContent = '✕';
   }
 };
 
-window.copyMasterPixKey = function(btn) {
-  const pix = masterPixKey || myPixKey;
-  if (!pix) {
-    alert("Nenhuma chave Pix configurada no momento.");
-    return;
-  }
-  navigator.clipboard.writeText(pix).then(() => {
-    const orig = btn.textContent;
-    btn.textContent = "Chave Copiada! ✓";
-    setTimeout(() => btn.textContent = orig, 1800);
-  });
+window.closeFabMenu = function() {
+  const menu = document.getElementById('fabMenu');
+  const mainBtn = document.getElementById('fabMainBtn');
+  if (menu) menu.style.display = 'none';
+  if (mainBtn) mainBtn.textContent = '⚡';
 };
 
-// ==========================================
-// CONTROLE DE NAVEGAÇÃO DE AUTENTICAÇÃO
-// ==========================================
-window.switchAuthMode = function(mode) {
-  authError.textContent = '';
-  authSuccess.textContent = '';
-
-  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-
-  if (mode === 'login') {
-    authFormLogin.style.display = 'block';
-    authFormRegister.style.display = 'none';
-    authFormReset.style.display = 'none';
-    document.getElementById('tabAuthLogin').classList.add('active');
-    authSubtitle.textContent = 'Entre com seus dados para continuar:';
-  } else if (mode === 'register') {
-    authFormLogin.style.display = 'none';
-    authFormRegister.style.display = 'block';
-    authFormReset.style.display = 'none';
-    document.getElementById('tabAuthRegister').classList.add('active');
-    authSubtitle.textContent = 'Crie sua conta e comece 7 dias de teste grátis:';
-  } else if (mode === 'reset') {
-    authFormLogin.style.display = 'none';
-    authFormRegister.style.display = 'none';
-    authFormReset.style.display = 'block';
-    document.getElementById('tabAuthReset').classList.add('active');
-    authSubtitle.textContent = 'Receba um link para redefinir sua senha:';
+window.openQuickNewClient = function() {
+  closeFabMenu();
+  switchAppTab('clients');
+  const form = document.getElementById('clientForm');
+  if (form && (form.style.display === 'none' || form.style.display === '')) {
+    if (typeof toggleClientForm === 'function') toggleClientForm();
   }
-};
-
-// ==========================================
-// CONTROLE DE SESSÃO E VERIFICAÇÃO DE ASSINATURA
-// ==========================================
-auth.onAuthStateChanged(async (user) => {
-  if (user) {
-    currentUser = user;
-    activeOwnerId = user.uid;
-
-    const isMaster = user.email && user.email.toLowerCase() === MASTER_ADMIN_EMAIL.toLowerCase();
-
-    await loadMasterPixKey();
-
-    if (!isMaster) {
-      try {
-        const resDoc = await db.collection("resellers").doc(user.uid).get();
-        if (resDoc.exists) {
-          const resData = resDoc.data();
-          const today = getTodayLocal();
-
-          if (resData.blocked === true) {
-            alert("⚠️ Seu acesso está suspenso. Contate o administrador.");
-            auth.signOut();
-            return;
-          }
-
-          if (resData.expiresAt && resData.expiresAt < today) {
-            showSubscriptionBlock(resData);
-            return;
-          }
-
-          if (resellerTrialBadge && resData.expiresAt) {
-            const [ey, em, ed] = resData.expiresAt.split('-');
-            resellerTrialBadge.style.display = 'block';
-            resellerTrialBadge.textContent = `⭐ Assinatura/Trial ativo até: ${ed}/${em}/${ey}`;
-          }
-
-          await db.collection("resellers").doc(user.uid).update({
-            lastAccess: getTodayLocal() + ' ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-          });
-        }
-      } catch (err) {
-        console.log("Validação de conta:", err);
-      }
-    } else {
-      if (resellerTrialBadge) resellerTrialBadge.style.display = 'none';
-    }
-
-    subscriptionBlockScreen.style.display = 'none';
-    loginScreen.style.display = 'none';
-    appContainer.style.display = 'block';
-
-    userBadge.innerHTML = `Conectado: <strong>${user.email}</strong>${isMaster ? '⭐ (Administrador)' : '👤 (Revendedor)'}`;
-    
-    if (masterNav) {
-      masterNav.style.display = isMaster ? 'grid' : 'none';
-    }
-
-    if (isMaster) {
-      listenAllClientsGlobal();
-      listenResellersList();
-    }
-
-    await loadUserPixKey(activeOwnerId);
-    startFirestoreSync(activeOwnerId);
-  } else {
-    currentUser = null;
-    activeOwnerId = null;
-    if (unsubscribeFirestore) unsubscribeFirestore();
-    if (unsubscribeResellers) unsubscribeResellers();
-    if (unsubscribeAllClients) unsubscribeAllClients();
-    subscriptionBlockScreen.style.display = 'none';
-    loginScreen.style.display = 'flex';
-    appContainer.style.display = 'none';
-  }
-});
-
-function showSubscriptionBlock(resellerData) {
-  loginScreen.style.display = 'none';
-  appContainer.style.display = 'none';
-  subscriptionBlockScreen.style.display = 'flex';
-
-  paywallPixDisplay.textContent = masterPixKey || "Chave Pix disponível via WhatsApp";
-
-  const msg = encodeURIComponent(`Olá Rodrigo! Meu período de teste no Gestão de Clientes expirou. Segue o comprovante de renovação da minha conta: ${resellerData.email}`);
-  paywallWhatsAppBtn.href = buildWhatsAppUrl(MASTER_ADMIN_PHONE, msg);
-}
-
-async function loadMasterPixKey() {
-  try {
-    const snap = await db.collection("settings").get();
-    snap.forEach(doc => {
-      if (doc.data().pixKey && !masterPixKey) {
-        masterPixKey = doc.data().pixKey;
-      }
-    });
-  } catch (e) {
-    console.log("Pix master:", e);
-  }
-}
-
-// Login
-window.handleAuthLogin = async function(e) {
-  e.preventDefault();
-  const email = document.getElementById('authEmail').value.trim();
-  const password = document.getElementById('authPassword').value;
-
-  authError.textContent = '';
-  authSuccess.textContent = '';
-  authSubmitBtn.textContent = 'Autenticando...';
-  authSubmitBtn.disabled = true;
-
-  try {
-    await auth.signInWithEmailAndPassword(email, password);
-  } catch (err) {
-    if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-      authError.textContent = 'E-mail ou senha incorretos.';
-    } else if (err.code === 'auth/invalid-email') {
-      authError.textContent = 'Formato de e-mail inválido.';
-    } else {
-      authError.textContent = 'Erro ao autenticar: ' + err.message;
-    }
-  } finally {
-    authSubmitBtn.textContent = 'Entrar no Sistema';
-    authSubmitBtn.disabled = false;
-  }
-};
-
-// Auto-Cadastro Direto com 7 Dias Grátis
-window.handleAuthRegister = async function(e) {
-  e.preventDefault();
-  const name = document.getElementById('regName').value.trim();
-  const phone = document.getElementById('regPhone').value.trim();
-  const email = document.getElementById('regEmail').value.trim();
-  const password = document.getElementById('regPassword').value;
-  const regSubmitBtn = document.getElementById('regSubmitBtn');
-
-  authError.textContent = '';
-  authSuccess.textContent = '';
-
-  if (password.length < 6) {
-    authError.textContent = 'A senha precisa ter pelo menos 6 dígitos.';
-    return;
-  }
-
-  const cleanPhone = phone.replace(/\D/g, "");
-  if (cleanPhone.length < 10) {
-    authError.textContent = 'Por favor, informe um WhatsApp válido com DDD.';
-    return;
-  }
-
-  regSubmitBtn.textContent = 'Verificando dados...';
-  regSubmitBtn.disabled = true;
-
-  try {
-    const phoneCheck = await db.collection("resellers").where("cleanPhone", "==", cleanPhone).get();
-    if (!phoneCheck.empty) {
-      authError.textContent = 'Este número de WhatsApp já possui uma conta cadastrada no sistema!';
-      regSubmitBtn.textContent = 'Criar Conta e Iniciar 7 Dias Grátis';
-      regSubmitBtn.disabled = false;
-      return;
-    }
-
-    regSubmitBtn.textContent = 'Criando sua conta...';
-
-    const userCred = await auth.createUserWithEmailAndPassword(email, password);
-    const newUid = userCred.user.uid;
-
-    const trialExpirationDate = addDaysToDate(getTodayLocal(), 7);
-
-    await db.collection("resellers").doc(newUid).set({
-      name: name,
-      email: email,
-      phone: phone,
-      cleanPhone: cleanPhone,
-      createdAt: getTodayLocal(),
-      expiresAt: trialExpirationDate,
-      lastAccess: getTodayLocal(),
-      blocked: false,
-      activated: true,
-      status: 'active'
-    });
-
-    alert(`🎉 Bem-vindo(a) ${name}!\n\nSua conta foi criada com 7 dias de teste grátis (ativo até ${trialExpirationDate.split('-').reverse().join('/')}).`);
-  } catch (err) {
-    if (err.code === 'auth/email-already-in-use') {
-      authError.textContent = 'Este e-mail já está em uso na plataforma.';
-    } else {
-      authError.textContent = 'Erro ao criar conta: ' + err.message;
-    }
-  } finally {
-    regSubmitBtn.textContent = 'Criar Conta e Iniciar 7 Dias Grátis';
-    regSubmitBtn.disabled = false;
-  }
-};
-
-// Recuperação de Senha
-window.handleAuthReset = async function(e) {
-  e.preventDefault();
-  const email = document.getElementById('resetEmail').value.trim();
-  const resetSubmitBtn = document.getElementById('resetSubmitBtn');
-
-  authError.textContent = '';
-  authSuccess.textContent = '';
-  resetSubmitBtn.textContent = 'Enviando...';
-  resetSubmitBtn.disabled = true;
-
-  try {
-    await auth.sendPasswordResetEmail(email);
-    authSuccess.textContent = '✅ E-mail enviado! Verifique sua caixa de entrada e spam para criar nova senha.';
-  } catch (err) {
-    if (err.code === 'auth/user-not-found') {
-      authError.textContent = 'Não encontramos nenhuma conta com este e-mail.';
-    } else {
-      authError.textContent = 'Erro ao enviar redefinição: ' + err.message;
-    }
-  } finally {
-    resetSubmitBtn.textContent = 'Enviar Link de Recuperação';
-    resetSubmitBtn.disabled = false;
-  }
-};
-
-window.handleLogout = function() {
-  if (confirm('Deseja realmente sair da sua conta?')) {
-    auth.signOut();
-  }
-};
-
-// ==========================================
-// CONTROLE DE ABAS DO MASTER
-// ==========================================
-window.switchMasterView = function(viewName) {
-  if (viewName === 'clients') {
-    viewClientsSection.style.display = 'block';
-    viewResellersSection.style.display = 'none';
-    tabClientsBtn.classList.add('active');
-    tabResellersBtn.classList.remove('active');
-  } else if (viewName === 'resellers') {
-    viewClientsSection.style.display = 'none';
-    viewResellersSection.style.display = 'block';
-    tabClientsBtn.classList.remove('active');
-    tabResellersBtn.classList.add('active');
-    renderResellersList();
-  }
-};
-
-// ==========================================
-// STATUS DO CLIENTE
-// ==========================================
-function getStatus(dueDateString) {
-  if (!dueDateString || typeof dueDateString !== 'string') {
-    return { class: 'expired', label: 'Sem data', diffDays: -999 };
-  }
-
-  const [todayY, todayM, todayD] = getTodayLocal().split('-').map(Number);
-  const today = new Date(todayY, todayM - 1, todayD);
-
-  const [dueY, dueM, dueD] = dueDateString.split('-').map(Number);
-  const due = new Date(dueY, dueM - 1, dueD);
-
-  const diffTime = due.getTime() - today.getTime();
-  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
-
-  if (diffDays < 0) {
-    const daysLate = Math.abs(diffDays);
-    return { class: 'expired', label: `Vencido há ${daysLate}d`, diffDays };
-  } else if (diffDays <= 3) {
-    return { class: 'warning', label: diffDays === 0 ? 'Vence hoje' : (diffDays === 1 ? 'Vence amanhã' : `Vence em ${diffDays}d`), diffDays };
-  }
-  return { class: 'ok', label: 'Em dia', diffDays };
-}
-
-// ==========================================
-// BLOCO: AÇÕES DO DIA (HOJE E ATÉ 7 DIAS VENCIDOS)
-// ==========================================
-function updateDailyActions() {
-  if (!dailyActionsSection) return;
-
-  const dueToday = [];
-  const lateClientsRecent = [];
-
-  clients.forEach(c => {
-    const st = getStatus(c.dueDate);
-    if (st.diffDays === 0) {
-      dueToday.push(c);
-    } else if (st.diffDays < 0 && st.diffDays >= -7) {
-      lateClientsRecent.push(c);
-    }
-  });
-
-  const totalUrgent = dueToday.length + lateClientsRecent.length;
-
-  if (totalUrgent === 0) {
-    dailyActionsSection.style.display = 'none';
-    return;
-  }
-
-  dailyActionsSection.style.display = 'block';
-  dailyTotalBadge.textContent = `${totalUrgent}${totalUrgent === 1 ? 'prioridade' : 'prioridades'}`;
-
-  if (dueToday.length > 0 && lateClientsRecent.length > 0) {
-    dailyActionsSummary.textContent = `Você tem ${dueToday.length} cliente(s) vencendo hoje e${lateClientsRecent.length} vencido(s) recentemente (até 7d). Dispare a cobrança:`;
-  } else if (dueToday.length > 0) {
-    dailyActionsSummary.textContent = `Você tem ${dueToday.length} cliente(s) vencendo HOJE. Dispare a cobrança pelo WhatsApp:`;
-  } else {
-    dailyActionsSummary.textContent = `Atenção: ${lateClientsRecent.length} cliente(s) com vencimento recente (até 7d) precisam de aviso:`;
-  }
-
-  dailyActionsList.innerHTML = '';
-  const urgentList = [...dueToday, ...lateClientsRecent];
-
-  urgentList.forEach(client => {
-    const st = getStatus(client.dueDate);
-    const [y, m, d] = (client.dueDate || '0000-00-00').split('-');
-    const formattedDate = `${d}/${m}/${y}`;
-    const waUrl = createWhatsAppLink(client, formattedDate, st);
-
-    const isToday = st.diffDays === 0;
-    const statusText = isToday ? '⚠️ Vence Hoje' : `🔴 Vencido (${Math.abs(st.diffDays)}d atrás)`;
-    const statusClass = isToday ? 'today' : 'late';
-
-    const item = document.createElement('div');
-    item.className = 'daily-item';
-    item.innerHTML = `
-      <div class="daily-item-info">
-        <span class="daily-item-name">${esc(client.name)} (${esc(client.username)})</span>
-        <span class="daily-item-status ${statusClass}">${statusText} •${formatCurrency(client.price)}</span>
-      </div>
-      <a href="${waUrl}" target="_blank" rel="noopener noreferrer" class="btn-daily-wa" title="Cobrar no WhatsApp">
-        💬 Cobrar
-      </a>
-    `;
-    dailyActionsList.appendChild(item);
-  });
-}
-
-// ==========================================
-// PAGINAÇÃO (BLOCOS DE 20 CLIENTES)
-// ==========================================
-window.prevPage = function() {
-  if (currentPage > 1) {
-    currentPage--;
-    renderClients();
-    window.scrollTo({ top: 350, behavior: 'smooth' });
-  }
-};
-
-window.nextPage = function() {
-  if (currentPage < totalPages) {
-    currentPage++;
-    renderClients();
-    window.scrollTo({ top: 350, behavior: 'smooth' });
-  }
-};
-
-// ==========================================
-// PAINEL DE REVENDEDORES, MÉTRICAS E RENOVAÇÕES
-// ==========================================
-function listenAllClientsGlobal() {
-  if (unsubscribeAllClients) unsubscribeAllClients();
-  unsubscribeAllClients = db.collection("clients").onSnapshot((snapshot) => {
-    allSystemClients = [];
-    snapshot.forEach(doc => {
-      allSystemClients.push({ id: doc.id, ...doc.data() });
-    });
-    renderResellersList();
-  });
-}
-
-function listenResellersList() {
-  unsubscribeResellers = db.collection("resellers").onSnapshot((snapshot) => {
-    globalResellersList = [];
-    snapshot.forEach(doc => globalResellersList.push({ id: doc.id, ...doc.data() }));
-    renderResellersList();
-  });
-}
-
-function renderResellersList() {
-  const container = document.getElementById('resellerCardsContainer');
-  const countSpan = document.getElementById('resellerCount');
-  if (!container) return;
-
-  if (countSpan) countSpan.textContent = globalResellersList.length;
-
-  if (globalResellersList.length === 0) {
-    container.innerHTML = '<p style="text-align: center; color: #9ca3af; font-size: 0.85rem; padding: 16px;">Nenhum revendedor cadastrado até o momento.</p>';
-    return;
-  }
-
-  const currentYearMonth = getTodayLocal().slice(0, 7);
-  container.innerHTML = '';
-
-  globalResellersList.forEach(reseller => {
-    const rClients = allSystemClients.filter(c => c.ownerId === reseller.id);
-    
-    let activeCount = 0;
-    let expiredCount = 0;
-    let newThisMonth = 0;
-    let totalRevenue = 0;
-
-    rClients.forEach(c => {
-      const st = getStatus(c.dueDate);
-      const val = parseFloat(c.price) || 0;
-      totalRevenue += val;
-
-      if (st.class === 'expired') {
-        expiredCount++;
-      } else {
-        activeCount++;
-      }
-
-      const createdMonth = (c.createdAt || c.dueDate || '').slice(0, 7);
-      if (createdMonth === currentYearMonth) {
-        newThisMonth++;
-      }
-    });
-
-    const totalClients = rClients.length;
-    const defaultRate = totalClients > 0 ? Math.round((expiredCount / totalClients) * 100) : 0;
-    const revenueFormatted = Number(totalRevenue).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-    const isBlocked = reseller.blocked === true;
-    const isExpired = reseller.expiresAt && reseller.expiresAt < getTodayLocal();
-
-    let waUrl = '';
-    if (reseller.phone) {
-      let cleanPhone = String(reseller.phone).replace(/\D/g, '');
-      if (cleanPhone.length <= 11) cleanPhone = '55' + cleanPhone;
-      waUrl = buildWhatsAppUrl(cleanPhone, '');
-    }
-
-    const card = document.createElement('div');
-    card.className = `reseller-card ${isBlocked || isExpired ? 'blocked-card' : ''}`;
-
-    const expDateFmt = reseller.expiresAt ? reseller.expiresAt.split('-').reverse().join('/') : 'N/A';
-
-    card.innerHTML = `
-      <div class="reseller-card-header">
-        <div>
-          <strong>${esc(reseller.name || 'Revendedor')}</strong> <span style="font-size: 0.8rem; color: #6b7280;">(${esc(reseller.email)})</span>${isExpired ? '<span style="color:#dc2626; font-weight: bold; font-size:0.75rem;"> [EXPIRADO]</span>' : ''}
-          ${isBlocked ? '<span style="color:#dc2626; font-weight: bold; font-size:0.75rem;"> [BLOQUEADO]</span>' : ''}
-          
-          <div class="reseller-contact-line">
-            ${reseller.phone ? `📱 ${esc(reseller.phone)} <a href="${waUrl}" target="_blank" rel="noopener noreferrer" class="btn-reseller-wa">WhatsApp</a>` : '📱 Sem telefone'}
-          </div>
-          <div style="font-size: 0.72rem; color: #6b7280; margin-top: 3px;">
-            Acesso até: <strong style="color: ${isExpired ? '#dc2626' : '#166534'};">${expDateFmt}</strong> | Último acesso: <strong>${reseller.lastAccess || 'Nunca'}</strong>
-          </div>
-        </div>
-      </div>
-
-      <div class="reseller-metrics-grid">
-        <div class="reseller-metric-item">
-          <span class="reseller-metric-label">🟢 Clientes Ativos</span>
-          <span class="reseller-metric-val" style="color: #16a34a;">${activeCount}</span>
-        </div>
-        <div class="reseller-metric-item">
-          <span class="reseller-metric-label">🔴 Inadimplência</span>
-          <span class="reseller-metric-val" style="color: ${defaultRate > 25 ? '#dc2626' : '#4b5563'};">
-            ${defaultRate}% <span style="font-size: 0.7rem; font-weight: normal;">(${expiredCount})</span>
-          </span>
-        </div>
-        <div class="reseller-metric-item">
-          <span class="reseller-metric-label">📈 Novos no Mês</span>
-          <span class="reseller-metric-val" style="color: #2563eb;">+${newThisMonth}</span>
-        </div>
-        <div class="reseller-metric-item">
-          <span class="reseller-metric-label">💰 Faturamento</span>
-          <span class="reseller-metric-val" style="font-size: 0.85rem;">${revenueFormatted}</span>
-        </div>
-      </div>
-
-      <div class="reseller-card-actions">
-        <button type="button" class="btn-r-act btn-r-view" onclick="inspectReseller('${reseller.id}', '${esc(reseller.email)}')">👁️ Ver Tela</button>
-        <button type="button" class="btn-r-act btn-r-renew" onclick="renewResellerSubscription('${reseller.id}', '${esc(reseller.email)}', '${reseller.expiresAt || getTodayLocal()}')">🔄 +30d</button>
-        <button type="button" class="btn-r-act ${isBlocked ? 'btn-r-unblock' : 'btn-r-block'}" onclick="toggleBlockReseller('${reseller.id}',${!isBlocked})">
-          ${isBlocked ? '🔓 Liberar' : '⏸️ Pausar'}
-        </button>
-        <button type="button" class="btn-r-act btn-r-backup" onclick="exportResellerData('${reseller.id}', '${esc(reseller.email)}')">💾 Backup</button>
-        <button type="button" class="btn-r-act btn-r-del" title="Excluir Revendedor Permanentemente" onclick="deleteResellerAccount('${reseller.id}', '${esc(reseller.email)}')">✕ Excluir</button>
-      </div>
-    `;
-    container.appendChild(card);
-  });
-}
-
-// EXCLUIR REVENDEDOR E LIMPAR DADOS VINCULADOS
-window.deleteResellerAccount = async function(resellerId, resellerEmail) {
-  const confirmMsg = `⚠️ ATENÇÃO: Deseja realmente EXCLUIR o revendedor "${resellerEmail}"?\n\nEssa ação é irreversível:\n1. A conta dele será apagada.\n2. Todos os clientes dele serão excluídos do banco.\n3. O número de WhatsApp dele será liberado.`;
-  
-  if (!confirm(confirmMsg)) return;
-
-  try {
-    const batch = db.batch();
-
-    const clientsSnap = await db.collection("clients").where("ownerId", "==", resellerId).get();
-    clientsSnap.forEach(doc => {
-      batch.delete(doc.ref);
-    });
-
-    const resellerRef = db.collection("resellers").doc(resellerId);
-    batch.delete(resellerRef);
-
-    const settingsRef = db.collection("settings").doc(resellerId);
-    batch.delete(settingsRef);
-
-    await batch.commit();
-
-    alert(`✅ Revendedor "${resellerEmail}" e seus clientes foram excluídos com sucesso!`);
-  } catch (err) {
-    alert("Erro ao excluir revendedor: " + err.message);
-  }
-};
-
-// RENOVAÇÃO DE LICENÇA COM STATUS ACTIVE
-window.renewResellerSubscription = async function(resellerId, resellerEmail, currentExpireDate) {
-  const baseDate = currentExpireDate < getTodayLocal() ? getTodayLocal() : currentExpireDate;
-  const newExpiration = addDaysToDate(baseDate, 30);
-  const newDateFmt = newExpiration.split('-').reverse().join('/');
-
-  if (!confirm(`Renovar assinatura de "${resellerEmail}" por +30 dias?\n\nNovo vencimento: ${newDateFmt}`)) return;
-
-  try {
-    await db.collection("resellers").doc(resellerId).update({
-      expiresAt: newExpiration,
-      blocked: false,
-      status: 'active'
-    });
-    alert(`✅ Assinatura renovada com sucesso até ${newDateFmt}!`);
-  } catch (err) {
-    alert("Erro ao renovar: " + err.message);
-  }
-};
-
-// Criação Manual pelo Admin
-window.createNewResellerAccount = async function() {
-  const nameInput = document.getElementById('newResellerName');
-  const emailInput = document.getElementById('newResellerEmail');
-  const phoneInput = document.getElementById('newResellerPhone');
-  const passInput = document.getElementById('newResellerPass');
-  
-  const name = (nameInput.value || '').trim();
-  const email = (emailInput.value || '').trim();
-  const phone = (phoneInput.value || '').trim();
-  const password = passInput.value;
-
-  if (!email || !password) {
-    alert("Informe o e-mail e a senha do revendedor.");
-    return;
-  }
-
-  if (password.length < 6) {
-    alert("A senha precisa ter no mínimo 6 caracteres.");
-    return;
-  }
-
-  const cleanPhone = phone.replace(/\D/g, "");
-
-  try {
-    const secondaryApp = firebase.initializeApp(firebaseConfig, "SecondaryApp" + Date.now());
-    const userCred = await secondaryApp.auth().createUserWithEmailAndPassword(email, password);
-    const newUid = userCred.user.uid;
-    await secondaryApp.delete();
-
-    await db.collection("resellers").doc(newUid).set({
-      name: name || 'Revendedor',
-      email: email,
-      phone: phone,
-      cleanPhone: cleanPhone,
-      createdAt: getTodayLocal(),
-      expiresAt: addDaysToDate(getTodayLocal(), 30),
-      lastAccess: 'Nunca',
-      blocked: false,
-      activated: true,
-      status: 'active'
-    });
-
-    alert(`✅ Revendedor criado com sucesso com 30 dias de acesso!\n\nE-mail: ${email}`);
-    nameInput.value = '';
-    emailInput.value = '';
-    phoneInput.value = '';
-    passInput.value = '';
-  } catch (err) {
-    alert("Erro ao cadastrar revendedor: " + err.message);
-  }
-};
-
-window.toggleBlockReseller = async function(resellerId, shouldBlock) {
-  const actionText = shouldBlock ? "BLOQUEAR" : "LIBERAR";
-  if (!confirm(`Deseja realmente ${actionText} o acesso deste revendedor?`)) return;
-
-  try {
-    await db.collection("resellers").doc(resellerId).update({ blocked: shouldBlock });
-    alert(`Acesso do revendedor ${shouldBlock ? 'bloqueado' : 'liberado'} com sucesso!`);
-  } catch (err) {
-    alert("Erro ao alterar status: " + err.message);
-  }
-};
-
-window.exportResellerData = function(resellerId, resellerEmail) {
-  const rClients = allSystemClients.filter(c => c.ownerId === resellerId);
-  if (rClients.length === 0) {
-    alert(`O revendedor ${resellerEmail} não possui clientes cadastrados para exportação.`);
-    return;
-  }
-
-  let csvContent = 'Nome;Usuário;Valor;WhatsApp;Vencimento;Status;Pendência;Observações\n';
-  rClients.forEach(c => {
-    const status = getStatus(c.dueDate);
-    const [y, m, d] = (c.dueDate || '0000-00-00').split('-');
-
-    const sanitizeCsv = (val) => {
-      let str = String(val ?? '').replace(/"/g, '""');
-      if (/^[=\+\-@]/.test(str)) str = "'" + str;
-      return str;
-    };
-
-    const priceFormatted = Number(c.price || 0).toFixed(2).replace('.', ',');
-    csvContent += `"${sanitizeCsv(c.name)}";"${sanitizeCsv(c.username)}";"${priceFormatted}";"${sanitizeCsv(c.phone)}";"${d}/${m}/${y}";"${status.label}";"${c.hasPending ? 'Sim' : 'Não'}";"${sanitizeCsv(c.notes)}"\n`;
-  });
-
-  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `clientes_${resellerEmail.replace(/[@.]/g, '_')}_${getTodayLocal()}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
-};
-
-window.inspectReseller = async function(resellerId, resellerEmail) {
-  activeOwnerId = resellerId;
-  impersonatedEmail.textContent = resellerEmail;
-  impersonationBanner.style.display = 'flex';
-  currentPage = 1;
-  
-  switchMasterView('clients');
-  await loadUserPixKey(activeOwnerId);
-  startFirestoreSync(activeOwnerId);
-};
-
-window.exitResellerView = async function() {
-  if (!currentUser) return;
-  activeOwnerId = currentUser.uid;
-  impersonationBanner.style.display = 'none';
-  currentPage = 1;
-  
-  await loadUserPixKey(activeOwnerId);
-  startFirestoreSync(activeOwnerId);
-};
-
-// ==========================================
-// GESTÃO DE PIX POR USUÁRIO
-// ==========================================
-async function loadUserPixKey(targetUid) {
-  if (!targetUid) return;
-  try {
-    const doc = await db.collection("settings").doc(targetUid).get();
-    if (doc.exists && doc.data().pixKey) {
-      myPixKey = doc.data().pixKey;
-    } else {
-      myPixKey = localStorage.getItem(`pix_key_${targetUid}`) || '';
-    }
-    if (pixKeyInput) pixKeyInput.value = myPixKey;
-  } catch (err) {
-    myPixKey = localStorage.getItem(`pix_key_${targetUid}`) || '';
-    if (pixKeyInput) pixKeyInput.value = myPixKey;
-  }
-}
-
-window.savePixKey = async function() {
-  if (!activeOwnerId) return;
-  myPixKey = (pixKeyInput.value || '').trim();
-  localStorage.setItem(`pix_key_${activeOwnerId}`, myPixKey);
-
-  try {
-    await db.collection("settings").doc(activeOwnerId).set({ pixKey: myPixKey }, { merge: true });
-    renderClients();
-    alert('Chave Pix salva com sucesso!');
-  } catch (err) {
-    renderClients();
-    alert('Chave Pix salva no dispositivo!');
-  }
-};
-
-// ==========================================
-// SINCRONIZAÇÃO OTIMIZADA COM WHERE
-// ==========================================
-function startFirestoreSync(targetOwnerId) {
-  if (!targetOwnerId) return;
-  if (unsubscribeFirestore) unsubscribeFirestore();
-
-  const isMaster = currentUser.email && currentUser.email.toLowerCase() === MASTER_ADMIN_EMAIL.toLowerCase();
-  let query = db.collection("clients").where("ownerId", "==", targetOwnerId);
-
-  unsubscribeFirestore = query.onSnapshot((snapshot) => {
-    clients = [];
-    snapshot.forEach((doc) => {
-      const data = doc.data();
-      if (data && data.name && data.dueDate) {
-        clients.push({ id: doc.id, ...data });
-      }
-    });
-
-    if (syncStatus) {
-      syncStatus.textContent = '☁️ Conectado à Nuvem (Sincronizado)';
-      syncStatus.style.color = '#166534';
-    }
-
-    updateDailyActions();
-    renderClients();
-  }, (error) => {
-    console.error("Erro no Firebase:", error);
-    if (syncStatus) {
-      syncStatus.textContent = '⚠️ Erro de permissão ou sincronização';
-      syncStatus.style.color = '#dc2626';
-    }
-  });
-
-  if (isMaster && targetOwnerId === currentUser.uid) {
-    db.collection("clients").get().then((snap) => {
-      const batch = db.batch();
-      let hasMigration = false;
-      snap.forEach((doc) => {
-        const d = doc.data();
-        if (d && !d.ownerId) {
-          batch.update(doc.ref, { ownerId: currentUser.uid });
-          hasMigration = true;
-        }
-      });
-      if (hasMigration) batch.commit().catch(e => console.log("Migração legacy:", e));
-    }).catch(e => console.log("Verificação legacy:", e));
-  }
-}
-
-// Sanitização anti-XSS
-const esc = (s) =>
-  String(s ?? '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  }[c]));
-
-// ==========================================
-// DETECÇÃO DE DISPOSITIVO PARA WHATSAPP
-// ==========================================
-function buildWhatsAppUrl(cleanPhone, encodedText) {
-  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-  if (isMobile) {
-    return `whatsapp://send?phone=${cleanPhone}${encodedText ? `&text=${encodedText}` : ''}`;
-  } else {
-    return `https://web.whatsapp.com/send?phone=${cleanPhone}${encodedText ? `&text=${encodedText}` : ''}`;
-  }
-}
-
-function createWhatsAppLink(client, formattedDate, status) {
-  let p = String(client.phone || '').replace(/\D/g, '');
-
-  if (p.length === 10 || p.length === 11) {
-    p = '55' + p;
-  }
-
-  const priceFormatted = Number(client.price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  const pixBlock = myPixKey 
-    ? `\n\n👇 *CHAVE PIX:*\n\`\`\`\n${myPixKey}\n\`\`\`` 
-    : '';
-
-  let message = '';
-  if (status.class === 'expired') {
-    message = `Olá *${client.name}*, tudo bem?\nConstatamos que sua fatura de *${priceFormatted}* referente ao login *${client.username}* venceu em *${formattedDate}*.\nPor gentileza, entre em contato para regularizar o acesso.${pixBlock}`;
-  } else if (status.diffDays === 0) {
-    message = `Olá *${client.name}*, lembrete: sua fatura de *${priceFormatted}* referente ao login *${client.username}* vence *HOJE* (*${formattedDate}*).${pixBlock}`;
-  } else if (status.diffDays === 1) {
-    message = `Olá *${client.name}*, lembrete preventivo: sua fatura de *${priceFormatted}* referente ao login *${client.username}* vence amanhã (*${formattedDate}*).${pixBlock}`;
-  } else if (status.class === 'warning') {
-    message = `Olá *${client.name}*, lembrete: sua fatura de *${priceFormatted}* referente ao login *${client.username}* vence no dia *${formattedDate}*.${pixBlock}`;
-  } else {
-    message = `Olá *${client.name}*, tudo bem? Segue o aviso referente ao usuário *${client.username}* com vencimento para *${formattedDate}* no valor de ${priceFormatted}.${pixBlock}`;
-  }
-
-  return buildWhatsAppUrl(p, encodeURIComponent(message));
-}
-
-// ESTATÍSTICAS DO MÊS
-function updateDashboard() {
-  let total = 0, okTotal = 0, expiredTotal = 0;
-  let cOk = 0, cWarn = 0, cExp = 0;
-
-  clients.forEach(c => {
-    const val = parseFloat(c.price) || 0;
-    const st = getStatus(c.dueDate);
-
-    total += val;
-    if (st.class === 'expired') {
-      expiredTotal += val;
-      cExp++;
-    } else {
-      okTotal += val;
-      if (st.class === 'warning') cWarn++;
-      else cOk++;
-    }
-  });
-
-  countActiveTotal.textContent = cOk + cWarn;
-  countInactiveTotal.textContent = cExp;
-
-  dashTotal.textContent = formatCurrency(total);
-  dashOk.textContent = formatCurrency(okTotal);
-  dashExpired.textContent = formatCurrency(expiredTotal);
-
-  countAll.textContent = clients.length;
-  countOk.textContent = cOk;
-  countWarning.textContent = cWarn;
-  countExpired.textContent = cExp;
-}
-
-window.setFilter = function(filterType, element) {
-  currentFilter = filterType;
-  currentPage = 1;
-  document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-  if (element) element.classList.add('active');
-  renderClients();
-};
-
-window.changeSortOrder = function(sortValue) {
-  currentSort = sortValue;
-  currentPage = 1;
-  localStorage.setItem('user_sort_order', currentSort);
-  renderClients();
-};
-
-function renderClients() {
-  updateDashboard();
-  clientList.innerHTML = '';
-
-  const searchText = (searchInput.value || '').toLowerCase();
-
-  let filtered = clients.filter(c => {
-    const status = getStatus(c.dueDate);
-    const notesText = (c.notes || '').toLowerCase();
-    const matchesSearch = c.name.toLowerCase().includes(searchText) || 
-                          c.username.toLowerCase().includes(searchText) ||
-                          notesText.includes(searchText);
-
-    if (!matchesSearch) return false;
-    if (currentFilter === 'all') return true;
-    if (currentFilter === 'ok') return status.class === 'ok';
-    if (currentFilter === 'warning') return status.class === 'warning';
-    if (currentFilter === 'expired') return status.class === 'expired';
-    return true;
-  });
-
-  filtered.sort((a, b) => {
-    if (currentSort === 'dueAsc') {
-      return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
-    } else if (currentSort === 'dueDesc') {
-      return new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime();
-    } else if (currentSort === 'nameAsc') {
-      return a.name.localeCompare(b.name);
-    } else if (currentSort === 'priceDesc') {
-      return (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0);
-    }
-    return 0;
-  });
-
-  const totalItems = filtered.length;
-  totalPages = Math.ceil(totalItems / PAGE_SIZE) || 1;
-
-  if (currentPage > totalPages) currentPage = totalPages;
-  if (currentPage < 1) currentPage = 1;
-
-  if (totalItems > PAGE_SIZE) {
-    paginationControls.style.display = 'flex';
-    pageInfo.textContent = `Página ${currentPage} de ${totalPages} (${totalItems} clientes)`;
-    prevPageBtn.disabled = currentPage === 1;
-    nextPageBtn.disabled = currentPage === totalPages;
-  } else {
-    paginationControls.style.display = 'none';
-  }
-
-  if (totalItems === 0) {
-    clientList.innerHTML = '<p style="text-align:center; color:#9ca3af; font-size:0.85rem; padding: 20px 0;">Nenhum cliente encontrado.</p>';
-    return;
-  }
-
-  const startIndex = (currentPage - 1) * PAGE_SIZE;
-  const pageClients = filtered.slice(startIndex, startIndex + PAGE_SIZE);
-
-  pageClients.forEach(client => {
-    const status = getStatus(client.dueDate);
-    const card = document.createElement('div');
-    card.className = `card ${status.class}`;
-
-    const [y, m, d] = (client.dueDate || '0000-00-00').split('-');
-    const formattedDate = `${d}/${m}/${y}`;
-    const waUrl = createWhatsAppLink(client, formattedDate, status);
-
-    const hasPending = Boolean(client.hasPending);
-    const renewBtnBlocked = hasPending ? 'blocked' : '';
-    const renewBtnTitle = hasPending 
-      ? 'Bloqueado: consta pendência financeira' 
-      : 'Renovar vencimento (escolher meses)';
-
-    card.innerHTML = `
-      <div class="card-header">
-        <h3>${esc(client.name)}</h3>
-        <span class="card-price">${formatCurrency(client.price)}</span>
-      </div>
-      <div class="card-details">
-        <p><strong>Usuário:</strong> ${esc(client.username)}</p>
-        <p><strong>WhatsApp:</strong> ${maskPhone(client.phone)}</p>
-        <p><strong>Vencimento:</strong> ${formattedDate}</p>
-        <span class="badge ${status.class}">${status.label}</span>
-      </div>
-      ${client.notes ? `<div class="card-notes">📝 <strong>Obs:</strong> ${esc(client.notes)}</div>` : ''}
-      ${hasPending ? `
-        <div class="card-pending-alert">
-          <span>⚠️ Consta pendência financeira</span>
-          <button type="button" class="btn-clear-pending" onclick="clearPending('${client.id}')">Quitar / Liberar</button>
-        </div>` : ''}
-      <div class="card-actions">
-        <button type="button" class="btn-act btn-renew ${renewBtnBlocked}" title="${renewBtnTitle}" aria-label="Renovar vencimento" onclick="renewClient('${client.id}')">🔄 Renovar</button>
-        <a href="${waUrl}" target="_blank" rel="noopener noreferrer" class="btn-act btn-whatsapp" aria-label="Cobrar via WhatsApp" title="Enviar WhatsApp">💬 Cobrar</a>
-        <button type="button" class="btn-act btn-edit" title="Editar" aria-label="Editar cliente" onclick="startEdit('${client.id}')">✏️ Editar</button>
-        <button type="button" class="btn-act btn-delete" title="Excluir" aria-label="Excluir cliente" onclick="removeClient('${client.id}')">✕ Excluir</button>
-      </div>
-    `;
-
-    clientList.appendChild(card);
-  });
-}
-
-// SALVAR / ATUALIZAR CLIENTE (COM VALIDAÇÃO DE DATA)
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  if (!activeOwnerId) return;
-
-  const id = clientIdInput.value;
-  const name = document.getElementById('name').value.trim();
-  const username = document.getElementById('username').value.trim();
-  const price = document.getElementById('price').value;
-  const phone = document.getElementById('phone').value.trim();
-  const dueDate = document.getElementById('dueDate').value;
-  const notes = document.getElementById('notes').value.trim();
-  const hasPending = document.getElementById('hasPending').checked;
-
-  if (!dueDate || dueDate.trim() === '') {
-    alert("Por favor, selecione uma data de vencimento válida.");
-    document.getElementById('dueDate').focus();
-    return;
-  }
-
-  const isDuplicateLocal = clients.some(c => 
-    c.username && c.username.toLowerCase() === username.toLowerCase() && c.id !== id
-  );
-
-  if (isDuplicateLocal) {
-    alert(`⚠️ ATENÇÃO: O usuário/login "${username}" já existe nesta carteira!\n\nCada cliente precisa de um login único.`);
-    document.getElementById('username').focus();
-    return;
-  }
-
-  const clientData = { 
-    name, 
-    username, 
-    price, 
-    phone, 
-    dueDate, 
-    notes, 
-    hasPending,
-    ownerId: activeOwnerId,
-    createdAt: id ? undefined : getTodayLocal()
-  };
-
-  try {
-    if (id) {
-      await db.collection("clients").doc(id).update(clientData);
-    } else {
-      await db.collection("clients").add(clientData);
-    }
-    cancelEdit();
-  } catch (err) {
-    alert("Erro ao salvar na nuvem: " + err.message);
-  }
-});
-
-window.startEdit = function(id) {
-  const client = clients.find(c => c.id === id);
-  if (!client) return;
-
-  clientIdInput.value = client.id;
-  document.getElementById('name').value = client.name;
-  document.getElementById('username').value = client.username;
-  document.getElementById('price').value = client.price || '';
-  document.getElementById('phone').value = client.phone;
-  document.getElementById('dueDate').value = client.dueDate;
-  document.getElementById('notes').value = client.notes || '';
-  document.getElementById('hasPending').checked = Boolean(client.hasPending);
-
-  formTitle.textContent = 'Editar Cliente';
-  saveBtn.textContent = 'Salvar Alterações';
-  cancelEditBtn.style.display = 'block';
-
   window.scrollTo({ top: 0, behavior: 'smooth' });
 };
 
-window.cancelEdit = function() {
-  form.reset();
-  clientIdInput.value = '';
-  document.getElementById('hasPending').checked = false;
-  formTitle.textContent = 'Novo Cliente';
-  saveBtn.textContent = 'Salvar Cliente';
-  cancelEditBtn.style.display = 'none';
+// ------------------------------------------------------------
+// 5. NAVEGAÇÃO ENTRE ABAS PRINCIPAIS & ATALHOS DO FINANCEIRO
+// ------------------------------------------------------------
+const tabButtons = {
+  clients: document.getElementById('tabNavClients'),
+  apps: document.getElementById('tabNavApps'),
+  finance: document.getElementById('tabNavFinance'),
+  servers: document.getElementById('tabNavServers'),
+  settings: document.getElementById('tabNavSettings')
 };
 
-window.clearPending = async function(id) {
-  const client = clients.find(c => c.id === id);
-  if (!client) return;
+const tabContents = {
+  clients: document.getElementById('tabContentClients'),
+  apps: document.getElementById('tabContentApps'),
+  servers: document.getElementById('tabContentServers'),
+  finance: document.getElementById('tabContentFinance'),
+  settings: document.getElementById('tabContentSettings')
+};
 
-  if (confirm(`Confirmar regularização da pendência do cliente "${client.name}"?`)) {
-    try {
-      await db.collection("clients").doc(id).update({ hasPending: false });
-    } catch (err) {
-      alert("Erro ao atualizar pendência: " + err.message);
+window.switchAppTab = function(tabKey) {
+  Object.keys(tabButtons).forEach(key => {
+    if (tabButtons[key]) {
+      if (key === tabKey) tabButtons[key].classList.add('active');
+      else tabButtons[key].classList.remove('active');
     }
-  }
-};
-
-window.renewClient = async function(id) {
-  const client = clients.find(c => c.id === id);
-  if (!client) return;
-
-  if (client.hasPending) {
-    alert(`⚠️ RENOVAÇÃO BLOQUEADA!\n\nO cliente "${client.name}" possui pendência financeira ativa.\n\nClique em "Quitar / Liberar" antes de renovar.`);
-    return;
-  }
-
-  const inputMonths = prompt(
-    `Renovar cliente: ${client.name}\n\nQuantos meses o cliente renovou?\n(Ex: digite 1, 2, 3, 6, 12):`,
-    "1"
-  );
-
-  if (inputMonths === null) return;
-
-  const monthsToAdd = parseInt(inputMonths, 10);
-  if (isNaN(monthsToAdd) || monthsToAdd <= 0) {
-    alert("Por favor, informe uma quantidade válida de meses (ex: 1, 2, 3...).");
-    return;
-  }
-
-  const [year, month, day] = (client.dueDate || getTodayLocal()).split('-').map(Number);
-  const targetDay = day;
-
-  let totalMonths = (month - 1) + monthsToAdd;
-  let newYear = year + Math.floor(totalMonths / 12);
-  let newMonth = (totalMonths % 12) + 1;
-
-  const daysInNextMonth = new Date(newYear, newMonth, 0).getDate();
-  const adjustedDay = Math.min(targetDay, daysInNextMonth);
-
-  const formattedMonth = String(newMonth).padStart(2, '0');
-  const formattedDay = String(adjustedDay).padStart(2, '0');
-  const nextDueDate = `${newYear}-${formattedMonth}-${formattedDay}`;
-
-  const [ny, nm, nd] = nextDueDate.split('-');
-  const confirmMsg = `Confirmar renovação de +${monthsToAdd} mês(es) para ${client.name}?\n\nNovo vencimento: ${nd}/${nm}/${ny}`;
-
-  if (confirm(confirmMsg)) {
-    try {
-      await db.collection("clients").doc(id).update({ dueDate: nextDueDate });
-    } catch (err) {
-      alert("Erro ao renovar cliente: " + err.message);
-    }
-  }
-};
-
-window.removeClient = async function(id) {
-  const client = clients.find(c => c.id === id);
-  if (!client) return;
-
-  if (confirm(`Deseja realmente excluir o cliente "${client.name}"?`)) {
-    try {
-      await db.collection("clients").doc(id).delete();
-    } catch (err) {
-      alert("Erro ao excluir do banco: " + err.message);
-    }
-  }
-};
-
-searchInput.addEventListener('input', () => {
-  currentPage = 1;
-  renderClients();
-});
-
-// Exportação Excel
-window.exportToExcel = function() {
-  if (clients.length === 0) return alert('Nenhum dado para exportar.');
-
-  let csvContent = 'Nome;Usuário;Valor;WhatsApp;Vencimento;Status;Pendência;Observações\n';
-  clients.forEach(c => {
-    const status = getStatus(c.dueDate);
-    const [y, m, d] = (c.dueDate || '0000-00-00').split('-');
-
-    const sanitizeCsv = (val) => {
-      let str = String(val ?? '').replace(/"/g, '""');
-      if (/^[=\+\-@]/.test(str)) str = "'" + str;
-      return str;
-    };
-
-    const priceFormatted = Number(c.price || 0).toFixed(2).replace('.', ',');
-    csvContent += `"${sanitizeCsv(c.name)}";"${sanitizeCsv(c.username)}";"${priceFormatted}";"${sanitizeCsv(c.phone)}";"${d}/${m}/${y}";"${status.label}";"${c.hasPending ? 'Sim' : 'Não'}";"${sanitizeCsv(c.notes)}"\n`;
   });
 
-  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `clientes_${getTodayLocal()}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
-};
-
-// Backup JSON
-window.exportBackup = function() {
-  if (clients.length === 0) return alert('Nenhum dado para salvar.');
-
-  const blob = new Blob([JSON.stringify(clients, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `backup_clientes_${getTodayLocal()}.json`;
-  link.click();
-  URL.revokeObjectURL(url);
-};
-
-// Restauração de backup
-window.importBackup = async function(event) {
-  const file = event.target.files[0];
-  if (!file || !activeOwnerId) return;
-
-  const reader = new FileReader();
-  reader.onload = async function(e) {
-    try {
-      const data = JSON.parse(e.target.result);
-      if (Array.isArray(data)) {
-        const validClients = data.filter(c => c && c.name && typeof c.dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(c.dueDate));
-
-        if (validClients.length === 0) {
-          alert('Arquivo de backup inválido.');
-          return;
-        }
-
-        if (confirm(`Deseja importar ${validClients.length} clientes para este perfil?`)) {
-          const batch = db.batch();
-          validClients.forEach(c => {
-            const docRef = db.collection("clients").doc();
-            batch.set(docRef, {
-              name: c.name,
-              username: c.username || '',
-              price: c.price || 0,
-              phone: c.phone || '',
-              dueDate: c.dueDate,
-              notes: c.notes || '',
-              hasPending: Boolean(c.hasPending),
-              ownerId: activeOwnerId
-            });
-          });
-          await batch.commit();
-          alert('Backup restaurado com sucesso!');
-        }
-      } else {
-        alert('Formato de arquivo incompatível.');
-      }
-    } catch (err) {
-      alert('Erro ao importar backup: ' + err.message);
+  Object.keys(tabContents).forEach(key => {
+    if (tabContents[key]) {
+      tabContents[key].style.display = key === tabKey ? 'block' : 'none';
     }
-  };
-  reader.readAsText(file);
-  event.target.value = '';
-};
+  });
 
-function formatCurrency(val) {
-  if (isPrivacyMode) return '••••••';
-  return Number(val || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-}
-
-function maskPhone(phone) {
-  if (!isPrivacyMode) return esc(phone);
-  const raw = String(phone || '').replace(/\D/g, '');
-  if (raw.length <= 4) return '••••••';
-  return `(${raw.slice(0, 2)}) •••••-${raw.slice(-4)}`;
-}
-
-window.togglePrivacyMode = function() {
-  isPrivacyMode = !isPrivacyMode;
-  localStorage.setItem('user_privacy_mode', isPrivacyMode);
-  updatePrivacyButtonUI();
-  updateDailyActions();
-  renderClients();
-};
-
-function updatePrivacyButtonUI() {
-  if (!privacyBtn) return;
-  privacyBtn.textContent = isPrivacyMode ? '🙈' : '👁️';
-}
-updatePrivacyButtonUI();
-
-// Instalação PWA
-let deferredInstallPrompt = null;
-const installAppBtn = document.getElementById('installAppBtn');
-
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredInstallPrompt = e;
-  if (installAppBtn) installAppBtn.style.display = 'block';
-});
-
-window.triggerInstallPrompt = async function() {
-  if (!deferredInstallPrompt) return;
-  deferredInstallPrompt.prompt();
-  const choiceResult = await deferredInstallPrompt.userChoice;
-  if (choiceResult.outcome === 'accepted') {
-    if (installAppBtn) installAppBtn.style.display = 'none';
+  if (tabKey === 'clients' && typeof renderClients === 'function') {
+    renderClients();
+  } else if (tabKey === 'finance' && typeof updateDashboard === 'function') {
+    updateDashboard();
+  } else if (tabKey === 'servers' && typeof renderServersTab === 'function') {
+    renderServersTab();
   }
-  deferredInstallPrompt = null;
+
+  closeFabMenu();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 };
 
-window.addEventListener('appinstalled', () => {
-  if (installAppBtn) installAppBtn.style.display = 'none';
-  deferredInstallPrompt = null;
+
+// Navegação direta e imediata clicando nos cards do Financeiro (Próx 7 dias / Em Atraso)
+window.navigateToFilteredClients = function(filterType) {
+  if (typeof switchAppTab === 'function') {
+    switchAppTab('clients');
+  } else {
+    const clientsBtn = document.getElementById('tabNavClients');
+    if (clientsBtn) clientsBtn.click();
+  }
+
+  setTimeout(() => {
+    const targetTab = document.querySelector(`.filter-tabs .tab[onclick*="'${filterType}'"]`);
+    if (typeof setFilter === 'function') {
+      setFilter(filterType, targetTab);
+    }
+    const searchSection = document.querySelector('.search-box') || document.querySelector('.filter-tabs');
+    if (searchSection) {
+      searchSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, 60);
+};
+
+// ------------------------------------------------------------
+// 6. BARRA DE COTA DO PLANO DO REVENDEDOR
+// ------------------------------------------------------------
+// Conta Master com a casa aberta (dona da carteira). Calculada na hora, para não depender da ordem das telas.
+window.isAiMasterNow = function() {
+  const u = window.currentUser;
+  if (!u || !u.email || !window.MASTER_ADMIN_EMAIL) return false;
+  return u.email.toLowerCase() === String(window.MASTER_ADMIN_EMAIL).toLowerCase() && window.activeOwnerId === u.uid;
+};
+
+window.updateResellerQuotaBar = function(activeClientsCount) {
+  const box = document.getElementById('resellerQuotaBox');
+  const numbers = document.getElementById('resellerQuotaNumbers');
+  const barFill = document.getElementById('resellerQuotaBarFill');
+  const upgradeBtn = document.getElementById('btnQuotaUpgrade');
+
+  if (!box || !numbers || !barFill) return;
+
+  const rData = window.currentResellerData || (typeof currentResellerData !== 'undefined' ? currentResellerData : null);
+  const isMaster = window.currentUser && window.MASTER_ADMIN_EMAIL && window.currentUser.email.toLowerCase() === window.MASTER_ADMIN_EMAIL.toLowerCase();
+
+  const ownMaster = !!(isMaster && window.activeOwnerId === window.currentUser.uid);
+  const aiBtn = document.getElementById('btnAiReport'); if (aiBtn) aiBtn.style.display = ownMaster ? 'block' : 'none';
+  const aiFab = document.getElementById('fabAiReport'); if (aiFab) aiFab.style.display = ownMaster ? '' : 'none';
+  if (window.aiRenderHomeBox) window.aiRenderHomeBox();
+
+  if (isMaster) {
+    box.style.display = 'none';
+    return;
+  }
+
+  const maxClients = (rData && rData.maxClients) ? parseInt(rData.maxClients, 10) : 15;
+  const count = parseInt(activeClientsCount || 0, 10);
+  const percentage = Math.min(100, Math.round((count / maxClients) * 100));
+
+  box.style.display = 'block';
+  numbers.textContent = `${count} / ${maxClients}`;
+  barFill.style.width = `${percentage}%`;
+
+  if (percentage >= 80) {
+    barFill.style.background = percentage >= 100 ? 'var(--danger)' : 'var(--warning)';
+    if (upgradeBtn) upgradeBtn.style.display = 'inline-block';
+  } else {
+    barFill.style.background = 'var(--primary)';
+    if (upgradeBtn) upgradeBtn.style.display = 'none';
+  }
+};
+
+// ------------------------------------------------------------
+// 7. GESTÃO E SINCRONIZAÇÃO DA ABA APPS (CUSTOM APPS)
+// ------------------------------------------------------------
+let unsubscribeCustomApps = null;
+
+window.listenCustomApps = function(ownerId) {
+  if (!ownerId) return;
+  if (unsubscribeCustomApps) unsubscribeCustomApps();
+
+  const container = document.getElementById('customAppsList');
+
+  unsubscribeCustomApps = db.collection("custom_apps")
+    .where("ownerId", "==", ownerId)
+    .onSnapshot((snapshot) => {
+      window.customAppsCache = snapshot.docs.map(d => d.data());
+      if (!container) return;
+      container.innerHTML = '';
+
+      if (snapshot.empty) {
+        container.innerHTML = '<p style="text-align: center; color: var(--text-muted); font-size: 0.76rem; padding: 10px 0;">Nenhum atalho cadastrado.</p>';
+        return;
+      }
+
+      snapshot.forEach(doc => {
+        const app = doc.data();
+        const safeUrl = safeHttpUrl(app.url);
+        const card = document.createElement('div');
+        card.className = 'app-card-btn';
+        card.style.cssText = 'display: flex; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 6px;';
+
+        card.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 8px; flex: 1; overflow: hidden;">
+            <span style="font-size: 1.2rem;">⭐</span>
+            <div style="overflow: hidden;">
+              <strong style="font-size: 0.84rem; color: var(--text-main); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${esc(app.name || 'App')}</strong>
+              <small style="font-size: 0.7rem; color: var(--text-muted); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${esc(app.url || '')}</small>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <a href="${esc(safeUrl || '#')}" ${safeUrl ? '' : 'aria-disabled="true" onclick="return false;" '}target="_blank" rel="noopener noreferrer" class="btn-tool" style="background: var(--primary); padding: 5px 8px; font-size: 0.7rem; text-decoration: none; color: #fff; font-weight: bold; border-radius: 4px;">Abrir ↗</a>
+            <button type="button" class="btn-cancel" style="padding: 4px 6px; font-size: 0.7rem; color: var(--danger);" title="Excluir Atalho">✕</button>
+          </div>
+        `;
+
+        card.querySelector('.btn-cancel').addEventListener('click', async () => {
+          if (confirm(`Remover o atalho "${app.name}"?`)) {
+            try {
+              await db.collection("custom_apps").doc(doc.id).delete();
+            } catch (err) {
+              alert("Erro ao remover atalho: " + err.message);
+            }
+          }
+        });
+
+        container.appendChild(card);
+      });
+    }, (err) => {
+      console.warn("Erro ao carregar atalhos de apps:", err);
+    });
+};
+
+window.saveCustomApp = async function(event) {
+  event.preventDefault();
+  const nameInp = document.getElementById('customAppName');
+  const urlInp = document.getElementById('customAppUrl');
+  const btn = document.getElementById('btnSaveCustomApp');
+
+  if (!nameInp || !urlInp) return;
+  const name = nameInp.value.trim();
+  const url = urlInp.value.trim();
+
+  if (!name || !url) return alert("Preencha o nome e o link do aplicativo.");
+  const cleanUrl = safeHttpUrl(url);
+  if (!cleanUrl) return alert("O link precisa começar com http:// ou https://");
+
+  const ownerId = window.activeOwnerId || (window.currentUser ? window.currentUser.uid : null);
+  if (!ownerId) return alert("Sessão não identificada. Faça login novamente.");
+
+  if (btn) btn.disabled = true;
+
+  try {
+    await db.collection("custom_apps").add({
+      name,
+      url: cleanUrl,
+      ownerId,
+      createdAt: getTodayLocal()
+    });
+
+    nameInp.value = '';
+    urlInp.value = '';
+    alert("✅ Atalho adicionado com sucesso!");
+  } catch (err) {
+    alert("Erro ao salvar atalho: " + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
+// ------------------------------------------------------------
+// 8. ABA SERVIDORES & DNS (IP numérico e/ou URL, por servidor)
+// ------------------------------------------------------------
+function srvList() { return (typeof userServers !== 'undefined' && Array.isArray(userServers)) ? userServers : []; }
+function srvClients(srv) { const n = v => String(v || '').trim().toLowerCase(); return clients.filter(c => (c.serverId && c.serverId === srv.id) || (!c.serverId && n(c.assignedServer) === n(srv.name))); }
+function srvEsc(t) { return (typeof safeEsc === 'function') ? safeEsc(t) : String(t == null ? '' : t).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+
+// Histórico em subcoleção: não cresce dentro do documento de configurações
+function logServerChange(action, detail) {
+  const fs = (typeof db !== 'undefined' ? db : firebase.firestore());
+  if (!activeOwnerId) return;
+  fs.collection("settings").doc(activeOwnerId).collection("server_log").add({ at: new Date().toISOString(), action, detail: detail || '' }).catch(() => {});
+}
+
+// Altera a lista de servidores partindo da versão ATUAL do Firestore (transação).
+// Antes o app regravava a lista que tinha em memória: com o app aberto em dois aparelhos,
+// um apagava o que o outro tinha gravado (estoque de créditos, edição de servidor).
+// `mutate` recebe uma cópia da lista e devolve a lista nova.
+async function updateServers(mutate) {
+  const fs = (typeof db !== 'undefined' ? db : firebase.firestore());
+  if (!activeOwnerId) throw new Error('Sessão não identificada. Faça login novamente.');
+  const ref = fs.collection("settings").doc(activeOwnerId);
+  const copy = (list) => (Array.isArray(list) ? list : []).map(s => ({ ...s }));
+  let result = null;
+  if (navigator.onLine === false) {
+    // Sem internet não dá para ler a versão atual: grava a local e o Firestore envia quando voltar
+    result = mutate(copy(srvList()));
+    userServers = result;
+    ref.set({ servers: result }, { merge: true }).catch(e => console.warn('Gravação de servidores pendente falhou:', e));
+    return result;
+  }
+  await fs.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.exists ? (snap.data() || {}) : {};
+    const remote = Array.isArray(data.servers) ? normalizeServersList(data.servers).list : srvList();
+    result = mutate(copy(remote));
+    tx.set(ref, { servers: result }, { merge: true });
+  });
+  userServers = result;
+  return result;
+}
+
+// Estoque de créditos por servidor (null = não controlado)
+function serverHasStock(srv) { return srv && srv.creditStock !== null && srv.creditStock !== undefined && srv.creditStock !== '' && !isNaN(Number(srv.creditStock)); }
+// Créditos só para quem vence em até 7 dias (inclui vencidos): evita comprar o mês todo e travar o caixa
+const CREDIT_WINDOW_DAYS = 7;
+function serverCreditsNeeded(srv) {
+  return srvClients(srv).filter(c => !c.isArchived && !c.isDeleted && !c.isTrial && c.dueDate && getStatus(c.dueDate).diffDays <= CREDIT_WINDOW_DAYS).length;
+}
+
+// Faixa na tela inicial: estoque de cada servidor com controle, num relance
+window.updateCreditStrip = function() {
+  const box = document.getElementById('creditStrip');
+  if (!box) return;
+  const list = srvList().filter(s => s.active !== false && serverHasStock(s));
+  if (!list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = '';
+  const W = CREDIT_WINDOW_DAYS;
+  box.innerHTML = `<div class="cs-head">📦 Créditos em estoque</div>` + list.map(s => {
+    const stock = Number(s.creditStock), need = serverCreditsNeeded(s);
+    let cls, msg;
+    if (stock < need) { cls = 'bad'; msg = `Faltam <b>${need - stock}</b>: ${need} cliente${need > 1 ? 's vencem' : ' vence'} em até ${W} dias`; }
+    else if (need === 0) { cls = stock <= 0 ? 'bad' : 'ok'; msg = stock <= 0 ? 'Sem estoque' : `Ninguém vence em ${W} dias`; }
+    else { cls = (stock - need <= 1) ? 'warn' : 'ok'; msg = `Cobre os ${need} que vencem em ${W} dias${stock > need ? ` • sobram ${stock - need}` : ''}`; }
+    return `<button type="button" class="cs-row ${cls}" data-credit-srv="${srvEsc(s.id)}" aria-label="Adicionar crédito em ${srvEsc(s.name)}">
+      <span class="cs-name">${srvEsc(s.name)}<small>${msg}</small></span>
+      <span class="cs-num"><b>${stock}</b><small>crédito${stock === 1 ? '' : 's'}</small></span>
+      <span class="cs-add" aria-hidden="true">+</span>
+    </button>`;
+  }).join('');
+};
+
+// Faixa na tela inicial: suportes abertos que ainda não foram fechados (evita ficar pela metade)
+window.updateOpenSupportStrip = function() {
+  const box = document.getElementById('openSupportStrip');
+  if (!box) return;
+  const list = (typeof clients !== 'undefined' ? clients : []).filter(c => c && !c.isArchived && !c.isDeleted && c.supportOpenAt);
+  if (!list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  list.sort((a, b) => String(a.supportOpenAt).localeCompare(String(b.supportOpenAt)));
+  box.style.display = '';
+  box.innerHTML = `<div class="cs-head">🤝 Suportes em aberto (${list.length})</div>` + list.map(c => {
+    const openedMs = Date.parse(c.supportOpenAt);
+    const hrs = isFinite(openedMs) ? Math.max(0, Math.round((Date.now() - openedMs) / 3600000)) : null;
+    const cls = (hrs == null) ? 'warn' : (hrs >= 24 ? 'bad' : (hrs >= 4 ? 'warn' : 'ok'));
+    const when = hrs == null ? '' : (hrs < 1 ? 'aberto há poucos minutos' : hrs < 24 ? `aberto há ${hrs}h` : `aberto há ${Math.round(hrs / 24)}d`);
+    return `<button type="button" class="cs-row ${cls}" data-open-support="${srvEsc(c.id)}" aria-label="Fechar suporte de ${srvEsc(c.name || c.username)}">
+      <span class="cs-name">${srvEsc(c.name || c.username)}<small>${srvEsc(c.supportOpenReason || 'Suporte')} • ${when}</small></span>
+      <span class="cs-add" aria-hidden="true">✓</span>
+    </button>`;
+  }).join('');
+};
+document.addEventListener('click', function(ev) {
+  const b = ev.target.closest && ev.target.closest('[data-open-support]');
+  if (b && typeof openSupportCloseModal === 'function') openSupportCloseModal(b.getAttribute('data-open-support'));
 });
+document.addEventListener('click', function(ev) {
+  const b = ev.target.closest && ev.target.closest('[data-credit-srv]');
+  if (b) openQuickCredits(b.getAttribute('data-credit-srv'));
+});
+
+// Modal rápido (botão ⚡ e faixa): adiciona créditos sem abrir a aba Servidores
+window.openQuickCredits = function(preId) {
+  if (typeof closeFabMenu === 'function') closeFabMenu();
+  const old = document.getElementById('quickCreditsOverlay'); if (old) old.remove();
+  const servers = srvList().filter(s => s.active !== false);
+  if (!servers.length) return alert('Cadastre um servidor primeiro (aba Servidores).');
+  const filter = (typeof currentGlobalServer !== 'undefined') ? currentGlobalServer : '';
+  const pre = servers.find(s => s.id === preId) || servers.find(s => s.name === filter) || servers[0];
+  const ov = document.createElement('div');
+  ov.id = 'quickCreditsOverlay'; ov.className = 'modal-backdrop'; ov.style.zIndex = '10050';
+  ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true');
+  ov.innerHTML = `<div class="modal-card" style="max-width:380px; text-align:left;">
+    <h3 style="margin:0 0 10px;">📦 Adicionar crédito</h3>
+    <div class="field"><label for="qcServer">Servidor</label><select id="qcServer">${servers.map(s => `<option value="${srvEsc(s.id)}" ${s.id === pre.id ? 'selected' : ''}>${srvEsc(s.name)}</option>`).join('')}</select></div>
+    <div id="qcInfo" style="font-size:0.78rem; margin:-2px 0 10px;"></div>
+    <div class="field"><label for="qcQty">Quantos créditos você comprou?</label>
+      <input type="number" id="qcQty" min="1" step="1" inputmode="numeric" placeholder="Ex: 5">
+      <div style="display:flex; gap:6px; margin-top:6px;">${[1, 5, 10, 20].map(n => `<button type="button" class="btn-tool qc-chip" data-n="${n}" style="flex:1; padding:6px;">+${n}</button>`).join('')}</div></div>
+    <div style="display:flex; gap:8px; margin-top:10px;"><button type="button" class="btn-cancel" id="qcCancel" style="flex:1;">Cancelar</button><button type="button" class="btn-pix-save" id="qcOk" style="flex:2; background:#059669;">Adicionar</button></div></div>`;
+  document.body.appendChild(ov);
+  const sel = ov.querySelector('#qcServer'), qty = ov.querySelector('#qcQty'), info = ov.querySelector('#qcInfo');
+  const close = () => ov.remove();
+  const paint = () => {
+    const s = srvList().find(x => x.id === sel.value);
+    const need = serverCreditsNeeded(s);
+    info.innerHTML = serverHasStock(s)
+      ? `Estoque atual: <b>${Number(s.creditStock)}</b> • vencem em até ${CREDIT_WINDOW_DAYS} dias: <b>${need}</b>${need > Number(s.creditStock) ? ` → <b style="color:#dc2626;">faltam ${need - Number(s.creditStock)}</b>` : ''}`
+      : `Estoque ainda não controlado. Vencem em até ${CREDIT_WINDOW_DAYS} dias: <b>${need}</b>.`;
+  };
+  sel.addEventListener('change', paint); paint();
+  ov.querySelectorAll('.qc-chip').forEach(b => b.addEventListener('click', () => { qty.value = (parseInt(qty.value, 10) || 0) + parseInt(b.dataset.n, 10); }));
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  ov.querySelector('#qcCancel').addEventListener('click', close);
+  ov.querySelector('#qcOk').addEventListener('click', async () => {
+    const n = parseInt(qty.value, 10);
+    if (!n || n < 1) return alert('Informe quantos créditos foram comprados.');
+    const s = srvList().find(x => x.id === sel.value);
+    const okBtn = ov.querySelector('#qcOk');
+    okBtn.disabled = true;
+    const left = await adjustServerStock(s, n, 'compra', { startAtZero: true });
+    if (left === null) { okBtn.disabled = false; return alert('Não consegui gravar o estoque. Confira a internet e tente de novo.'); }
+    close();
+    showToast(`${s.name}: estoque agora é ${left}`);
+  });
+  setTimeout(() => qty.focus(), 50);
+};
+// Desliga o controle de estoque em todos os servidores de uma vez (creditStock -> null).
+// A necessidade (quantos clientes vencem em até CREDIT_WINDOW_DAYS dias) continua calculada
+// e exibida normalmente — só para de pedir que o estoque seja alimentado manualmente.
+window.disableAllCreditStock = async function() {
+  const tracked = srvList().filter(s => serverHasStock(s));
+  if (!tracked.length) return showToast('Nenhum servidor está com estoque controlado.');
+  if (!confirm(`Isso para de controlar o estoque de crédito em ${tracked.length} servidor(es). Os avisos de "faltam créditos" não aparecem mais, mas o número de clientes que vencem em breve continua aparecendo normalmente. Quer continuar?`)) return;
+  try {
+    await updateServers(list => list.map(s => ({ ...s, creditStock: null })));
+    logServerChange('stock', 'Estoque de crédito deixou de ser controlado (todos os servidores).');
+    if (typeof updateCreditStrip === 'function') updateCreditStrip();
+    if (typeof renderServersTab === 'function') renderServersTab();
+    showToast('Estoque de crédito desativado em todos os servidores.');
+  } catch (e) {
+    alert('Não consegui salvar: ' + (e && e.message ? e.message : e));
+  }
+};
+// Soma (ou subtrai) créditos do estoque partindo do valor atual do Firestore.
+// opts.startAtZero: servidor ainda sem controle de estoque passa a ter, começando em 0 (compra).
+// Devolve o novo estoque, ou null se o servidor não controla estoque / a gravação falhou.
+window.adjustServerStock = async function(srv, delta, why, opts) {
+  opts = opts || {};
+  if (!srv || !delta) return null;
+  if (!serverHasStock(srv) && !opts.startAtZero) return null;
+  let next = null;
+  try {
+    await updateServers(list => list.map(s => {
+      if (s.id !== srv.id) return s;
+      if (!serverHasStock(s) && !opts.startAtZero) return s;
+      const base = serverHasStock(s) ? Number(s.creditStock) : 0;
+      next = Math.max(0, base + delta);
+      return { ...s, creditStock: next };
+    }));
+    if (next !== null) logServerChange('stock', `${srv.name}: ${delta > 0 ? '+' : ''}${delta} (${why || 'ajuste'}) → ${next}`);
+  } catch (e) {
+    console.warn('estoque', e);
+    return null;
+  }
+  if (typeof renderServersTab === 'function') renderServersTab();
+  updateCreditStrip();
+  return next;
+};
+window.addServerCredits = function(id) { return openQuickCredits(id); };
+
+function refreshServerDependents() {
+  if (typeof populateClientServerOptions === 'function') populateClientServerOptions();
+  if (typeof updateGlobalServerSelectOptions === 'function') updateGlobalServerSelectOptions();
+  renderServersTab();
+  updateCreditStrip();
+  if (typeof renderClients === 'function') renderClients();
+}
+
+window.renderServersTab = function() {
+  const box = document.getElementById('serversTabList');
+  if (!box) return;
+  const servers = srvList();
+  if (servers.length === 0) {
+    box.innerHTML = '<p style="font-size:0.78rem; color:var(--text-muted);">Nenhum servidor cadastrado. Toque em ➕ Novo servidor.</p>';
+    return;
+  }
+  const line = (label, value) => value
+    ? `<div style="display:flex; justify-content:space-between; align-items:center; gap:6px; font-size:0.74rem;"><span style="min-width:0; word-break:break-all;"><strong>${label}:</strong> ${srvEsc(value)}</span><button type="button" class="btn-tool" style="padding:2px 8px; font-size:0.68rem;" data-srv-copy="${srvEsc(value)}">Copiar</button></div>`
+    : `<div style="font-size:0.72rem; color:var(--text-muted);"><strong>${label}:</strong> não cadastrado</div>`;
+
+  box.innerHTML = servers.map(srv => {
+    const linked = srvClients(srv);
+    const activeCount = linked.filter(c => !c.isArchived).length;
+    const on = srv.active !== false;
+    return `
+      <div style="background:var(--surface-alt); border:1px solid var(--border); border-radius:8px; padding:10px; ${on ? '' : 'opacity:.85;'}">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <strong style="font-size:0.86rem;">🖥️ ${srvEsc(srv.name)}</strong>
+          <span style="font-size:0.68rem; font-weight:700; padding:2px 8px; border-radius:99px; ${on ? 'background:#dcfce7; color:#166534;' : 'background:#fef3c7; color:#92400e;'}">${on ? 'Ativo' : '⚠️ Inativo'}</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:6px;">
+          ${(() => { const d = serverDnsLists(srv); return (d.ips.length ? d.ips.map((v, i) => line('DNS IP' + (d.ips.length > 1 ? ' ' + (i + 1) : ''), v)).join('') : line('DNS IP', '')) + (d.urls.length ? d.urls.map((v, i) => line('DNS URL' + (d.urls.length > 1 ? ' ' + (i + 1) : ''), v)).join('') : line('DNS URL', '')); })()}
+          <div style="font-size:0.72rem;"><strong>💳 Crédito:</strong> ${(srv.costPerCredit === null || srv.costPerCredit === undefined || srv.costPerCredit === '') ? '<span style="color:var(--text-muted);">usa o custo padrão</span>' : 'R$ ' + Number(srv.costPerCredit).toFixed(2).replace('.', ',')}</div>
+          ${(() => {
+            if (!serverHasStock(srv)) return '<div style="font-size:0.72rem; color:var(--text-muted);"><strong>📦 Estoque:</strong> não controlado (use ✏️ Editar ou ➕ Créditos)</div>';
+            const stock = Number(srv.creditStock), need = serverCreditsNeeded(srv), miss = Math.max(0, need - stock);
+            const tone = stock <= 0 ? 'background:#fee2e2; color:#991b1b;' : (miss > 0 ? 'background:#fef3c7; color:#92400e;' : 'background:#dcfce7; color:#166534;');
+            return `<div style="font-size:0.72rem; padding:6px 8px; border-radius:6px; ${tone}"><strong>📦 Estoque:</strong> ${stock} crédito(s) • Vencem em até ${CREDIT_WINDOW_DAYS} dias: ${need}${miss > 0 ? ` → <strong>comprar ${miss}</strong>` : ' ✓ cobre a semana'}</div>`;
+          })()}
+          ${srv.panelUrl ? `<div style="font-size:0.72rem; word-break:break-all;"><strong>Painel:</strong> ${srvEsc(srv.panelUrl)}</div>` : ''}
+          ${srv.notes ? `<div style="font-size:0.72rem; color:var(--text-muted);">📝 ${srvEsc(srv.notes)}</div>` : ''}
+        </div>
+        <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:8px;">👥 ${activeCount} cliente(s) ativo(s) • ${linked.length} no total</div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button type="button" class="btn-act-sub" style="flex:1; padding:6px; font-size:0.72rem; border:1px solid var(--border); background:var(--surface); color:var(--text-main); border-radius:4px; cursor:pointer;" data-srv-act="edit" data-srv-id="${srvEsc(srv.id)}">✏️ Editar</button>
+          <button type="button" class="btn-act-sub" style="flex:1; padding:6px; font-size:0.72rem; border:1px solid var(--border); background:var(--surface); color:var(--text-main); border-radius:4px; cursor:pointer;" data-srv-act="clients" data-srv-id="${srvEsc(srv.id)}">👥 Clientes</button>
+          <button type="button" class="btn-act-sub" style="flex:1; padding:6px; font-size:0.72rem; border:1px solid var(--border); background:var(--surface); color:var(--text-main); border-radius:4px; cursor:pointer;" data-srv-act="credits" data-srv-id="${srvEsc(srv.id)}">➕ Créditos</button>
+          <button type="button" class="btn-act-sub" style="flex:1; padding:6px; font-size:0.72rem; border:1px solid var(--border); background:var(--surface); color:var(--text-main); border-radius:4px; cursor:pointer;" data-srv-act="toggle" data-srv-id="${srvEsc(srv.id)}">${on ? '⏸ Desativar' : '▶ Ativar'}</button>
+          <button type="button" class="btn-act-sub" style="padding:6px 10px; font-size:0.72rem; border:1px solid #fecaca; background:#fef2f2; color:#991b1b; border-radius:4px; cursor:pointer;" data-srv-act="delete" data-srv-id="${srvEsc(srv.id)}">✕</button>
+        </div>
+      </div>`;
+  }).join('');
+};
+
+document.addEventListener('click', function(ev) {
+  const t = ev.target.closest && ev.target.closest('[data-srv-copy],[data-srv-act]');
+  if (!t) return;
+  if (t.hasAttribute('data-srv-copy')) return window.copyServerValue(t, t.getAttribute('data-srv-copy'));
+  const id = t.getAttribute('data-srv-id');
+  const act = t.getAttribute('data-srv-act');
+  if (act === 'edit') editServer(id);
+  else if (act === 'clients') showServerClients(id);
+  else if (act === 'credits') addServerCredits(id);
+  else if (act === 'toggle') toggleServerActive(id);
+  else if (act === 'delete') deleteServer(id);
+});
+
+window.copyServerValue = function(btn, value) {
+  const done = () => { const t = btn.textContent; btn.textContent = '✓ Copiado'; setTimeout(() => { btn.textContent = t; }, 1200); };
+  const text = String(value == null ? '' : value);
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(done).catch(() => alert(text));
+  else alert(text);
+};
+
+window.newServerForm = function() { fillServerForm({ id: '', name: '', costPerCredit: null, creditStock: null, dnsIps: [], dnsUrls: [], panelUrl: '', notes: '', active: true }, 'Novo servidor'); };
+window.editServer = function(id) { const s = srvList().find(x => x.id === id); if (s) fillServerForm(s, 'Editar servidor'); };
+window.closeServerForm = function() { const c = document.getElementById('serverFormCard'); if (c) c.style.display = 'none'; };
+
+window.applyServerPaste = function() {
+  const area = document.getElementById('srvPasteArea');
+  const result = document.getElementById('srvPasteResult');
+  if (!area) return;
+  const r = parseServerPaste(area.value);
+
+  // não perde o que já foi digitado: só acrescenta valores novos
+  const existing = kind => [...document.querySelectorAll(kind === 'ip' ? '#srvFormIpList .srv-ip-inp' : '#srvFormUrlList .srv-url-inp')];
+  const addUnique = (kind, values) => {
+    let added = 0;
+    values.forEach(v => {
+      const rows = existing(kind);
+      if (rows.some(i => i.value.trim() === v)) return;
+      const empty = rows.find(i => !i.value.trim());
+      if (empty) empty.value = v; else addServerDnsRow(kind, v);
+      added++;
+    });
+    return added;
+  };
+
+  const nameEl = document.getElementById('srvFormName');
+  const panelEl = document.getElementById('srvFormPanel');
+  let nameSet = false, panelSet = false;
+  if (r.name && nameEl && !nameEl.value.trim()) { nameEl.value = r.name; nameSet = true; }
+  if (r.panelUrl && panelEl && !panelEl.value.trim()) { panelEl.value = r.panelUrl; panelSet = true; }
+  const ips = addUnique('ip', r.ips);
+  const urls = addUnique('url', r.urls);
+
+  const parts = [];
+  if (nameSet) parts.push('nome');
+  if (ips) parts.push(`${ips} IP${ips > 1 ? 's' : ''}`);
+  if (urls) parts.push(`${urls} URL${urls > 1 ? 's' : ''}`);
+  if (panelSet) parts.push('painel');
+  if (result) result.textContent = parts.length ? `✔ Preenchido: ${parts.join(', ')}. Confira e salve.` : '⚠️ Nada reconhecido no texto. Confira o conteúdo colado.';
+  if (parts.length) area.value = '';
+};
+
+window.addServerDnsRow = function(kind, value) {
+  const box = document.getElementById(kind === 'ip' ? 'srvFormIpList' : 'srvFormUrlList');
+  if (!box) return;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex; gap:4px;';
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.className = kind === 'ip' ? 'srv-ip-inp' : 'srv-url-inp';
+  inp.inputMode = 'url'; inp.autocomplete = 'off';
+  inp.placeholder = kind === 'ip' ? 'Ex: http://192.168.0.10:8080' : 'Ex: http://dns.link.tv:80';
+  inp.style.cssText = 'flex:1; padding:8px; font-size:0.78rem;';
+  inp.value = value || '';
+  const del = document.createElement('button');
+  del.type = 'button'; del.className = 'btn-cancel'; del.textContent = '✕';
+  del.style.cssText = 'padding:6px 10px; color:var(--danger);';
+  del.onclick = () => row.remove();
+  row.appendChild(inp); row.appendChild(del);
+  box.appendChild(row);
+};
+
+function fillServerForm(s, title) {
+  document.getElementById('serverFormTitle').textContent = title;
+  document.getElementById('srvFormId').value = s.id || '';
+  document.getElementById('srvFormName').value = s.name || '';
+  const costEl = document.getElementById('srvFormCost');
+  if (costEl) costEl.value = (s.costPerCredit === null || s.costPerCredit === undefined || s.costPerCredit === '') ? '' : s.costPerCredit;
+  const d = serverDnsLists(s);
+  const stockEl = document.getElementById('srvFormStock');
+  if (stockEl) stockEl.value = (s.creditStock === null || s.creditStock === undefined || s.creditStock === '') ? '' : s.creditStock;
+  document.getElementById('srvFormIpList').innerHTML = '';
+  document.getElementById('srvFormUrlList').innerHTML = '';
+  (d.ips.length ? d.ips : ['']).forEach(v => addServerDnsRow('ip', v));
+  (d.urls.length ? d.urls : ['']).forEach(v => addServerDnsRow('url', v));
+  document.getElementById('srvFormPanel').value = s.panelUrl || '';
+  document.getElementById('srvFormNotes').value = s.notes || '';
+  document.getElementById('srvFormActive').checked = s.active !== false;
+  const pasteArea = document.getElementById('srvPasteArea'); if (pasteArea) pasteArea.value = '';
+  const pasteRes = document.getElementById('srvPasteResult'); if (pasteRes) pasteRes.textContent = '';
+  const card = document.getElementById('serverFormCard');
+  card.style.display = 'block';
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+window.saveServerForm = async function() {
+  const id = document.getElementById('srvFormId').value;
+  const name = document.getElementById('srvFormName').value.trim();
+  const uniq = arr => [...new Set(arr)];
+  const dnsIps = uniq([...document.querySelectorAll('#srvFormIpList .srv-ip-inp')].map(i => i.value.trim()).filter(Boolean));
+  const dnsUrls = uniq([...document.querySelectorAll('#srvFormUrlList .srv-url-inp')].map(i => i.value.trim()).filter(Boolean));
+  const panelUrl = document.getElementById('srvFormPanel').value.trim();
+  const notes = document.getElementById('srvFormNotes').value.trim();
+  const active = document.getElementById('srvFormActive').checked;
+  const costRaw = (document.getElementById('srvFormCost') || { value: '' }).value.trim().replace(',', '.');
+  const costPerCredit = costRaw === '' ? null : parseFloat(costRaw);
+  if (costRaw !== '' && (isNaN(costPerCredit) || costPerCredit < 0)) return alert('Valor do crédito inválido. Use um número, por exemplo 10.00');
+  const stockRaw = (document.getElementById('srvFormStock') || { value: '' }).value.trim();
+  const creditStock = stockRaw === '' ? null : parseInt(stockRaw, 10);
+  if (stockRaw !== '' && (isNaN(creditStock) || creditStock < 0)) return alert('Estoque de créditos inválido. Use um número inteiro, por exemplo 20');
+
+  if (!name) return alert('Informe o nome do servidor.');
+  if (srvList().some(s => s.id !== id && (s.name || '').trim().toLowerCase() === name.toLowerCase())) {
+    return alert('Já existe um servidor com esse nome. Use um nome diferente.');
+  }
+  const badIp = dnsIps.find(v => !isValidIpv4Dns(v));
+  if (badIp) return alert(`DNS numérico inválido: ${badIp}\nExemplos: 192.168.0.10:8080 ou http://192.168.0.10:8080`);
+  const badUrl = dnsUrls.find(v => !isValidUrlDns(v));
+  if (badUrl) return alert(`DNS por URL inválido: ${badUrl}\nUse o formato http://dns.exemplo.com:80 (IP vai nos campos numéricos).`);
+  if (panelUrl && !/^https?:\/\/\S+$/i.test(panelUrl)) return alert('URL do painel inválida. Comece com http:// ou https://');
+
+  const rec = { id: id || generateServerId(), name, costPerCredit, creditStock, dnsIps, dnsUrls, dnsIp: dnsIps[0] || '', dnsUrl: dnsUrls[0] || '', panelUrl, notes, active };
+  rec.dns = serverDnsForM3u(rec);
+
+  const prev = srvList().find(s => s.id === id);
+  const renamed = prev && prev.name !== name;
+  // Estoque que o usuário não mexeu no formulário não é regravado: outro aparelho pode ter
+  // renovado clientes (e descontado créditos) enquanto o formulário estava aberto.
+  const prevStock = prev && serverHasStock(prev) ? Number(prev.creditStock) : null;
+  const patch = { ...rec };
+  if (prev && creditStock === prevStock) delete patch.creditStock;
+
+  try {
+    const fs = (typeof db !== 'undefined' ? db : firebase.firestore());
+    // 1) salva a lista de servidores; 2) só depois atualiza os clientes. Se o passo 2 falhar,
+    // os clientes ainda resolvem o servidor pelo serverId e nada fica inconsistente.
+    const affected = prev ? srvClients(prev) : [];
+    await updateServers(list => {
+      const i = list.findIndex(s => s.id === rec.id);
+      if (i >= 0) { list[i] = { ...list[i], ...patch }; return list; }
+      return list.concat([rec]);
+    });
+    logServerChange(prev ? 'edit' : 'create', `${prev ? prev.name + ' → ' : ''}${name}${renamed ? ' (renomeado)' : ''}`);
+    for (let i = 0; i < affected.length; i += 400) {
+      const batch = fs.batch();
+      affected.slice(i, i + 400).forEach(c => batch.update(fs.collection('clients').doc(c.id), { assignedServer: name, serverId: rec.id }));
+      await batch.commit();
+    }
+    closeServerForm();
+    refreshServerDependents();
+  } catch (e) {
+    alert('Erro ao salvar servidor: ' + e.message);
+  }
+};
+
+window.toggleServerActive = async function(id) {
+  const srv = srvList().find(s => s.id === id);
+  if (!srv) return;
+  const turningOff = srv.active !== false;
+  const affected = srvClients(srv).filter(c => !c.isArchived).length;
+  if (turningOff && !confirm(`Desativar "${srv.name}"?\n\n${affected} cliente(s) ativo(s) ficarão sinalizados com ⚠️ e o portal avisará indisponibilidade.`)) return;
+  try {
+    await updateServers(list => list.map(s => s.id === id ? { ...s, active: !turningOff } : s));
+    logServerChange(turningOff ? 'deactivate' : 'activate', srv.name);
+    refreshServerDependents();
+  } catch (e) { alert('Erro: ' + e.message); }
+};
+
+window.deleteServer = async function(id) {
+  const srv = srvList().find(s => s.id === id);
+  if (!srv) return;
+  const linked = srvClients(srv).length;
+  if (linked > 0) return alert(`"${srv.name}" possui ${linked} cliente(s) vinculado(s). Mova esses clientes para outro servidor antes de excluir (ou apenas desative o servidor).`);
+  if (!confirm(`Excluir o servidor "${srv.name}"?`)) return;
+  try {
+    await updateServers(list => list.filter(s => s.id !== id));
+    logServerChange('delete', srv.name);
+    refreshServerDependents();
+  } catch (e) { alert('Erro: ' + e.message); }
+};
+
+window.showServerClients = function(id) {
+  const srv = srvList().find(s => s.id === id);
+  if (!srv) return;
+  switchAppTab('clients');
+  const sel = document.getElementById('globalServerFilter');
+  if (sel) sel.value = srv.name;
+  changeGlobalServerFilter(srv.name);
+};
+
+window.savePixKey = async function() {
+  const pixInput = document.getElementById('pixKeyInput');
+  if (!pixInput) return;
+
+  const keyVal = pixInput.value.trim();
+  const typeEl = document.getElementById('pixKeyTypeInput');
+  const typeVal = typeEl ? typeEl.value : 'auto';
+  myPixKey = keyVal;
+  window.myPixKeyType = typeVal;
+  if (keyVal && typeof pixKeyForBrCode === 'function' && !pixKeyForBrCode(keyVal, typeVal)) {
+    alert('Chave salva, mas o QR Code do Pix não será gerado: o tipo escolhido não combina com a chave. Confira o tipo (Celular, CPF, CNPJ, e-mail ou aleatória).');
+  }
+
+  if (activeOwnerId) {
+    try {
+      await db.collection("settings").doc(activeOwnerId).set({ pixKey: keyVal, pixKeyType: typeVal }, { merge: true });
+    } catch (e) {
+      console.warn("Erro ao salvar Pix:", e);
+    }
+  }
+
+  alert("✅ Chave Pix salva com sucesso!");
+  if (typeof renderClients === 'function') renderClients();
+};
+
+window.sendFeedback = async function() {
+  const typeEl = document.getElementById('feedbackType');
+  const msgEl = document.getElementById('feedbackMessage');
+  const btn = document.getElementById('btnSubmitFeedback');
+
+  if (!msgEl || !msgEl.value.trim()) {
+    alert("Digite sua mensagem de sugestão ou erro.");
+    return;
+  }
+
+  const type = typeEl ? typeEl.value : 'ideia';
+  const message = msgEl.value.trim();
+  const userEmail = currentUser ? (currentUser.email || currentUser.uid) : 'Anônimo';
+
+  try {
+    if (btn) btn.disabled = true;
+    await db.collection("feedback").add({
+      type,
+      message,
+      resellerEmail: userEmail,
+      createdAt: getTodayLocal()
+    });
+
+    alert("✅ Feedback enviado com sucesso! Agradecemos sua colaboração.");
+    msgEl.value = '';
+    const charCount = document.getElementById('feedbackCharCount');
+    if (charCount) charCount.textContent = '0';
+  } catch (err) {
+    alert("Erro ao enviar feedback: " + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
+const feedbackMsgEl = document.getElementById('feedbackMessage');
+if (feedbackMsgEl) {
+  feedbackMsgEl.addEventListener('input', function() {
+    const charCount = document.getElementById('feedbackCharCount');
+    if (charCount) charCount.textContent = this.value.length;
+  });
+}
+
+// ------------------------------------------------------------
+// 9. INICIALIZAÇÃO GERAL
+// ------------------------------------------------------------
+// O botão ⚡ acompanha a visibilidade do app (independe de qual tela o auth.js exibiu)
+function initFabVisibility() {
+  const appEl = document.getElementById('appContainer');
+  const fab = document.getElementById('fabContainer');
+  if (!appEl || !fab) return;
+
+  const sync = () => {
+    const visible = window.getComputedStyle(appEl).display !== 'none';
+    fab.style.display = visible ? 'flex' : 'none';
+  };
+
+  new MutationObserver(sync).observe(appEl, { attributes: true, attributeFilter: ['style', 'class'] });
+  sync();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
+  initNetworkWatcher();
+  initFabVisibility();
+
+  document.addEventListener('click', (e) => {
+    const fabContainer = document.getElementById('fabContainer');
+    if (fabContainer && !fabContainer.contains(e.target)) {
+      closeFabMenu();
+    }
+  });
+});
+
+// Atalhos do ícone do app (manifest): ?action=charge abre a fila de cobrança, ?action=new abre o cadastro
+window.handleLaunchAction = function() {
+  let act = '';
+  try { act = new URLSearchParams(location.search).get('action') || ''; } catch (e) {}
+  if (!act) return;
+  try { history.replaceState(null, '', location.pathname); } catch (e) {}
+  setTimeout(() => {
+    if (act === 'charge' && typeof startDailyQueueBilling === 'function') startDailyQueueBilling();
+    else if (act === 'new' && typeof openQuickNewClient === 'function') openQuickNewClient();
+  }, 1800);
+};

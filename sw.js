@@ -1,16 +1,31 @@
-const CACHE_NAME = 'gestao-clientes-v2';
-const ASSETS_TO_CACHE = [
+// ============================================================
+// SERVICE WORKER - PWA, CACHE OFFLINE & SAME-ORIGIN SECURITY
+// ============================================================
+
+const CACHE_VERSION = 'v56';
+const CACHE_NAME = `gestao-clientes-${CACHE_VERSION}`;
+
+const STATIC_ASSETS = [
   './',
   './index.html',
   './style.css',
+  './firebase-config.js',
+  './utils.js',
+  './smart-paste.js',
+  './clients.js',
+  './admin.js',
+  './auth.js',
   './app.js',
+  './ai-config.js',
+  './ai-report.js',
+  './whatsnew.js',
   './manifest.json'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
+      return cache.addAll(STATIC_ASSETS);
     }).then(() => self.skipWaiting())
   );
 });
@@ -30,30 +45,43 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Ignora requisições para Firebase, Google Fonts ou externas
-  if (!event.request.url.startsWith(self.location.origin)) {
+  const req = event.request;
+  const url = new URL(req.url);
+
+  // SDK do Firebase (CDN): guarda uma cópia para o app abrir offline
+  if (url.hostname === 'www.gstatic.com' && url.pathname.indexOf('/firebasejs/') === 0 && req.method === 'GET') {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.match(req).then((hit) => hit || fetch(req).then((res) => { cache.put(req, res.clone()); return res; }))
+      )
+    );
+    return;
+  }
+
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  if (req.method !== 'GET') {
+    return;
+  }
+
+  // Portal do assinante tem token na URL: nunca guardar em cache
+  if (url.pathname.endsWith('/portal.html') || url.pathname.endsWith('/portal-config.js')) {
     return;
   }
 
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-      return fetch(event.request).then((networkResponse) => {
-        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-          return networkResponse;
+    fetch(req)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const resClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone));
         }
-        const responseToCache = networkResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseToCache);
-        });
         return networkResponse;
-      });
-    }).catch(() => {
-      if (event.request.mode === 'navigate') {
-        return caches.match('./index.html');
-      }
-    })
+      })
+      .catch(() => {
+        return caches.match(req, { ignoreSearch: true });
+      })
   );
-});
+});

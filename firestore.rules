@@ -1,0 +1,146 @@
+rules_version = '2';
+
+// ============================================================
+// REGRAS DO FIRESTORE — GestãoPro (SUGESTÃO)
+//
+// ANTES DE PUBLICAR:
+//  1. Copie e guarde as regras que você usa hoje (para voltar se algo der errado).
+//  2. Cole estas no console do Firebase → Firestore → Regras e use o
+//     "Playground de regras" para testar: login de revendedor, cadastro,
+//     renovação, gerar link do portal e o painel Master.
+//  3. Os Workers (portal e IA) usam conta de serviço e não passam por estas regras.
+//
+// O que estas regras travam (o app sozinho não consegue impedir):
+//  - Revendedor só lê e grava os PRÓPRIOS clientes, servidores e atalhos.
+//  - Link do portal só pode ser criado para um cliente do próprio revendedor
+//    (antes, alguém com conta de teste poderia criar um link para cliente de outro).
+//  - O cadastro novo só pode nascer como teste de 7 dias no plano Iniciante,
+//    ou exatamente com o plano do convite deixado pelo Master.
+//  - O revendedor só consegue alterar o próprio "lastAccess"; plano, limite,
+//    bloqueio e vencimento só o Master muda.
+//  - Licença vencida ou bloqueada não grava clientes.
+// ============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function myEmail() { return request.auth.token.get('email', '').lower(); }
+    function isMaster() { return signedIn() && myEmail() == 'rodrigo.h.silva90@gmail.com'; }
+    function isMe(uid) { return signedIn() && request.auth.uid == uid; }
+
+    function resellerPath() { return /databases/$(database)/documents/resellers/$(request.auth.uid); }
+
+    // Licença em dia. Cadastros antigos sem "expiresTs" passam; ao mudar o plano
+    // pelo painel Master o campo é gravado e a conferência passa a valer.
+    function licensed() {
+      return isMaster() || (
+        signedIn()
+        && exists(resellerPath())
+        && get(resellerPath()).data.get('blocked', false) != true
+        && (get(resellerPath()).data.get('expiresTs', null) == null
+            || get(resellerPath()).data.expiresTs > request.time)
+      );
+    }
+
+    // ---------------- Revendedores ----------------
+    function validTrial() {
+      let d = request.resource.data;
+      return d.planTier == 'starter'
+        && d.maxClients == 15
+        && d.blocked == false
+        && d.status == 'trial'
+        && d.email == myEmail()
+        && d.expiresTs is timestamp
+        && d.expiresTs < request.time + duration.value(8, 'd');
+    }
+    function validInvite() {
+      let inv = /databases/$(database)/documents/reseller_invites/$(myEmail());
+      let d = request.resource.data;
+      return exists(inv)
+        && d.planTier == get(inv).data.planTier
+        && d.maxClients == get(inv).data.maxClients
+        && d.expiresAt == get(inv).data.expiresAt
+        && d.blocked == false
+        && d.email == myEmail();
+    }
+
+    match /resellers/{uid} {
+      allow read: if isMe(uid) || isMaster();
+      allow create: if isMaster() || (isMe(uid) && (validTrial() || validInvite()));
+      // o próprio revendedor só atualiza o último acesso
+      allow update: if isMaster()
+        || (isMe(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastAccess']));
+      allow delete: if isMaster();
+    }
+
+    match /reseller_invites/{email} {
+      allow read: if isMaster() || (signedIn() && myEmail() == email);
+      allow write: if isMaster();
+    }
+
+    // ---------------- Clientes ----------------
+    match /clients/{clientId} {
+      allow read: if isMaster() || (signedIn() && resource.data.ownerId == request.auth.uid);
+      allow create: if isMaster()
+        || (signedIn() && request.resource.data.ownerId == request.auth.uid && licensed());
+      allow update: if isMaster()
+        || (signedIn()
+            && resource.data.ownerId == request.auth.uid
+            && request.resource.data.ownerId == request.auth.uid
+            && licensed());
+      allow delete: if isMaster() || (signedIn() && resource.data.ownerId == request.auth.uid);
+    }
+
+    // ---------------- Configurações (Pix, servidores, portal) ----------------
+    match /settings/{uid} {
+      allow read, write: if isMe(uid) || isMaster();
+      match /server_log/{logId} {
+        allow read, write: if isMe(uid) || isMaster();
+      }
+    }
+
+    // ---------------- Atalhos de aplicativos ----------------
+    match /custom_apps/{appId} {
+      allow read, delete: if isMaster() || (signedIn() && resource.data.ownerId == request.auth.uid);
+      allow create: if isMaster() || (signedIn() && request.resource.data.ownerId == request.auth.uid);
+      allow update: if isMaster()
+        || (signedIn() && resource.data.ownerId == request.auth.uid && request.resource.data.ownerId == request.auth.uid);
+    }
+
+    // ---------------- Links do portal (o id do documento é o hash do token) ----------------
+    match /portal_tokens/{hash} {
+      function clientOf(id) { return get(/databases/$(database)/documents/clients/$(id)).data; }
+
+      allow read, delete: if isMaster() || (signedIn() && resource.data.ownerId == request.auth.uid);
+      // só cria link para um cliente que é do próprio revendedor (o Master pode criar para qualquer um)
+      allow create: if isMaster() || (
+        signedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.clientId is string
+        && clientOf(request.resource.data.clientId).ownerId == request.auth.uid
+        && licensed()
+      );
+      // ativar/desativar: só muda o campo "active"
+      allow update: if isMaster() || (
+        signedIn()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
+      );
+    }
+
+    // ---------------- Feedback ----------------
+    match /feedback/{id} {
+      allow create: if signedIn()
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 500;
+      allow read, update, delete: if isMaster();
+    }
+
+    // ---------------- Configuração pública (Pix e preços da tela de bloqueio) ----------------
+    match /public_config/{doc} {
+      allow read: if signedIn();
+      allow write: if isMaster();
+    }
+  }
+}

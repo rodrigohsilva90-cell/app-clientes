@@ -2,100 +2,343 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover">
   <title>Gestão de Clientes Pro</title>
   <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="theme-color" content="#2563eb">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="stylesheet" href="./style.css">
 
-  <!-- Bibliotecas Oficiais do Firebase v9 (Compat) -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
 </head>
 <body>
 
-  <!-- Tela de Bloqueio por Assinatura Expirada (Paywall Pix) -->
-  <div id="subscriptionBlockScreen" class="auth-screen" style="display: none; z-index: 10000;">
-    <div class="auth-card paywall-card">
-      <div style="font-size: 2.2rem; margin-bottom: 6px;">🔒</div>
-      <h2>Período de Teste Expirado</h2>
-      <p>Seu período de teste de 7 dias chegou ao fim. Para continuar gerenciando seus clientes e usando todas as automações, ative sua assinatura mensal.</p>
+  <!-- BARRA DE ALERTA OFFLINE -->
+  <div id="offlineBanner" class="offline-banner" style="display: none;">
+    ⚠️ Você está offline. As alterações serão gravadas localmente e sincronizadas assim que a internet voltar.
+  </div>
 
-      <div class="paywall-pix-box">
-        <span class="paywall-pix-label">Chave Pix para Pagamento da Licença:</span>
-        <strong id="paywallPixDisplay" class="paywall-pix-key">Carregando Pix...</strong>
-        <button type="button" class="btn-tool" style="background-color: #0d9488; margin-top: 8px; width: 100%; font-weight: bold;" onclick="copyMasterPixKey(this)">📋 Copiar Chave Pix</button>
-      </div>
-
-      <a id="paywallWhatsAppBtn" href="#" target="_blank" rel="noopener noreferrer" class="btn-auth" style="background-color: #25d366; text-decoration: none; display: block; margin-top: 10px;">
-        💬 Enviar Comprovante no WhatsApp
-      </a>
-
-      <button type="button" class="btn-cancel" style="margin-top: 8px;" onclick="handleLogout()">Sair da Conta</button>
+  <!-- MODAL 1: Escolha Servidor M3U -->
+  <div id="m3uServerModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div style="font-size: 2rem; margin-bottom: 4px;">🌐</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Escolha o Servidor</h3>
+      <p id="m3uModalClientName" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;"></p>
+      <div id="m3uServerButtonsList" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; max-height: 220px; overflow-y: auto;"></div>
+      <button type="button" class="btn-cancel" style="width: 100%; padding: 8px;" onclick="closeM3uModal()">Cancelar</button>
     </div>
   </div>
 
-  <!-- Tela de Autenticação / Login / Cadastro / Recuperação -->
+  <!-- MODAL 2: Painéis Técnicos -->
+  <div id="quickPanelsModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div style="font-size: 2rem; margin-bottom: 4px;">🚀</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Painéis Técnicos</h3>
+      <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;">Selecione o servidor para abrir:</p>
+      <div id="quickPanelsButtonsList" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; max-height: 220px; overflow-y: auto;"></div>
+      <button type="button" class="btn-cancel" style="width: 100%; padding: 8px;" onclick="closeQuickPanelsModal()">Fechar</button>
+    </div>
+  </div>
+
+  <!-- MODAL: Ativar cliente no aplicativo -->
+  <div id="activateModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card" style="max-height: 92vh; overflow-y: auto;">
+      <div style="font-size: 2rem; margin-bottom: 4px;">📲</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Ativar no aplicativo</h3>
+      <p id="activateModalClientName" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px; word-break: break-all;"></p>
+      <div id="activateModalBody" style="text-align: left;"></div>
+      <button type="button" class="btn-cancel" style="width: 100%; padding: 8px; margin-top: 10px;" onclick="closeActivateModal()">Fechar</button>
+    </div>
+  </div>
+
+  <!-- MODAL: Portal do Assinante -->
+  <div id="portalModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div style="font-size: 2rem; margin-bottom: 4px;">🔗</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Portal do Assinante</h3>
+      <p id="portalModalClientName" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px; word-break: break-all;"></p>
+      <div id="portalModalBody"></div>
+      <button type="button" class="btn-cancel" style="width: 100%; padding: 8px; margin-top: 10px;" onclick="closePortalModal()">Fechar</button>
+    </div>
+  </div>
+
+  <!-- MODAL 3: Renovação Rápida em 2 Etapas -->
+  <div id="renewModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div style="font-size: 2rem; margin-bottom: 4px;">🔄</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Renovação de Acesso</h3>
+      <p id="renewModalClientName" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px; word-break: break-all;"></p>
+
+      <div id="renewStepSelectPeriod">
+        <p style="font-size: 0.76rem; font-weight: 600; color: var(--text-main); margin-bottom: 10px;">
+          Selecione o período (o painel do servidor será aberto e o login copiado):
+        </p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px;">
+          <button type="button" class="btn-tool" style="background: #2563eb; padding: 9px;" onclick="startRenewalWithExternalPanel(1)">+1 Mês</button>
+          <button type="button" class="btn-tool" style="background: #0284c7; padding: 9px;" onclick="startRenewalWithExternalPanel(3)">+3 Meses</button>
+          <button type="button" class="btn-tool" style="background: #0d9488; padding: 9px;" onclick="startRenewalWithExternalPanel(6)">+6 Meses</button>
+          <button type="button" class="btn-tool" style="background: #059669; padding: 9px;" onclick="startRenewalWithExternalPanel(12)">+1 Ano</button>
+        </div>
+        <button type="button" class="btn-cancel" style="width: 100%; padding: 8px;" onclick="closeRenewModal()">Cancelar</button>
+      </div>
+
+      <div id="renewStepConfirmExecution" style="display: none; text-align: left;">
+        <div style="background: var(--primary-light); border: 1px solid var(--border-focus); border-radius: 8px; padding: 10px; margin-bottom: 12px;">
+          <strong style="font-size: 0.8rem; color: var(--primary); display: block; margin-bottom: 4px;">
+            🌐 Painel do servidor
+          </strong>
+          <small style="font-size: 0.72rem; color: var(--text-muted); display: block; margin-bottom: 6px;">
+            Servidor: <strong id="renewTargetServerName"></strong>
+          </small>
+          <div id="renewPanelStatus" style="font-size: 0.74rem; margin-bottom: 6px; word-break: break-all;"></div>
+          <button type="button" id="renewReopenPanelBtn" class="btn-tool" style="background: #2563eb; width: 100%; padding: 9px; margin-bottom: 6px; display: none;" onclick="reopenRenewPanel()">🌐 Abrir painel</button>
+          <span id="renewSelectedPeriodSummary" style="font-size: 0.72rem; color: var(--primary); font-weight: 700;"></span>
+        </div>
+        <div style="display:flex; gap:10px; align-items:flex-end; margin-bottom:10px;">
+          <label style="flex:1; font-size:0.72rem; font-weight:700;">Valor recebido (R$)
+            <input type="number" inputmode="decimal" step="0.01" min="0" id="renewAmountInput" style="width:100%; padding:7px; margin-top:3px;">
+          </label>
+          <label style="display:flex; gap:5px; align-items:center; font-size:0.74rem; font-weight:700; padding-bottom:8px;">
+            <input type="checkbox" id="renewPaidCheck" checked> Já pagou
+          </label>
+        </div>
+        <p style="font-size: 0.74rem; color: var(--text-main); margin-bottom: 12px;">
+          Após concluir a renovação no painel externo, clique abaixo para gravar a nova data no sistema e enviar o comprovante:
+        </p>
+        <button type="button" class="btn-auth" style="background: #10b981; margin-bottom: 8px; font-weight: bold;" onclick="finalizeRenewalAndNotify()">
+          ✅ Concluir e Enviar Comprovante
+        </button>
+        <button type="button" class="btn-cancel" style="width: 100%; padding: 8px;" onclick="closeRenewModal()">Voltar / Não Renovar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 4: Abrir Atendimento de Suporte -->
+  <div id="supportReasonModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div style="font-size: 2rem; margin-bottom: 4px;">🤝</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Abrir Atendimento</h3>
+      <p id="supportModalClientName" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;"></p>
+      <p style="font-size: 0.72rem; color: var(--text-muted); margin: -4px 0 12px;">Isso só registra que o suporte começou. Ele fica marcado como aberto até você clicar em "Fechar suporte" depois de resolver.</p>
+
+      <div class="field" style="margin-bottom: 10px; text-align: left;">
+        <label for="supportReasonSelect" style="font-weight: 700;">Qual é o motivo principal?</label>
+        <select id="supportReasonSelect" style="padding: 8px; border-radius: 6px; border: 1px solid var(--border); width: 100%; font-weight: 600;">
+          <option value="Travamentos / Canais">Travamentos / Canais fora</option>
+          <option value="Configuração de DNS">Configuração de DNS</option>
+          <option value="Troca / Instalação de App">Troca / Instalação de Aplicativo</option>
+          <option value="Redefinição de Login/Senha">Redefinição de Login/Senha</option>
+          <option value="Lentidão de Internet">Lentidão na Internet do Cliente</option>
+          <option value="Dúvidas de Uso">Dúvidas Gerais de Uso</option>
+          <option value="Outro">Outro Motivo</option>
+        </select>
+      </div>
+
+      <div class="field" style="margin-bottom: 14px; text-align: left;">
+        <label for="supportCustomReason" style="font-weight: 700;">Observação (opcional):</label>
+        <textarea id="supportCustomReason" rows="3" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);" placeholder="Ex: Cliente relatou canais travando desde ontem à noite."></textarea>
+      </div>
+
+      <details style="margin-bottom: 14px; text-align: left; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;">
+        <summary style="cursor: pointer; font-weight: 700; font-size: 0.82rem;">🧭 Ajuda da IA (opcional)</summary>
+        <p style="font-size: 0.7rem; color: var(--text-muted); margin: 6px 0 8px;">Mostra passos para orientar o cliente. Envia só o aplicativo, o servidor e o problema, nunca o nome do cliente.</p>
+        <div style="display: flex; gap: 6px;">
+          <select id="triageProblem" style="padding: 8px; border-radius: 6px; border: 1px solid var(--border); flex: 1; font-weight: 600;">
+            <option value="">Escolha o problema</option>
+            <option>Canal travando</option>
+            <option>Canal sem som</option>
+            <option>Erro de login</option>
+            <option>Canal fora do ar</option>
+            <option>Lentidão</option>
+            <option>Lista não carrega</option>
+          </select>
+          <button type="button" class="btn-auth" style="background: #7c3aed; padding: 8px 10px;" onclick="runSupportTriage()">Sugerir passos</button>
+        </div>
+        <div id="triageResult" style="display: none; margin-top: 8px;"></div>
+      </details>
+
+      <div style="display: flex; gap: 6px;">
+        <button type="button" class="btn-auth" style="background: #0d9488; flex: 1; padding: 9px;" onclick="confirmSupportOpen()">
+          Abrir atendimento
+        </button>
+        <button type="button" class="btn-cancel" style="flex: 1; padding: 9px;" onclick="closeSupportReasonModal()">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 4B: Fechar Atendimento de Suporte -->
+  <div id="supportCloseModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div style="font-size: 2rem; margin-bottom: 4px;">✅</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Fechar Atendimento</h3>
+      <p id="supportCloseClientName" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 4px;"></p>
+      <p id="supportCloseOpenInfo" style="font-size: 0.72rem; color: var(--text-muted); margin: 0 0 12px;"></p>
+
+      <div class="field" style="margin-bottom: 14px; text-align: left;">
+        <label for="supportCloseNotes" style="font-weight: 700;">Como foi resolvido?</label>
+        <textarea id="supportCloseNotes" rows="3" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);" placeholder="Ex: DNS 1.1.1.1 configurado na TV Samsung. Testado e funcionando normal."></textarea>
+      </div>
+
+      <div style="display: flex; gap: 6px;">
+        <button type="button" class="btn-auth" style="background: #16a34a; flex: 1; padding: 9px;" onclick="confirmSupportClose()">
+          Fechar & Notificar cliente
+        </button>
+        <button type="button" class="btn-cancel" style="flex: 1; padding: 9px;" onclick="closeSupportCloseModal()">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 5: Histórico Detalhado de Atendimentos -->
+  <div id="supportHistoryModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card" style="max-width: 400px;">
+      <div style="font-size: 2rem; margin-bottom: 4px;">🛠️</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Histórico de Suportes</h3>
+      <p id="supportHistoryClientName" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 10px;"></p>
+
+      <div id="supportHistoryCriticalAlert" style="display: none; background: #fee2e2; border: 1.5px solid #ef4444; color: #991b1b; padding: 8px 10px; border-radius: 8px; font-size: 0.72rem; text-align: left; margin-bottom: 10px;"></div>
+
+      <div id="supportHistoryList" style="max-height: 240px; overflow-y: auto; text-align: left; margin-bottom: 12px; padding-right: 2px;"></div>
+      <button type="button" class="btn-cancel" style="width: 100%; padding: 8px;" onclick="closeSupportHistoryModal()">Fechar</button>
+    </div>
+  </div>
+
+  <!-- MODAL 6: Central de Scripts Rápidos de Suporte -->
+  <div id="supportScriptsModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card" style="max-width: 380px;">
+      <div style="font-size: 2rem; margin-bottom: 4px;">📚</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Central de Ajuda & Suporte</h3>
+      <p id="supportScriptsClientName" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;">Selecione o tutorial para enviar no WhatsApp:</p>
+
+      <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; max-height: 260px; overflow-y: auto; text-align: left;">
+        <button type="button" class="btn-tool" style="background: #2563eb; padding: 9px; font-size: 0.76rem; text-align: left;" onclick="sendQuickSupportScript('dns')">
+          🌐 1. Trocar DNS (TV Samsung/LG/Roku)
+        </button>
+        <button type="button" class="btn-tool" style="background: #0284c7; padding: 9px; font-size: 0.76rem; text-align: left;" onclick="sendQuickSupportScript('cache')">
+          🧹 2. Limpar Cache e Reiniciar Aparelho
+        </button>
+        <button type="button" class="btn-tool" style="background: #0d9488; padding: 9px; font-size: 0.76rem; text-align: left;" onclick="sendQuickSupportScript('app')">
+          📱 3. Instalação de App via Downloader
+        </button>
+        <button type="button" class="btn-tool" style="background: #4f46e5; padding: 9px; font-size: 0.76rem; text-align: left;" onclick="sendQuickSupportScript('maintenance')">
+          ⚠️ 4. Aviso de Manutenção Técnica
+        </button>
+      </div>
+
+      <button type="button" class="btn-cancel" style="width: 100%; padding: 8px;" onclick="closeSupportScriptsModal()">Fechar</button>
+    </div>
+  </div>
+
+  <!-- MODAL 8: Master - Alterar Plano de Revendedor -->
+  <div id="planModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div style="font-size: 2rem; margin-bottom: 4px;">🏷️</div>
+      <h3 style="margin: 0 0 4px 0; font-size: 1.05rem;">Alterar Plano do Revendedor</h3>
+      <p id="planModalResellerName" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;"></p>
+      <input type="hidden" id="planModalResellerId">
+      <div class="field" style="margin-bottom: 10px; text-align: left;">
+        <label for="planSelectTier" style="font-weight: 700;">Novo Plano:</label>
+        <select id="planSelectTier" style="padding: 8px; border-radius: 6px; border: 1px solid var(--border); width: 100%; font-weight: 600;">
+          <option value="starter">Iniciante (15 clientes)</option>
+          <option value="pro">Profissional (50 clientes)</option>
+          <option value="advanced">Avançado (150 clientes)</option>
+          <option value="master">Master (500 clientes)</option>
+        </select>
+      </div>
+      <div class="field" style="margin-bottom: 14px; text-align: left;">
+        <label for="planDaysToAdd" style="font-weight: 700;">Adicionar Dias de Acesso:</label>
+        <input type="number" id="planDaysToAdd" min="0" value="30" style="padding: 8px; border-radius: 6px; border: 1px solid var(--border); width: 100%;">
+      </div>
+      <div style="display: flex; gap: 6px;">
+        <button type="button" class="btn-auth" style="background: #059669; flex: 1; padding: 8px;" onclick="submitPlanChange()">Salvar</button>
+        <button type="button" class="btn-cancel" style="flex: 1; padding: 8px;" onclick="closePlanModal()">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bloqueio por Assinatura Expirada -->
+  <div id="subscriptionBlockScreen" class="auth-screen" style="display: none; z-index: 10000;">
+    <div class="auth-card paywall-card">
+      <div style="font-size: 2rem; margin-bottom: 4px;">🔒</div>
+      <h2>Período de Acesso Expirado</h2>
+      <p id="subscriptionBlockMessage">Sua assinatura expirou. Renove sua licença para continuar gerenciando seus clientes.</p>
+
+      <div id="paywallPlansContainer" style="margin: 10px 0; text-align: left;">
+        <span style="font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; display: block; margin-bottom: 6px; text-align: center;">
+          Tabela de Planos para Renovação
+        </span>
+        <div id="paywallPlansList" class="paywall-plans-grid"></div>
+      </div>
+
+      <div class="paywall-pix-box">
+        <span class="paywall-pix-label">Chave Pix para Pagamento da Licença:</span>
+        <strong id="paywallPixDisplay" class="paywall-pix-key">Carregando chave Pix...</strong>
+        <button type="button" class="btn-tool" style="background-color: #0d9488; margin-top: 6px; width: 100%; font-weight: bold; padding: 8px;" onclick="copyMasterPixKey(this)">📋 Copiar Chave Pix</button>
+      </div>
+      <button type="button" id="paywallWhatsAppBtn" class="btn-auth" style="background-color: #25d366; width: 100%; margin-top: 8px; border: none; cursor: pointer;">
+        💬 Enviar Comprovante no WhatsApp
+      </button>
+      <button type="button" class="btn-cancel" style="margin-top: 6px; width: 100%; padding: 8px;" onclick="handleLogout()">Sair da Conta</button>
+    </div>
+  </div>
+
+  <!-- Tela de Login / Cadastro -->
   <div id="loginScreen" class="auth-screen">
     <div class="auth-card">
       <h2>🔐 Acesso ao Sistema</h2>
-      <p id="authSubtitle">Entre com seus dados para continuar:</p>
-
-      <!-- Abas de Alternância -->
+      <p id="authSubtitle">Digite seus dados para continuar:</p>
       <div class="auth-nav-tabs">
         <button type="button" id="tabAuthLogin" class="auth-tab active" onclick="switchAuthMode('login')">Entrar</button>
         <button type="button" id="tabAuthRegister" class="auth-tab" onclick="switchAuthMode('register')">Criar Conta</button>
         <button type="button" id="tabAuthReset" class="auth-tab" onclick="switchAuthMode('reset')">Recuperar</button>
       </div>
-
-      <!-- Formulário 1: Login -->
       <form id="authFormLogin" onsubmit="handleAuthLogin(event)">
         <div class="field">
           <label for="authEmail">E-mail</label>
-          <input type="email" id="authEmail" placeholder="seu-email@dominio.com" autocomplete="email" required>
+          <input type="email" id="authEmail" placeholder="seu-email@dominio.com" required>
         </div>
         <div class="field">
           <label for="authPassword">Senha</label>
           <div class="password-input-wrapper">
-            <input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password" required>
-            <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('authPassword', this)" title="Ver senha" aria-label="Mostrar/Ocultar Senha">👁️</button>
+            <input type="password" id="authPassword" placeholder="••••••••" required>
+            <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('authPassword', this)" title="Ver senha">👁️</button>
           </div>
         </div>
         <button type="submit" id="authSubmitBtn" class="btn-auth">Entrar no Sistema</button>
       </form>
 
-      <!-- Formulário 2: Auto-cadastro Simples com Trial de 7 Dias -->
       <form id="authFormRegister" style="display: none;" onsubmit="handleAuthRegister(event)">
         <div class="field">
-          <label for="regName">Nome / Nome da Operação</label>
+          <label for="regName">Nome / Operação</label>
           <input type="text" id="regName" placeholder="Ex: Rodrigo / Mega Play" required>
         </div>
         <div class="field">
           <label for="regPhone">WhatsApp (com DDD)</label>
-          <input type="tel" id="regPhone" placeholder="(11) 99999-9999" maxlength="15" oninput="applyPhoneMask(this)" required>
+          <input type="tel" id="regPhone" placeholder="(11) 99999-9999" inputmode="tel" autocomplete="off" oninput="applyPhoneMask(this)" required>
         </div>
         <div class="field">
           <label for="regEmail">E-mail de Login</label>
-          <input type="email" id="regEmail" placeholder="seu-email@dominio.com" autocomplete="email" required>
+          <input type="email" id="regEmail" placeholder="seu-email@dominio.com" required>
         </div>
         <div class="field">
           <label for="regPassword">Criar Senha (Mínimo 6 dígitos)</label>
           <div class="password-input-wrapper">
-            <input type="password" id="regPassword" placeholder="••••••••" autocomplete="new-password" required>
-            <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('regPassword', this)" title="Ver senha" aria-label="Mostrar/Ocultar Senha">👁️</button>
+            <input type="password" id="regPassword" placeholder="••••••••" required>
+            <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('regPassword', this)" title="Ver senha">👁️</button>
           </div>
         </div>
         <button type="submit" id="regSubmitBtn" class="btn-auth" style="background-color: #059669;">Criar Conta e Iniciar 7 Dias Grátis</button>
       </form>
 
-      <!-- Formulário 3: Esqueci a Senha -->
       <form id="authFormReset" style="display: none;" onsubmit="handleAuthReset(event)">
         <div class="field">
           <label for="resetEmail">E-mail Cadastrado</label>
-          <input type="email" id="resetEmail" placeholder="seu-email@dominio.com" autocomplete="email" required>
+          <input type="email" id="resetEmail" placeholder="seu-email@dominio.com" required>
         </div>
         <button type="submit" id="resetSubmitBtn" class="btn-auth" style="background-color: #4b5563;">Enviar Link de Recuperação</button>
       </form>
@@ -105,241 +348,761 @@
     </div>
   </div>
 
-  <!-- Conteúdo Principal do Aplicativo -->
+  <!-- Container Principal -->
   <div class="container" id="appContainer" style="display: none;">
-    <header>
+    <header class="app-header">
       <div class="header-bar">
-        <h1>Gestão de Clientes</h1>
+        <div class="brand-wrapper">
+          <h1>Gestão de Clientes</h1>
+          <div id="userBadge" class="user-badge-bar"></div>
+        </div>
         <div class="header-actions">
-          <button id="privacyBtn" type="button" class="btn-circle" onclick="togglePrivacyMode()" title="Ocultar/Mostrar dados" aria-label="Alternar Privacidade">👁️</button>
-          <button type="button" class="btn-circle" onclick="handleLogout()" title="Sair da conta" aria-label="Sair">🚪</button>
+          <button id="themeToggleBtn" type="button" class="btn-circle" onclick="toggleDarkMode()" title="Alternar Modo Escuro">🌙</button>
+          <button id="privacyBtn" type="button" class="btn-circle" onclick="togglePrivacyMode()" title="Ocultar dados sensíveis">👁️</button>
+          <button type="button" class="btn-circle" onclick="handleLogout()" title="Sair da conta">🚪</button>
         </div>
       </div>
 
-      <div id="userBadge" class="user-badge-bar"></div>
+      <div class="global-server-filter-box">
+        <label for="globalServerFilter"><span id="serverStatusIndicator" style="color: #22c55e; font-size: 0.95rem; filter: drop-shadow(0 0 4px rgba(34,197,94,0.5));" title="Conectado">🖥️</span> Servidor:</label>
+        <select id="globalServerFilter" onchange="changeGlobalServerFilter(this.value)">
+          <option value="ALL">Todos os Servidores</option>
+        </select>
+      </div>
+
+      <div id="openSupportStrip" class="credit-strip" style="display:none;"></div>
+    <div id="aiHomeBox" style="display:none;"></div>
+
       <div id="resellerTrialBadge" class="trial-indicator-bar" style="display: none;"></div>
 
-      <!-- Barra de Alerta quando estiver a visualizar a tela de um Revendedor -->
-      <div id="impersonationBanner" class="impersonation-bar" style="display: none;">
-        <span>👀 Visualizando painel de: <strong id="impersonatedEmail"></strong></span>
-        <button type="button" class="btn-back-master" onclick="exitResellerView()">Voltar ao Meu Painel</button>
+      <div id="resellerQuotaBox" class="quota-box" style="display: none;">
+        <div class="quota-header">
+          <span>Uso do Plano:</span>
+          <div>
+            <span id="resellerQuotaNumbers" style="font-weight: 700; color: var(--text-main);">0 / 15</span>
+            <button type="button" id="btnQuotaUpgrade" style="display: none; margin-left: 6px; background: #dc2626; color: #fff; border: none; padding: 2px 6px; border-radius: 4px; font-size: 0.68rem; font-weight: bold; cursor: pointer;" onclick="contactMasterUpgrade()">⚡ Upgrade</button>
+          </div>
+        </div>
+        <div class="quota-bar-bg">
+          <div id="resellerQuotaBarFill" class="quota-bar-fill"></div>
+        </div>
       </div>
 
-      <!-- Menu Principal Superior Exclusivo para o Administrador Master -->
-      <nav id="masterNav" class="master-nav" style="display: none;">
-        <button type="button" id="tabClientsBtn" class="nav-tab active" onclick="switchMasterView('clients')">📋 Meus Clientes</button>
-        <button type="button" id="tabResellersBtn" class="nav-tab" onclick="switchMasterView('resellers')">👥 Painel Revendedores</button>
+      <div id="impersonationBanner" class="impersonation-bar" style="display: none;">
+        <span>👀 Visualizando: <strong id="impersonatedEmail"></strong></span>
+        <button type="button" id="btnToggleImpEdit" class="btn-back-master" onclick="toggleImpersonateEdit()" style="margin-right:6px;">🔒 Somente leitura • Habilitar edição</button>
+        <button type="button" class="btn-back-master" onclick="exitResellerView()">Voltar</button>
+      </div>
+
+      <!-- BARRA DE AÇÕES SUPERIORES: REVENDEDORES + FEEDBACKS + ABRIR MEU PAINEL LADO A LADO -->
+      <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+        <div id="masterTopBar" class="master-top-bar" style="display: none; gap: 6px; margin: 0; flex: 2;">
+          <button type="button" id="btnMasterResellers" class="btn-tool" style="background: #1e3a8a; padding: 8px 6px; font-size: 0.74rem; font-weight: 700; flex: 1; border-radius: 6px;" onclick="toggleMasterResellersPanel()">👥 Revendedores</button>
+          <button type="button" id="btnMasterFeedbacks" class="btn-tool" style="background: #0d9488; padding: 8px 6px; font-size: 0.74rem; font-weight: 700; flex: 1; border-radius: 6px;" onclick="toggleMasterFeedbacksPanel()">💡 Feedbacks (<span id="feedbackCounterBadge">0</span>)</button>
+        </div>
+        <button type="button" id="btnQuickServerPanel" class="btn-server-shortcut" style="flex: 1; padding: 8px 6px; font-size: 0.74rem; font-weight: 700; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; box-shadow: var(--shadow-sm);" onclick="handleQuickServerClick()">
+          🚀 Meu Painel
+        </button>
+      </div>
+
+      <!-- NAVEGAÇÃO PRINCIPAL COM ONCLICK INLINE -->
+      <nav class="app-main-nav">
+        <button type="button" id="tabNavClients" class="main-nav-tab active" onclick="switchAppTab('clients')">📋 Carteira</button>
+        <button type="button" id="tabNavServers" class="main-nav-tab" onclick="switchAppTab('servers')">🌐 Servidores</button>
+        <button type="button" id="tabNavFinance" class="main-nav-tab" onclick="switchAppTab('finance')">📊 Financeiro</button>
+        <button type="button" id="tabNavSettings" class="main-nav-tab" onclick="switchAppTab('settings')">⚙️ Ajustes</button>
       </nav>
-
-      <!-- Botão de Instalação PWA -->
-      <button id="installAppBtn" type="button" class="btn-tool" style="display: none; background-color: #2563eb; width: 100%; margin-bottom: 8px; font-weight: bold; padding: 10px;" onclick="triggerInstallPrompt()">📲 Instalar Aplicativo no Celular</button>
-
-      <div id="syncStatus" class="backup-alert" style="margin-top: 4px; font-weight: bold; color: #2563eb;">🔄 Conectando à nuvem...</div>
     </header>
 
-    <!-- ==================================================== -->
-    <!-- ABA 1: TELA OPERACIONAL DE CLIENTES -->
-    <!-- ==================================================== -->
-    <div id="viewClientsSection">
+    <!-- SEÇÃO MASTER 1: PAINEL DE REVENDEDORES -->
+    <section id="viewResellersSection" class="settings-card" style="display: none; border: 1.5px solid #1e3a8a;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <h3 style="color: #1e3a8a; margin: 0;">👥 Gerenciamento de Revendedores</h3>
+        <button type="button" class="btn-cancel" style="padding: 4px 8px; font-size: 0.7rem;" onclick="toggleMasterResellersPanel()">✕ Fechar</button>
+      </div>
 
-      <!-- BLOCO: AÇÕES DO DIA (APENAS HOJE E VENCIDOS ATÉ 7 DIAS) -->
-      <section id="dailyActionsSection" class="daily-actions-box" style="display: none;">
-        <div class="daily-actions-header">
-          <div class="daily-title">⚡ Ações do Dia (Hoje e até 7d)</div>
-          <span id="dailyTotalBadge" class="daily-badge">0 pendências</span>
+      <div id="masterPlatformSettingsBox" style="background: var(--surface-alt); border: 1.5px solid #1e3a8a; border-radius: 8px; padding: 10px; margin-bottom: 10px;">
+        <strong style="display: block; font-size: 0.8rem; color: #1e3a8a; margin-bottom: 2px;">
+          👑 Configurações da Plataforma (Paywall & Assinaturas)
+        </strong>
+        <small style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 8px;">
+          Os valores e a chave Pix definidos aqui aparecerão imediatamente na tela de bloqueio dos revendedores.
+        </small>
+
+        <div class="field" style="margin-bottom: 8px;">
+          <label for="masterPlatformPixInput" style="font-size: 0.72rem; font-weight: 700;">Chave Pix Oficial da Plataforma:</label>
+          <input type="text" id="masterPlatformPixInput" placeholder="Ex: financeiro@meudominio.com ou CNPJ">
         </div>
-        <p id="dailyActionsSummary" class="daily-desc">Carregando cobranças prioritárias...</p>
-        <div id="dailyActionsList" class="daily-list"></div>
-      </section>
 
-      <!-- Configuração Rápida da Chave Pix -->
-      <section class="pix-config">
-        <label for="pixKeyInput">🔑 Minha Chave Pix (para mensagens):</label>
-        <div class="pix-input-group">
-          <input type="text" id="pixKeyInput" placeholder="Ex: seu-email@pix.com ou telefone">
-          <button type="button" class="btn-pix-save" onclick="savePixKey()">Salvar Pix</button>
-        </div>
-      </section>
+        <span style="display: block; font-size: 0.72rem; font-weight: 700; margin-bottom: 4px;">
+          Preços Mensais dos Planos (R$):
+        </span>
 
-      <!-- MARCADORES GERAIS DO MÊS: ATIVOS E INATIVOS/VENCIDOS -->
-      <section class="status-summary">
-        <div class="status-badge-card active-card">
-          <div class="status-icon">🟢</div>
-          <div class="status-info">
-            <span class="status-title">Ativos</span>
-            <strong id="countActiveTotal">0</strong>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px;">
+          <div class="field" style="margin-bottom: 0;">
+            <label for="pricePlanStarter" style="font-size: 0.68rem;">Iniciante (15):</label>
+            <input type="number" id="pricePlanStarter" step="0.50" min="0" placeholder="20.00">
+          </div>
+          <div class="field" style="margin-bottom: 0;">
+            <label for="pricePlanPro" style="font-size: 0.68rem;">Profissional (50):</label>
+            <input type="number" id="pricePlanPro" step="0.50" min="0" placeholder="35.00">
+          </div>
+          <div class="field" style="margin-bottom: 0;">
+            <label for="pricePlanAdvanced" style="font-size: 0.68rem;">Avançado (150):</label>
+            <input type="number" id="pricePlanAdvanced" step="0.50" min="0" placeholder="70.00">
+          </div>
+          <div class="field" style="margin-bottom: 0;">
+            <label for="pricePlanMaster" style="font-size: 0.68rem;">Master (500):</label>
+            <input type="number" id="pricePlanMaster" step="0.50" min="0" placeholder="120.00">
           </div>
         </div>
-        <div class="status-badge-card inactive-card">
-          <div class="status-icon">🔴</div>
-          <div class="status-info">
-            <span class="status-title">Inativos / Vencidos</span>
-            <strong id="countInactiveTotal">0</strong>
+
+        <button type="button" class="btn-pix-save" style="background: #1e3a8a; width: 100%; padding: 8px; font-weight: bold;" onclick="saveMasterPlatformSettings()">
+          💾 Salvar Configurações da Plataforma
+        </button>
+      </div>
+
+      <form id="newResellerManualForm" onsubmit="handleCreateResellerManual(event)" style="background: var(--surface-alt); padding: 10px; border-radius: 8px; border: 1px dashed var(--border); margin-bottom: 10px;">
+        <strong style="display: block; font-size: 0.76rem; margin-bottom: 6px; color: var(--text-main);">➕ Cadastrar Novo Revendedor Manualmente:</strong>
+        <div class="field-group">
+          <input type="text" id="manualResellerName" placeholder="Nome" required style="padding: 6px 8px; font-size: 0.76rem;">
+          <input type="email" id="manualResellerEmail" placeholder="E-mail" required style="padding: 6px 8px; font-size: 0.76rem;">
+        </div>
+        <div class="field-group" style="margin-top: 6px;">
+          <input type="tel" id="manualResellerPhone" placeholder="WhatsApp (DDD)" required style="padding: 6px 8px; font-size: 0.76rem;">
+          <select id="manualResellerTier" style="padding: 6px 8px; font-size: 0.76rem; font-weight: 600;">
+            <option value="starter">Iniciante (15)</option>
+            <option value="pro">Profissional (50)</option>
+            <option value="advanced">Avançado (150)</option>
+            <option value="master">Master (500)</option>
+          </select>
+        </div>
+        <button type="submit" class="btn-auth" style="background: #059669; padding: 8px; font-size: 0.76rem; margin-top: 8px; font-weight: bold;">Criar Revendedor</button>
+      </form>
+
+      <div id="resellerCardsContainer" style="display: flex; flex-direction: column; gap: 6px; max-height: 380px; overflow-y: auto;">
+        <p style="text-align: center; color: var(--text-muted); font-size: 0.76rem; padding: 10px 0;">Carregando revendedores...</p>
+      </div>
+    </section>
+
+    <!-- SEÇÃO MASTER 2: PAINEL DE FEEDBACKS -->
+    <section id="viewFeedbacksSection" class="settings-card" style="display: none; border: 1.5px solid #0d9488;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <h3 style="color: #0f766e; margin: 0;">💡 Feedbacks e Sugestões</h3>
+        <button type="button" class="btn-cancel" style="padding: 4px 8px; font-size: 0.7rem;" onclick="toggleMasterFeedbacksPanel()">✕ Fechar</button>
+      </div>
+      <div id="feedbackListContainer" style="display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto;">
+        <p style="text-align: center; color: var(--text-muted); font-size: 0.76rem; padding: 10px 0;">Carregando mensagens...</p>
+      </div>
+    </section>
+
+    <!-- ABA 1: CARTEIRA -->
+    <div id="tabContentClients" class="tab-page-content">
+      <!-- AÇÕES DO DIA (ATÉ 7 DIAS DE ATRASO) -->
+      <section id="dailyActionsSection" class="daily-actions-box" style="display: none; margin-bottom: 10px;">
+        <div class="daily-actions-header" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleDailyActionsVisibility()">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <div class="daily-title">⚡ Ações do Dia</div>
+            <span id="dailyTotalBadge" class="daily-badge">0 pendências</span>
           </div>
+          <button type="button" id="btnToggleDailyCollapse" style="background: transparent; border: none; font-size: 0.75rem; font-weight: 700; color: #ea580c; cursor: pointer;">
+            ▼ Ocultar
+          </button>
+        </div>
+
+        <div id="dailyActionsCollapsibleContent">
+          <p id="dailyActionsSummary" class="daily-desc">Carregando pendências...</p>
+          <button type="button" id="btnStartDailyQueue" class="btn-auth" style="background:#2563eb; width: 100%; margin-bottom: 8px; font-weight: bold; padding: 8px; font-size: 0.78rem;" onclick="startDailyQueueBilling()">
+            ⚡ Iniciar Fila de Cobrança
+          </button>
+          <div id="dailyActionsList" class="daily-list"></div>
         </div>
       </section>
 
-      <!-- Resumo Financeiro / Operacional -->
-      <section class="dashboard">
-        <div class="dash-card">
-          <span class="dash-label">Previsão Total</span>
-          <strong id="dashTotal">R$ 0,00</strong>
-        </div>
-        <div class="dash-card ok">
-          <span class="dash-label">Em Dia</span>
-          <strong id="dashOk">R$ 0,00</strong>
-        </div>
-        <div class="dash-card expired">
-          <span class="dash-label">Vencidos</span>
-          <strong id="dashExpired">R$ 0,00</strong>
-        </div>
-      </section>
+      <button type="button" id="btnToggleClientForm" class="btn-toggle-client-form" onclick="toggleClientForm()">
+        ➕ Cadastrar Novo Cliente
+      </button>
 
-      <!-- Formulário de Cadastro e Edição de Clientes -->
-      <form id="clientForm">
+      <form id="clientForm" style="display: none;">
         <h2 id="formTitle">Novo Cliente</h2>
         <input type="hidden" id="clientId">
+        <input type="hidden" id="serverPlan">
+
+        <div class="smart-paste-box">
+          <button type="button" id="smartPasteBoxTrigger" class="btn-toggle-paste" onclick="toggleSmartPasteBox()">
+            ⚡ Colar Dados ou Escrever (Preenchimento Rápido)
+          </button>
+          <div id="smartPasteContent" class="smart-paste-content" style="display: none;">
+            <textarea id="smartPasteInput" rows="3" style="width: 100%; box-sizing: border-box;" placeholder="Cole o texto do servidor ou escreva assim: João Silva, usuário joao1, senha 123, vence dia 15, R$ 35, (11) 91234-5678, servidor Alpha, app Quick Player"></textarea>
+            <button type="button" class="btn-tool" style="background-color: #2563eb; width: 100%; margin-top: 6px; font-weight: bold; padding: 8px; font-size: 0.78rem;" onclick="applySmartPaste()">
+              🪄 Preencher Campos
+            </button>
+          </div>
+        </div>
+
+        <div class="field" style="background: var(--primary-light); padding: 10px; border-radius: 8px; border: 1px solid var(--border-focus); margin-bottom: 10px;">
+          <label for="clientAssignedServer" style="color: var(--primary); font-weight: 700; font-size: 0.76rem;">
+            📍 Servidor deste Cliente: *
+          </label>
+          <select id="clientAssignedServer" required style="font-weight: 600;">
+            <option value="" disabled selected>⚠️ Selecione o Servidor...</option>
+          </select>
+        </div>
+
+        <div style="background: var(--success-light); border: 1.5px dashed var(--success); border-radius: 8px; padding: 8px; margin-bottom: 10px; text-align: center;">
+          <label style="display: block; font-size: 0.76rem; font-weight: 700; color: var(--success); margin-bottom: 4px;">
+            📸 Capturar MAC por Foto da TV
+          </label>
+          <input type="file" id="ocrTvFileInput" accept="image/*" style="display: none;" onchange="handleTvPhotoOcr(event)">
+          <button type="button" class="btn-tool" style="background: #10b981; width: 100%; font-weight: bold; padding: 8px; font-size: 0.76rem;" onclick="document.getElementById('ocrTvFileInput').click()">
+            📷 Escolher Foto ou Tirar Agora
+          </button>
+          <div id="ocrStatusMsg" style="display: none; font-size: 0.72rem; font-weight: 600; color: var(--success); margin-top: 4px;">
+            🔍 Lendo dados da foto...
+          </div>
+        </div>
 
         <div class="field">
-          <label for="name">Nome Completo</label>
+          <label for="name">Nome Completo *</label>
           <input type="text" id="name" placeholder="Ex: João da Silva" required>
         </div>
 
         <div class="field-group">
           <div class="field">
-            <label for="username">Usuário / Login</label>
+            <label for="username">Usuário / Login *</label>
             <input type="text" id="username" placeholder="Ex: joao.silva" required>
           </div>
           <div class="field">
-            <label for="price">Valor (R$)</label>
-            <input type="number" id="price" step="0.01" min="0" placeholder="Ex: 35.00" required>
+            <label for="serverPassword">Senha *</label>
+            <input type="text" id="serverPassword" placeholder="Ex: 123456" required>
           </div>
         </div>
 
         <div class="field-group">
           <div class="field">
-            <label for="phone">WhatsApp (com DDD)</label>
-            <input type="tel" id="phone" placeholder="(11) 99999-9999" maxlength="15" oninput="applyPhoneMask(this)" required>
+            <label for="clientMacAddress">MAC (Opcional):</label>
+            <input type="text" id="clientMacAddress" placeholder="Ex: 8C:79:F5:49:60:D0">
           </div>
           <div class="field">
-            <label for="dueDate">Vencimento</label>
-            <input type="date" id="dueDate" required>
+            <label for="clientMacApp">Aplicativo MAC:</label>
+            <input type="text" id="clientMacApp" placeholder="Ex: Quick Player / IBO">
+          </div>
+        </div>
+
+        <div class="field-group">
+          <div class="field">
+            <label for="price">Mensalidade (R$) *</label>
+            <input type="number" id="price" step="0.01" min="0" placeholder="Ex: 35.00" required>
+          </div>
+          <div class="field">
+            <label for="phone">WhatsApp (com DDD) *</label>
+            <input type="tel" id="phone" placeholder="(11) 99999-9999" inputmode="tel" autocomplete="off" oninput="applyPhoneMask(this)" required>
           </div>
         </div>
 
         <div class="field">
-          <label for="notes">Observações</label>
-          <input type="text" id="notes" placeholder="Ex: Prefere pagar via Pix / Contato à noite">
+          <label for="dueDate">Vencimento *</label>
+          <input type="date" id="dueDate" required>
+        </div>
+
+        <div class="field-checkbox" id="trialField">
+          <input type="checkbox" id="isTrial">
+          <label for="isTrial">🧪 Cliente em teste (ainda não renovou)</label>
+        </div>
+        <div class="field" id="trialHoursField" style="display:none;">
+          <label for="trialHours">Duração do teste</label>
+          <select id="trialHours"><option value="1">1 hora</option><option value="2">2 horas</option><option value="4">4 horas</option><option value="24">24 horas</option></select>
+          <small style="color:var(--text-muted); font-size:0.7rem;">Fica na aba 🧪 Testes. Não conta indicação, financeiro nem plano até a 1ª renovação. Preencha o valor normalmente: ele vale na renovação.</small>
+        </div>
+
+        <div class="field">
+          <label for="referredBy">👤 Indicado por:</label>
+          <input type="text" id="referredBy" list="clientsDatalist" placeholder="Nome ou usuário do amigo..." autocomplete="off">
+          <datalist id="clientsDatalist"></datalist>
+        </div>
+
+        <div class="field-checkbox" id="firstDiscountField" style="display:none;">
+          <input type="checkbox" id="firstDiscountCheck" checked>
+          <label for="firstDiscountCheck" id="firstDiscountLabel">🎁 Dar desconto de boas-vindas na 1ª mensalidade</label>
+        </div>
+
+        <div class="field">
+          <label for="notes">Observações Gerais (Device Key / Notas):</label>
+          <input type="text" id="notes" placeholder="Ex: Chave: 203335">
         </div>
 
         <div class="field-checkbox">
           <input type="checkbox" id="hasPending">
-          <label for="hasPending">⚠️ Consta Pendência Financeira (bloqueia renovação)</label>
+          <label for="hasPending">⚠️ Pendência Financeira (bloqueia renovação)</label>
         </div>
+
+        <div class="field-checkbox">
+          <input type="checkbox" id="referralOptOut">
+          <label for="referralOptOut">🚫 Fora do programa Indique e Ganhe</label>
+        </div>
+
+        <label class="lock-switch" for="isBlocked" title="Bloqueia o acesso do cliente (portal indisponível)">
+          <input type="checkbox" id="isBlocked">
+          <span class="lock-slider"></span>
+          <span class="lock-text">🔒 Cliente bloqueado</span>
+        </label>
 
         <div class="form-buttons">
           <button type="submit" id="saveBtn">Salvar Cliente</button>
-          <button type="button" id="cancelEditBtn" class="btn-cancel" style="display: none;" onclick="cancelEdit()">Cancelar Edição</button>
+          <button type="button" id="cancelEditBtn" class="btn-cancel" onclick="cancelEdit()">Cancelar</button>
         </div>
       </form>
 
-      <!-- Ferramentas de Backup e Excel -->
-      <div class="backup-tools">
-        <button type="button" class="btn-tool" onclick="exportToExcel()">📊 Exportar Excel</button>
-        <button type="button" class="btn-tool" onclick="exportBackup()">💾 Fazer Backup</button>
-        <label class="btn-tool btn-upload">
-          📥 Restaurar
-          <input type="file" id="importFile" accept=".json" class="hidden-input" onchange="importBackup(event)">
-        </label>
-      </div>
-
-      <!-- Busca e Opções de Ordenação -->
       <div class="search-box">
-        <input type="text" id="search" placeholder="Buscar por nome, usuário ou observação...">
+        <input type="text" id="search" placeholder="Buscar por nome, usuário, MAC ou observações...">
         <div class="sort-box">
-          <label for="sortOrder">Ordenar por:</label>
+          <label for="sortOrder">Ordenar:</label>
           <select id="sortOrder" onchange="changeSortOrder(this.value)">
-            <option value="dueAsc">📅 Vencimento (Mais urgentes primeiro)</option>
-            <option value="dueDesc">📅 Vencimento (Mais distantes primeiro)</option>
+            <option value="dueAsc">📅 Vencimento (Urgentes primeiro)</option>
+            <option value="dueDesc">📅 Vencimento (Mais distantes)</option>
             <option value="nameAsc">🔤 Nome (A-Z)</option>
             <option value="priceDesc">💰 Maior Valor</option>
           </select>
         </div>
       </div>
 
-      <!-- Abas de Filtro da Lista -->
       <div class="filter-tabs">
         <button class="tab active" onclick="setFilter('all', this)">Todos (<span id="countAll">0</span>)</button>
         <button class="tab" onclick="setFilter('ok', this)">Em dia (<span id="countOk">0</span>)</button>
         <button class="tab" onclick="setFilter('warning', this)">A vencer (<span id="countWarning">0</span>)</button>
+        <button class="tab" onclick="setFilter('next7', this)">Próx. 7 dias (<span id="countNext7">0</span>)</button>
         <button class="tab" onclick="setFilter('expired', this)">Vencidos (<span id="countExpired">0</span>)</button>
+        <button class="tab" onclick="setFilter('trial', this)">🧪 Testes (<span id="countTrial">0</span>)</button>
+        <button class="tab" onclick="setFilter('archived', this)">Arquivados (<span id="countArchived">0</span>)</button>
       </div>
 
-      <!-- Lista de Clientes Cadastrados -->
       <section>
+        <div id="trialSummary" style="display:none; margin-bottom:10px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--surface);"></div>
         <div id="clientList" class="cards-list"></div>
-
-        <!-- PAGINAÇÃO (BLOCOS DE 20 CLIENTES) -->
         <div id="paginationControls" class="pagination-bar" style="display: none;">
           <button type="button" id="prevPageBtn" class="btn-page" onclick="prevPage()">← Anterior</button>
-          <span id="pageInfo" class="page-info">Página 1 de 1</span>
+          <span id="pageInfo" class="page-info">Página 1</span>
           <button type="button" id="nextPageBtn" class="btn-page" onclick="nextPage()">Próxima →</button>
         </div>
       </section>
     </div>
 
-    <!-- ==================================================== -->
-    <!-- ABA 2: PAINEL EXCLUSIVO DE GESTÃO DE REVENDEDORES -->
-    <!-- ==================================================== -->
-    <div id="viewResellersSection" style="display: none;">
-
-      <!-- Criar Novo Revendedor Manualmente -->
-      <section class="reseller-box">
-        <h2>➕ Cadastrar Novo Revendedor Manualmente</h2>
-        <p class="reseller-help">Você pode criar uma conta manual já com 30 dias de acesso:</p>
-        <div class="field">
-          <label for="newResellerName">Nome / Operação:</label>
-          <input type="text" id="newResellerName" placeholder="Ex: Rodrigo / Mega Play">
+    <!-- ABA: SERVIDORES & DNS -->
+    <div id="tabContentServers" class="tab-page-content" style="display: none;">
+      <section class="settings-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <h3 style="margin: 0;">🌐 Servidores & DNS</h3>
+          <button type="button" class="btn-tool" style="padding: 4px 10px; font-weight: bold; background: #059669; font-size: 0.72rem;" onclick="newServerForm()">➕ Novo servidor</button>
         </div>
-        <div class="field-group">
-          <div class="field">
-            <label for="newResellerPhone">WhatsApp:</label>
-            <input type="tel" id="newResellerPhone" placeholder="(11) 99999-9999" maxlength="15" oninput="applyPhoneMask(this)">
-          </div>
-          <div class="field">
-            <label for="newResellerEmail">E-mail de Login:</label>
-            <input type="email" id="newResellerEmail" placeholder="revendedor@exemplo.com">
-          </div>
-        </div>
-        <div class="field">
-          <label for="newResellerPass">Senha (Mínimo 6 dígitos):</label>
-          <div class="password-input-wrapper">
-            <input type="password" id="newResellerPass" placeholder="••••••••">
-            <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('newResellerPass', this)" title="Ver senha" aria-label="Mostrar/Ocultar Senha">👁️</button>
-          </div>
-        </div>
-        <button type="button" class="btn-tool" style="background-color: #059669; font-size: 0.9rem; padding: 11px;" onclick="createNewResellerAccount()">Criar Acesso (30 Dias)</button>
+        <p class="settings-card-desc">Cadastre o DNS numérico (IP) e/ou o DNS por URL de cada servidor. Os clientes vinculados passam a usar o DNS atual automaticamente.</p>
+        <div style="margin:-2px 0 10px;"><button type="button" class="btn-tool" style="padding:4px 10px; font-size:0.7rem; background:var(--surface); color:var(--text-main); border:1px solid var(--border);" onclick="disableAllCreditStock()">🧹 Parar de controlar estoque</button>
+          <small style="display:block; color:var(--text-muted); font-size:0.68rem; margin-top:4px;">Para de pedir que você alimente o estoque de créditos. O app continua mostrando quantos clientes vencem em breve em cada servidor — só não cobra mais você por isso.</small></div>
+        <div id="serversTabList" style="display: flex; flex-direction: column; gap: 8px;"></div>
       </section>
 
-      <!-- Lista de Revendedores Cadastrados -->
-      <section class="reseller-list-box">
-        <h2>👥 Revendedores na Plataforma (<span id="resellerCount">0</span>)</h2>
-        <div id="resellerCardsContainer" class="cards-list">
-          <p style="text-align: center; color: #9ca3af; font-size: 0.85rem; padding: 16px;">Carregando revendedores...</p>
+      <section class="settings-card" id="serverFormCard" style="display: none;">
+        <h3 id="serverFormTitle">Novo servidor</h3>
+        <input type="hidden" id="srvFormId">
+        <div class="field" style="background: var(--surface-alt); border: 1px dashed var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px;">
+          <label for="srvPasteArea" style="font-weight:700;">📋 Colar dados do servidor</label>
+          <textarea id="srvPasteArea" rows="3" placeholder="Cole aqui o texto com DNS, IPs e URLs. Os campos são preenchidos automaticamente, criando uma linha para cada DNS."></textarea>
+          <div style="display:flex; gap:6px; margin-top:6px; align-items:center;">
+            <button type="button" class="btn-tool" style="padding:6px 12px; font-size:0.74rem; background:#7c3aed; font-weight:700;" onclick="applyServerPaste()">✨ Preencher automaticamente</button>
+            <span id="srvPasteResult" style="font-size:0.72rem; color:var(--text-muted);"></span>
+          </div>
+        </div>
+        <div class="field"><label for="srvFormName">Nome do servidor *</label><input type="text" id="srvFormName" placeholder="Ex: Google"></div>
+        <div class="field"><label for="srvFormCost">💳 Valor do crédito (R$)</label><input type="number" id="srvFormCost" step="0.01" min="0" inputmode="decimal" placeholder="Ex: 10.00"><small style="color:var(--text-muted); font-size:0.7rem; margin-top:2px;">Quanto você paga por 1 crédito (1 mês de um cliente). Usado para calcular custo e lucro na aba Financeiro. Vazio = usa o custo padrão.</small></div>
+        <div class="field"><label for="srvFormStock">📦 Créditos em estoque</label><input type="number" id="srvFormStock" step="1" min="0" inputmode="numeric" placeholder="Ex: 20"><small style="color:var(--text-muted); font-size:0.7rem; margin-top:2px;">Quantos créditos você já comprou neste servidor. Cada renovação desconta do estoque (1 por mês) e o app avisa quando faltar. Vazio = não controlar.</small></div>
+        <div class="field">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <label style="margin:0;">DNS numérico (IP)</label>
+            <button type="button" class="btn-tool" style="padding:2px 10px; font-size:0.7rem; background:#059669;" onclick="addServerDnsRow('ip')">➕ Adicionar IP</button>
+          </div>
+          <div id="srvFormIpList" style="display:flex; flex-direction:column; gap:4px;"></div>
+        </div>
+        <div class="field">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <label style="margin:0;">DNS por URL</label>
+            <button type="button" class="btn-tool" style="padding:2px 10px; font-size:0.7rem; background:#059669;" onclick="addServerDnsRow('url')">➕ Adicionar URL</button>
+          </div>
+          <div id="srvFormUrlList" style="display:flex; flex-direction:column; gap:4px;"></div>
+        </div>
+        <div class="field"><label for="srvFormPanel">URL do painel (opcional)</label><input type="text" id="srvFormPanel" inputmode="url" autocomplete="off" placeholder="Ex: http://painel.link.tv"></div>
+        <div class="field"><label for="srvFormNotes">Observações internas</label><textarea id="srvFormNotes" rows="2" placeholder="Só você vê"></textarea></div>
+        <div class="field-checkbox"><input type="checkbox" id="srvFormActive" checked><label for="srvFormActive">Servidor ativo</label></div>
+        <div class="form-buttons">
+          <button type="button" class="btn-pix-save" style="background:#2563eb;" onclick="saveServerForm()">💾 Salvar servidor</button>
+          <button type="button" class="btn-cancel" onclick="closeServerForm()">Cancelar</button>
         </div>
       </section>
     </div>
 
+    <!-- ABA 3: FINANCEIRO -->
+    <div id="tabContentFinance" class="tab-page-content" style="display: none;">
+      <div class="field" style="margin-bottom: 8px;">
+        <label for="financeMonthTop">📅 Período dos indicadores:</label>
+        <div style="display: flex; gap: 6px;">
+          <select id="financeMonthTop" onchange="changeFinanceMonth(this.value)" style="flex: 1;"></select>
+          <button type="button" class="btn-tool" style="background: #2563eb; padding: 0 14px; font-size: 0.9rem;" onclick="openFinanceHelp()" title="O que significa cada indicador" aria-label="O que significa cada indicador">ℹ️</button>
+        </div>
+      </div>
+      <!-- PAINEL DE INDICADORES ESTILO DARK NEON -->
+      <div class="finance-compact-grid">
+        <!-- 1. Faturamento Previsto (MRR) - Verde Neon -->
+        <div class="f-card f-card-green" onclick="openIndicatorHelp('mrr')" style="cursor: pointer;" title="Toque para ver o que significa">
+          <button type="button" class="f-info" aria-label="O que significa" onclick="event.stopPropagation(); openIndicatorHelp('mrr')">ⓘ</button>
+          <div class="f-card-body">
+            <span class="f-title">Faturamento (MRR)</span>
+            <strong id="mrrDisplay" class="f-value">R$ 0,00</strong>
+            <span class="f-subtitle" id="mrrScopeSubtitle">Mensalidade prevista</span>
+          </div>
+          <div class="f-card-icon">💰</div>
+        </div>
+
+        <!-- 5. Recebido no período - Roxo Neon -->
+        <div class="f-card f-card-emerald" onclick="openIndicatorHelp('received')" style="cursor: pointer;" title="Toque para ver o que significa">
+          <button type="button" class="f-info" aria-label="O que significa" onclick="event.stopPropagation(); openIndicatorHelp('received')">ⓘ</button>
+          <div class="f-card-body">
+            <span class="f-title">Recebido no mês</span>
+            <strong id="receivedMonthDisplay" class="f-value">R$ 0,00</strong>
+            <span class="f-subtitle" id="receivedMonthSubtitle">Renovações do período</span>
+          </div>
+          <div class="f-card-icon">💎</div>
+        </div>
+
+        <!-- 2. Lucro Líquido Real - Azul Neon -->
+        <div class="f-card f-card-blue" onclick="openIndicatorHelp('profit')" style="cursor: pointer;" title="Toque para ver o que significa">
+          <button type="button" class="f-info" aria-label="O que significa" onclick="event.stopPropagation(); openIndicatorHelp('profit')">ⓘ</button>
+          <div class="f-card-body">
+            <span class="f-title">Lucro do mês</span>
+            <strong id="netProfitDisplay" class="f-value">R$ 0,00</strong>
+            <span class="f-subtitle" id="netMarginSubtitle">Margem: 0%</span>
+          </div>
+          <div class="f-card-icon">💵</div>
+        </div>
+
+        <!-- 3. Próximos 7 Dias - Dourado / Laranja Neon -->
+        <div class="f-card f-card-amber" onclick="navigateToFilteredClients('next7')" title="Ver clientes que vencem em até 7 dias" style="cursor: pointer;">
+          <button type="button" class="f-info" aria-label="O que significa" onclick="event.stopPropagation(); openIndicatorHelp('next7')">ⓘ</button>
+          <div class="f-card-body">
+            <span class="f-title">Próx. 7 Dias ↗</span>
+            <strong id="next7DaysDisplay" class="f-value">R$ 0,00</strong>
+            <span class="f-subtitle">Previsão na semana</span>
+          </div>
+          <div class="f-card-icon">⏱️</div>
+        </div>
+
+        <!-- 4. Em Atraso - Vermelho Neon -->
+        <div class="f-card f-card-red" onclick="navigateToFilteredClients('expired')" title="Ver clientes em atraso" style="cursor: pointer;">
+          <button type="button" class="f-info" aria-label="O que significa" onclick="event.stopPropagation(); openIndicatorHelp('late')">ⓘ</button>
+          <div class="f-card-body">
+            <span class="f-title">Em Atraso ↗</span>
+            <strong id="lateTotalDisplay" class="f-value">R$ 0,00</strong>
+            <span class="f-subtitle">Cobranças pendentes</span>
+          </div>
+          <div class="f-card-icon">⚠️</div>
+        </div>
+
+        <!-- 6. Inadimplência - Ciano Neon -->
+        <div class="f-card f-card-cyan" onclick="openIndicatorHelp('default')" style="cursor: pointer;" title="Toque para ver o que significa">
+          <button type="button" class="f-info" aria-label="O que significa" onclick="event.stopPropagation(); openIndicatorHelp('default')">ⓘ</button>
+          <div class="f-card-body">
+            <span class="f-title">Inadimplência</span>
+            <strong id="lossRateDisplay" class="f-value">0%</strong>
+            <span class="f-subtitle">Clientes em atraso</span>
+          </div>
+          <div class="f-card-icon">📉</div>
+        </div>
+      </div>
+
+      <section class="settings-card" style="margin-top: 10px;">
+        <h3>📅 Calendário de recebimentos</h3>
+        <p class="settings-card-desc">Quanto entra em cada dia, pelo vencimento dos clientes. Toque num dia para ver quem é.</p>
+        <div id="receiptCalendar"></div>
+      </section>
+
+      <section class="settings-card" style="margin-top: 10px;">
+        <h3>📈 Faturamento dos Últimos 6 Meses</h3>
+        <p class="settings-card-desc">Histórico real recebido por mês:</p>
+        <div id="mrrChartContainer" style="display: flex; align-items: flex-end; justify-content: space-between; height: 130px; padding: 10px 4px 0; border-bottom: 2px solid var(--border); gap: 8px;"></div>
+      </section>
+
+      <section class="settings-card">
+        <h3>🖥️ Financeiro por Servidor</h3>
+        <p class="settings-card-desc">Compare o desempenho de cada servidor (ignora o filtro global de servidor):</p>
+        <div class="field" style="margin-bottom: 8px;">
+          <label for="financeMonthSelect">Período:</label>
+          <select id="financeMonthSelect" onchange="changeFinanceMonth(this.value)"></select>
+        </div>
+        <div id="serverFinanceBars" style="margin-bottom: 10px;"></div>
+        <div style="overflow-x: auto;">
+          <table id="serverFinanceTable" style="width: 100%; border-collapse: collapse; font-size: 0.72rem;"></table>
+        </div>
+      </section>
+
+      <section class="settings-card">
+        <h3>📅 Faturamento por Mês x Servidor</h3>
+        <p class="settings-card-desc">Últimos 6 meses, valor recebido por servidor:</p>
+        <div style="overflow-x: auto;">
+          <table id="serverMonthlyTable" style="width: 100%; border-collapse: collapse; font-size: 0.72rem;"></table>
+        </div>
+      </section>
+
+      <section class="settings-card">
+        <h3>⚙️ Custo padrão por crédito</h3>
+        <p class="settings-card-desc">Usado nos servidores que não têm o valor do crédito cadastrado. O custo de cada servidor é definido na aba 🌐 Servidores.</p>
+        <div style="display: flex; gap: 6px;">
+          <input type="number" id="costPerCreditInput" step="0.01" min="0" placeholder="Ex: 10.00" style="padding: 8px; border-radius: 6px; border: 1px solid var(--border); flex: 1; font-size: 0.8rem;">
+          <button type="button" class="btn-tool" style="background: #2563eb; padding: 0 14px; font-weight: bold; font-size: 0.78rem;" onclick="saveCostPerCredit()">💾 Salvar</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ABA 4: AJUSTES -->
+    <div id="tabContentSettings" class="tab-page-content" style="display: none;">
+      <section class="settings-card">
+        <h3>📦 Plano de Licença</h3>
+        <div style="background: var(--surface-alt); padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 0.76rem; color: var(--text-muted);">Plano Vigente:</span>
+            <strong id="settingsCurrentPlanName" style="color: var(--primary); font-size: 0.86rem;">Carregando...</strong>
+          </div>
+        </div>
+        <button type="button" class="btn-tool" style="background: #dc2626; width: 100%; font-weight: bold; padding: 8px; font-size: 0.78rem;" onclick="contactMasterUpgrade()">⚡ Solicitar Upgrade</button>
+      </section>
+
+      <section class="settings-card">
+        <h3>✨ Novidades</h3>
+        <p class="settings-card-desc">Reveja o tour com o que mudou na última atualização.</p>
+        <button type="button" class="btn-tool" style="background: #7c3aed; width: 100%; font-weight: bold; padding: 8px; font-size: 0.78rem;" onclick="openWhatsNew()">✨ Ver novidades</button>
+      </section>
+
+      <details class="settings-card">
+        <summary style="cursor:pointer; font-weight:800; font-size:0.92rem;">🎁 Campanha Indique e Ganhe</summary>
+        <p class="settings-card-desc">Cada indicação ativa gera o desconto abaixo na próxima renovação do cliente. Ao completar a meta de amigos, ele ganha 1 mês grátis.</p>
+
+        <div class="camp-list">
+          <div class="camp-row">
+            <div class="camp-txt"><label for="referralGoalInput">Meta de amigos</label><small>Quantos indicados ativos dão 1 mês grátis.</small></div>
+            <input type="number" id="referralGoalInput" min="1" step="1" inputmode="numeric" placeholder="3">
+          </div>
+          <div class="camp-row">
+            <div class="camp-txt"><label for="referralDiscountInput">Desconto por indicação (R$)</label><small>Alternativa ao mês grátis: cada indicado vira esse valor de desconto na renovação.</small></div>
+            <input type="number" id="referralDiscountInput" min="0" step="0.50" inputmode="decimal" placeholder="5,00">
+          </div>
+          <div class="camp-row">
+            <div class="camp-txt"><label for="referralFirstDiscountInput">Desconto de boas-vindas (R$)</label><small>Para quem chega por indicação, na 1ª mensalidade. Zero = desligado.</small></div>
+            <input type="number" id="referralFirstDiscountInput" min="0" step="0.50" inputmode="decimal" placeholder="0">
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="referralMessageTemplate">Mensagem do WhatsApp:</label>
+          <textarea id="referralMessageTemplate" rows="5" placeholder="Texto da indicação..."></textarea>
+          <small style="color:var(--text-muted); font-size:0.7rem;">Use {nome}, {meta} e {link} para preencher sozinho.</small>
+        </div>
+
+        <p class="settings-card-desc" style="margin:2px 0 10px;">Cliente que não quer participar? Na ficha dele toque em <strong>🚫 Sair</strong> (no bloco de indicações) ou marque "Fora do programa" ao editar. Ele deixa de ver as indicações no portal e pode voltar quando quiser.</p>
+
+        <button type="button" class="btn-pix-save" style="background: #059669; width: 100%; font-weight: bold; padding: 8px; font-size: 0.78rem; margin-top: 4px;" onclick="saveReferralCampaign()">
+          💾 Salvar Configurações
+        </button>
+      </details>
+
+      <details class="settings-card">
+        <summary style="cursor:pointer; font-weight:800; font-size:0.92rem;">🔥 Campanha de Reativação (Win-Back)</summary>
+        <p class="settings-card-desc">Configure o desconto para reativar clientes arquivados (15+ dias):</p>
+        
+        <div class="field" style="margin-bottom: 6px;">
+          <label for="reactivationDiscountInput">Desconto de Reativação (R$):</label>
+          <input type="number" id="reactivationDiscountInput" min="0" step="0.50" placeholder="Ex: 5.00">
+        </div>
+
+        <button type="button" class="btn-pix-save" style="background: #059669; width: 100%; font-weight: bold; padding: 8px; font-size: 0.78rem;" onclick="saveReactivationCampaign()">
+          💾 Salvar Desconto de Reativação
+        </button>
+      </details>
+
+      <section class="settings-card">
+        <h3>🌐 Servidores & DNS</h3>
+        <p class="settings-card-desc">O cadastro de servidores e DNS agora fica na aba <strong>🌐 Servidores</strong>.</p>
+        <button type="button" class="btn-tool" style="background:#2563eb; width:100%; font-weight:bold; padding:8px; font-size:0.78rem;" onclick="switchAppTab('servers')">Abrir aba Servidores</button>
+      </section>
+
+      <details class="settings-card">
+        <summary style="cursor:pointer; font-weight:800; font-size:0.92rem;">🔗 Portal do Assinante</summary>
+        <p class="settings-card-desc">Escolha o que o cliente vê no link individual dele. Dados que não existem no cadastro nunca aparecem.</p>
+        <div id="portalStats" style="background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 0.74rem; margin-bottom: 8px;">Carregando acessos…</div>
+        <div class="field"><label for="portal_brandName">Nome exibido no portal (opcional):</label><input type="text" id="portal_brandName" placeholder="Ex: Minha TV"></div>
+        <div class="field"><label for="portal_supportWhatsapp">WhatsApp de suporte (DDD + número):</label><input type="tel" id="portal_supportWhatsapp" inputmode="numeric" autocomplete="off" maxlength="16" placeholder="(11) 91234-5678" oninput="this.value = formatBrPhoneLocal(this.value)"><small style="color:var(--text-muted); font-size:0.7rem;">Digite só o DDD e o número. O código do Brasil (55) é adicionado automaticamente.</small></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showUser" checked><label for="portal_showUser">Exibir usuário</label></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showPassword" checked><label for="portal_showPassword">Exibir senha</label></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showMac" checked><label for="portal_showMac">Exibir MAC</label></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showDnsIp" checked><label for="portal_showDnsIp">Exibir DNS IP</label></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showDnsUrl" checked><label for="portal_showDnsUrl">Exibir DNS URL</label></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showM3u" checked><label for="portal_showM3u">Exibir link M3U</label></div>
+        <p style="font-size:0.7rem; color:var(--text-muted); margin:-2px 0 6px;">O link M3U contém usuário e senha, por isso só aparece no portal quando "Exibir usuário" e "Exibir senha" também estão marcados.</p>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showFinance" checked><label for="portal_showFinance">Exibir financeiro / Pix</label></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showReferral" checked><label for="portal_showReferral">Exibir indicações (Indique e Ganhe)</label></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showTutorials" checked><label for="portal_showTutorials">Exibir tutoriais</label></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_showWhatsapp" checked><label for="portal_showWhatsapp">Exibir botão de WhatsApp</label></div>
+        <div class="field-checkbox"><input type="checkbox" id="portal_requirePin"><label for="portal_requirePin">🔐 Pedir os 4 últimos dígitos do telefone para abrir o portal</label></div>
+        <p style="font-size:0.7rem; color:var(--text-muted); margin:2px 0 6px;">Protege usuário e senha se o link for encaminhado. Cliente sem telefone cadastrado fica sem acesso até você cadastrar.</p>
+        <button type="button" class="btn-pix-save" style="background: #2563eb; width: 100%; font-weight: bold; padding: 8px; font-size: 0.78rem; margin-top: 6px;" onclick="savePortalSettings()">💾 Salvar Portal</button>
+      </details>
+
+      <details class="settings-card" id="appsShortcutsBox">
+        <summary style="cursor:pointer; font-weight:800; font-size:0.92rem;">📱 Sites dos aplicativos (atalhos)</summary>
+        <p class="settings-card-desc" style="margin-top:6px;">Usados pelo botão <strong>📲 Ativar</strong> do cliente. Se o nome do atalho for igual ao aplicativo do cliente, o site abre automaticamente.</p>
+
+      <section class="settings-card">
+        <h3>➕ Adicionar Portal ou Link Rápido</h3>
+        <p class="settings-card-desc">Crie atalhos para os portais de ativação:</p>
+        <form id="customAppForm" onsubmit="saveCustomApp(event)" style="box-shadow: none; padding: 0;">
+          <div class="field">
+            <label for="customAppName">Nome do Aplicativo</label>
+            <input type="text" id="customAppName" placeholder="Ex: Quick Player / XCIPTV" required>
+          </div>
+          <div class="field">
+            <label for="customAppUrl">URL / Link</label>
+            <input type="url" id="customAppUrl" placeholder="Ex: https://quickplayer.app/#/upload-playlist" required>
+          </div>
+          <button type="submit" id="btnSaveCustomApp" class="btn-auth" style="background-color: #059669; padding: 8px; font-size: 0.78rem;">💾 Salvar Atalho</button>
+        </form>
+      </section>
+
+      <section class="settings-card">
+        <h3>⭐ Meus Atalhos</h3>
+        <div id="customAppsList" class="apps-grid">
+          <p style="text-align: center; color: var(--text-muted); font-size: 0.76rem; padding: 10px 0;">Nenhum atalho cadastrado.</p>
+        </div>
+      </section>
+
+      <section class="settings-card">
+        <h3>📱 Portais Padrão</h3>
+        <div class="apps-grid">
+          <a href="https://quickplayer.app/#/upload-playlist" target="_blank" rel="noopener noreferrer" class="app-card-btn">
+            <span class="app-icon">⚡</span>
+            <div class="app-info"><strong>Quick Player</strong><small>quickplayer.app</small></div>
+            <span class="app-arrow">↗</span>
+          </a>
+          <a href="https://iboplayer.com/device/login" target="_blank" rel="noopener noreferrer" class="app-card-btn">
+            <span class="app-icon">🟣</span>
+            <div class="app-info"><strong>IBO Player</strong><small>iboplayer.com</small></div>
+            <span class="app-arrow">↗</span>
+          </a>
+          <a href="https://smartone-iptv.com/plugin/smart_one/main_generate" target="_blank" rel="noopener noreferrer" class="app-card-btn">
+            <span class="app-icon">🔵</span>
+            <div class="app-info"><strong>SmartOne IPTV</strong><small>smartone-iptv.com</small></div>
+            <span class="app-arrow">↗</span>
+          </a>
+          <a href="https://console.clouddy.online/user/auth/login" target="_blank" rel="noopener noreferrer" class="app-card-btn">
+            <span class="app-icon">☁️</span>
+            <div class="app-info"><strong>Clouddy</strong><small>clouddy.online</small></div>
+            <span class="app-arrow">↗</span>
+          </a>
+        </div>
+      </section>
+          </details>
+
+      <section class="settings-card">
+        <h3>🔑 Minha Chave Pix</h3>
+        <p class="settings-card-desc">Aparece nas cobranças e no portal do cliente, com QR Code e Pix copia e cola já com o valor. Escolha o tipo da chave para o QR Code funcionar com CPF ou celular.</p>
+        <div class="pix-input-group">
+          <input type="text" id="pixKeyInput" placeholder="Ex: chave-pix@banco.com">
+          <select id="pixKeyTypeInput" aria-label="Tipo da chave Pix">
+            <option value="auto">Tipo: automático</option>
+            <option value="phone">Celular</option>
+            <option value="cpf">CPF</option>
+            <option value="cnpj">CNPJ</option>
+            <option value="email">E-mail</option>
+            <option value="random">Chave aleatória</option>
+          </select>
+          <button type="button" class="btn-pix-save" onclick="savePixKey()">Salvar Pix</button>
+        </div>
+      </section>
+
+      <section class="settings-card feedback-box">
+        <h3>💡 Enviar Sugestão ou Erro</h3>
+        <div class="field">
+          <label for="feedbackType">Tipo:</label>
+          <select id="feedbackType">
+            <option value="ideia">💡 Ideia / Sugestão</option>
+            <option value="bug">🐛 Problema / Erro</option>
+            <option value="duvida">❓ Dúvida Operacional</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="feedbackMessage">Mensagem:</label>
+          <textarea id="feedbackMessage" rows="3" maxlength="500" placeholder="Descreva os detalhes..."></textarea>
+          <div class="char-count"><span id="feedbackCharCount">0</span>/500</div>
+        </div>
+        <button type="button" id="btnSubmitFeedback" class="btn-auth" style="background: #059669; padding: 8px; font-size: 0.78rem;" onclick="sendFeedback()">📤 Enviar</button>
+      </section>
+
+      <section class="settings-card">
+        <button type="button" id="btnAiReport" class="btn-tool" style="display:none; width:100%; margin-bottom:8px; background:#7c3aed; padding:8px; font-size:0.78rem; font-weight:bold;" onclick="openAiReport()">🤖 Análise da carteira com IA</button>
+        <h3>💾 Backup & Relatórios</h3>
+        <p id="backupReminder" style="font-size:0.72rem; color:var(--text-muted); margin:0 0 6px;"></p>
+        <button type="button" class="btn-tool" style="background:transparent; color:var(--text-muted); border:1px dashed var(--border); width:100%; margin:0 0 8px; padding:6px; font-size:0.7rem;" onclick="forcarExibicaoClientes()">🔄 Recarregar lista de clientes (só se algo não aparecer)</button>
+        <div class="backup-tools">
+          <button type="button" class="btn-tool" style="background: var(--surface-alt); color: var(--text-main); border: 1px solid var(--border); padding: 7px 4px; font-weight: bold; font-size: 0.74rem;" onclick="exportToExcel()">📊 Excel</button>
+          <button type="button" class="btn-tool" style="background: var(--surface-alt); color: var(--text-main); border: 1px solid var(--border); padding: 7px 4px; font-weight: bold; font-size: 0.74rem;" onclick="exportBackup()">💾 Salvar</button>
+          <button type="button" class="btn-tool" style="background: var(--surface-alt); color: var(--text-main); border: 1px solid var(--border); padding: 7px 4px; font-weight: bold; font-size: 0.74rem;" onclick="copyBackupText()">📋 Copiar</button>
+          <label class="btn-tool btn-upload" style="background: var(--surface-alt); color: var(--text-main); border: 1px solid var(--border); padding: 7px 4px; font-weight: bold; font-size: 0.74rem; cursor: pointer; text-align: center;">
+            📥 Restaurar
+            <input type="file" id="importFile" accept=".json" class="hidden-input" onchange="importBackup(event)">
+          </label>
+        </div>
+      </section>
+    </div>
   </div>
 
-  <!-- Inclusão com defer e caminho relativo para GitHub Pages -->
-  <script defer src="./app.js"></script>
+  <!-- BOTÃO FLUTUANTE DE AÇÃO RÁPIDA (FAB) -->
+  <div id="fabContainer" class="fab-container" style="display: none;">
+    <div id="fabMenu" class="fab-menu">
+      <button type="button" class="fab-item-btn" onclick="openQuickNewClient()">➕ Novo Cliente</button>
+      <button type="button" class="fab-item-btn" onclick="handleQuickServerClick()">🚀 Abrir Painel</button>
+      <button type="button" class="fab-item-btn" onclick="openQuickSearch()">🔎 Buscar Cliente</button>
+      <button type="button" id="fabAiReport" class="fab-item-btn" style="display:none;" onclick="openAiReport()">🤖 Análise com IA</button>
+      <button type="button" class="fab-item-btn" onclick="openQuickCredits()">📦 Adicionar Crédito</button>
+      <button type="button" class="fab-item-btn" onclick="openGrowthSimulator()">📈 Simular Crescimento</button>
+    </div>
+    <button type="button" id="fabMainBtn" class="fab-main-btn" onclick="toggleFabMenu()" title="Ações Rápidas">⚡</button>
+  </div>
+
+  <script>
+    function forcarExibicaoClientes() {
+      if (typeof clients !== 'undefined' && clients.length > 0) {
+        if (typeof renderClients === 'function') {
+          renderClients();
+        }
+      } else {
+        if (typeof startFirestoreSync === 'function') {
+          startFirestoreSync();
+        }
+      }
+    }
+  </script>
+
+  <!-- CARREGAMENTO SEQUENCIAL DOS SCRIPTS -->
+  <script src="./firebase-config.js"></script>
+  <script src="./utils.js"></script>
+  <script src="./smart-paste.js"></script>
+  <script src="./clients.js"></script>
+  <script src="./admin.js"></script>
+  <script src="./auth.js"></script>
+  <script src="./app.js"></script>
+  <script src="./ai-config.js"></script>
+  <script src="./ai-report.js"></script>
+  <script src="./whatsnew.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW falhou:', err));
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
       });
     }
   </script>
 </body>
-</html>
+</html>
