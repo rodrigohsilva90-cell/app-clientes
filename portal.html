@@ -233,8 +233,9 @@
 
     /* Ajuda com a tela (foto do erro) */
     .photo-box { position: relative; display: flex; flex-direction: column; gap: 8px; }
-    .photo-box select, .photo-box input[type=file] { width: 100%; box-sizing: border-box; font: inherit; padding: 8px; border-radius: 10px; }
+    .photo-box select, .photo-box input[type=file], .photo-box textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 8px; border-radius: 10px; }
     .photo-label { margin: 4px 0 0; font-size: 0.82rem; font-weight: 600; }
+    .photo-desc { resize: vertical; min-height: 64px; }
     .photo-prev { display: block; max-width: 100%; max-height: 240px; border-radius: 12px; }
     .photo-out { display: flex; flex-direction: column; gap: 8px; }
     .photo-out p { margin: 0; }
@@ -2013,7 +2014,7 @@ return {make:function(text,level){var q=new QRCode(-1,EC[level||"M"]);q.addData(
     var PP = { id: '', pin: '', api: '' };
     var PHOTO_DEVICES = ['Smart TV', 'Android TV ou TV Box', 'Fire TV Stick', 'Celular', 'Computador', 'Outro'];
     var PHOTO_ERR = {
-      limite_diario: 'Você já usou as análises de foto de hoje. Amanhã dá para tirar outra, ou fale com o suporte.',
+      limite_diario: 'Você já usou as 3 ajudas de hoje. Amanhã dá para pedir de novo, ou fale com o suporte.',
       limite_geral: 'A ajuda automática atingiu o limite de hoje. Fale com o suporte.',
       foto_grande: 'A foto ficou grande demais. Tente de novo com outra foto.',
       foto_invalida: 'Não consegui enviar esta foto. Tente de novo.',
@@ -2023,7 +2024,8 @@ return {make:function(text,level){var q=new QRCode(-1,EC[level||"M"]);q.addData(
       pin_wrong: 'Confirme o acesso ao portal e tente de novo.',
       too_many: 'Muitas tentativas. Tente de novo depois.',
       rede: 'Não consegui falar com o servidor do portal. Confira a internet e tente de novo.',
-      tempo: 'A análise demorou demais. Tente de novo.'
+      tempo: 'A análise demorou demais. Tente de novo.',
+      sem_dados: 'Tire uma foto da tela ou escreva o que está acontecendo.'
     };
 
     // Reduz a foto no próprio aparelho (lado máximo 800 px, JPEG): leve e legível para a análise
@@ -2049,7 +2051,7 @@ return {make:function(text,level){var q=new QRCode(-1,EC[level||"M"]);q.addData(
 
     function photoBlock(d) {
       var s = el('section', { class: 'blk', id: 'foto' }, [el('h2', { text: 'Ajuda com a tela' })]);
-      s.appendChild(el('p', { class: 'hint', text: 'Apareceu um erro na TV? Tire uma foto da tela. A ajuda explica o que está acontecendo e o que fazer, passo a passo.' }));
+      s.appendChild(el('p', { class: 'hint', text: 'Algo não funciona na TV? Tire uma foto da tela e/ou conte o que está acontecendo. A ajuda explica o que fazer, passo a passo.' }));
       // Duas entradas: uma abre a câmera (capture), a outra abre a galeria (sem capture, senão o celular só deixa tirar foto)
       var camera = el('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'photo-hidden', tabindex: '-1', 'aria-hidden': 'true' });
       var gallery = el('input', { type: 'file', accept: 'image/*', class: 'photo-hidden', tabindex: '-1', 'aria-hidden': 'true' });
@@ -2058,21 +2060,32 @@ return {make:function(text,level){var q=new QRCode(-1,EC[level||"M"]);q.addData(
       var dev = el('select', { 'aria-label': 'Aparelho' }, PHOTO_DEVICES.map(function (v) { return el('option', { value: v, text: v }); }));
       var prev = el('img', { class: 'photo-prev', alt: 'Prévia da foto' });
       prev.hidden = true;
-      var go = el('button', { type: 'button', class: 'btn', text: 'Analisar foto' });
+      var desc = el('textarea', { rows: '3', maxlength: '300', 'aria-label': 'O que está acontecendo?', placeholder: 'Ex.: o canal fica travando, está sem som, aparece uma mensagem de erro…', class: 'photo-desc' });
+      var go = el('button', { type: 'button', class: 'btn', text: 'Pedir ajuda' });
       go.disabled = true;
-      var note = el('p', { class: 'hint', text: 'Você pode analisar até 3 fotos por dia.' });
+      var ultimo = null; // último resultado, vai junto na mensagem do suporte
+      function podeEnviar() { return Boolean(photo) || desc.value.trim().length >= 5; }
+      function atualizarBotao() { go.disabled = !podeEnviar(); }
+      desc.addEventListener('input', atualizarBotao);
+      var note = el('p', { class: 'hint', text: 'Você pode pedir ajuda até 3 vezes por dia.' });
       var out = el('div', { class: 'photo-out', role: 'status' });
       var photo = '';
 
       function suporte() {
         if (!d.support) return null;
-        return el('a', { class: 'btn wa', href: waLink(d.support.whatsapp, 'Olá! Tentei a ajuda da tela pelo portal e ainda não resolveu. Vou enviar a foto do erro aqui.'), target: '_blank', rel: 'noopener', text: 'Ainda não funcionou — chamar suporte' });
+        var linhas = ['Olá! Tentei a ajuda da tela pelo portal e ainda não resolveu.', 'Aparelho: ' + dev.value];
+        var relato = desc.value.trim();
+        if (relato) linhas.push('O que está acontecendo: ' + relato);
+        if (ultimo && ultimo.problema_identificado) linhas.push('A ajuda identificou: ' + ultimo.problema_identificado);
+        if (photo) linhas.push('Vou enviar a foto da tela aqui.');
+        return el('a', { class: 'btn wa', href: waLink(d.support.whatsapp, linhas.join('\n')), target: '_blank', rel: 'noopener', text: 'Ainda não funcionou — chamar suporte' });
       }
       function mostrar(b) {
         var r = b.resultado || {};
+        ultimo = r.legivel ? r : null;
         out.innerHTML = '';
         if (!r.legivel) {
-          out.appendChild(el('p', { text: 'Não deu para ver bem a tela. Tire outra foto, de perto e com boa luz, mostrando a mensagem de erro.' }));
+          out.appendChild(el('p', { text: photo ? 'Não deu para entender bem o problema. Tire outra foto, de perto e com boa luz, ou conte com mais detalhes o que está acontecendo.' : 'Não deu para entender bem o problema. Conte com mais detalhes o que está acontecendo ou tire uma foto da tela.' }));
         } else {
           if (r.problema_identificado) out.appendChild(el('p', { class: 'photo-title', text: r.problema_identificado }));
           if (r.explicacao_simples) out.appendChild(el('p', { text: r.explicacao_simples }));
@@ -2082,7 +2095,7 @@ return {make:function(text,level){var q=new QRCode(-1,EC[level||"M"]);q.addData(
           } }));
         }
         var s1 = suporte(); if (s1) out.appendChild(s1);
-        if (typeof b.restantesHoje === 'number') note.textContent = 'Você ainda pode analisar ' + b.restantesHoje + ' foto(s) hoje.';
+        if (typeof b.restantesHoje === 'number') note.textContent = 'Você ainda pode pedir ajuda ' + b.restantesHoje + ' vez(es) hoje.';
       }
       function mostrarErro(code, status, detalhe) {
         out.innerHTML = '';
@@ -2095,10 +2108,10 @@ return {make:function(text,level){var q=new QRCode(-1,EC[level||"M"]);q.addData(
       function pegarFoto(input) {
         var f = input.files && input.files[0];
         input.value = ''; // permite escolher a mesma foto de novo
-        photo = ''; go.disabled = true; out.innerHTML = ''; prev.hidden = true;
+        photo = ''; ultimo = null; out.innerHTML = ''; prev.hidden = true; atualizarBotao();
         if (!f) return;
         compressPhoto(f).then(function (data) {
-          photo = data; prev.src = data; prev.hidden = false; go.disabled = false;
+          photo = data; prev.src = data; prev.hidden = false; atualizarBotao();
         }).catch(function () {
           out.appendChild(el('p', { text: 'Não consegui abrir esta foto. Tente outra.' }));
         });
@@ -2107,8 +2120,8 @@ return {make:function(text,level){var q=new QRCode(-1,EC[level||"M"]);q.addData(
       gallery.addEventListener('change', function () { pegarFoto(gallery); });
 
       go.addEventListener('click', function () {
-        if (!photo || go.disabled) return;
-        go.disabled = true; go.textContent = 'Analisando a foto…';
+        if (!podeEnviar() || go.disabled) return;
+        go.disabled = true; go.textContent = 'Analisando…';
         out.innerHTML = '';
         var headers = { 'Content-Type': 'application/json' };
         if (PP.pin) headers['X-Portal-Pin'] = PP.pin;
@@ -2117,7 +2130,7 @@ return {make:function(text,level){var q=new QRCode(-1,EC[level||"M"]);q.addData(
         var timer = setTimeout(function () { timedOut = true; if (ctl) ctl.abort(); }, 60000);
         fetch(PP.api + '/?t=' + encodeURIComponent(PP.id) + '&acao=foto', {
           method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer', headers: headers,
-          body: JSON.stringify({ imagem: photo, aparelho: dev.value }), signal: ctl ? ctl.signal : undefined
+          body: JSON.stringify({ imagem: photo || undefined, aparelho: dev.value, descricao: desc.value.trim() }), signal: ctl ? ctl.signal : undefined
         })
           .then(function (r) { return r.json().catch(function () { return {}; }).then(function (b) { return { status: r.status, body: b }; }); })
           .then(function (res) {
@@ -2130,13 +2143,14 @@ return {make:function(text,level){var q=new QRCode(-1,EC[level||"M"]);q.addData(
             clearTimeout(timer); out.innerHTML = '';
             mostrarErro(timedOut ? 'tempo' : 'rede', 0, '');
           })
-          .then(function () { go.disabled = !photo; go.textContent = 'Analisar foto'; });
+          .then(function () { go.textContent = 'Pedir ajuda'; atualizarBotao(); });
       });
 
       s.appendChild(el('div', { class: 'photo-box' }, [
-        el('p', { class: 'photo-label', text: '1. Tire uma foto ou escolha da galeria' }),
+        el('p', { class: 'photo-label', text: '1. Tire uma foto da tela (opcional se você escrever o problema)' }),
         el('div', { class: 'photo-acoes' }, [bCam, bGal]), camera, gallery, prev,
         el('p', { class: 'photo-label', text: '2. Qual é o aparelho?' }), dev,
+        el('p', { class: 'photo-label', text: '3. O que está acontecendo? (opcional se tiver foto)' }), desc,
         go, note, out
       ]));
       return s;
