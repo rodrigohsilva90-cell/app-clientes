@@ -755,6 +755,17 @@ export default {
     if (request.method === 'GET' && url.searchParams.get('diagnostico') === '1') {
       return json(env, { ok: true, versao: 'foto-3-push', gemini: Boolean(env.GEMINI_API_KEY), push: Boolean(env.VAPID_PRIVATE_JWK), firebase: Boolean(env.FIREBASE_SERVICE_ACCOUNT) });
     }
+    // Exportação para backup no GitHub: devolve (uma vez) o texto que o administrador gravou no KV.
+    // Exige a chave de uso único 'export-chave' (some em 10 min); tudo é apagado depois da leitura.
+    if (request.method === 'POST' && url.searchParams.get('acao') === 'exportar') {
+      const chave = env.PIN_KV ? await env.PIN_KV.get('export-chave') : null;
+      const dada = request.headers.get('x-export-chave') || '';
+      if (!chave || dada.length < 32 || dada !== chave) return json(env, { error: 'not_found' }, 404);
+      const blob = (await env.PIN_KV.get('export-blob')) || '';
+      await env.PIN_KV.delete('export-chave');
+      await env.PIN_KV.delete('export-blob');
+      return new Response(blob, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
     // Teste geral (todos os aparelhos inscritos): exige a chave de uso único gravada no KV pelo administrador
     if (request.method === 'POST' && url.searchParams.get('acao') === 'push-teste-geral') {
       const chave = env.PIN_KV ? await env.PIN_KV.get('push-teste-chave') : null;
