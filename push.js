@@ -180,6 +180,43 @@
     } catch (e) { setStatus('Não consegui salvar as preferências.', '#b91c1c'); }
   };
 
+  // ---------- Toque na notificação "cobranças para enviar" → abre a fila "Cobrar em sequência" ----------
+  // Chega de dois jeitos: o app abre com ?acao=cobrar, ou já estava aberto e o service worker avisa.
+  var cobrarPendente = false;
+  function pedirFila() { cobrarPendente = true; tentarFila(Date.now()); }
+  function tentarFila(desde) {
+    if (!cobrarPendente) return;
+    var u = (typeof auth !== 'undefined' && auth.currentUser) || null;
+    var lista = null;
+    try { lista = clients; } catch (e) {}
+    var pronto = u && window.activeOwnerId === u.uid && Array.isArray(lista) && (lista.length > 0 || Date.now() - desde > 8000);
+    if (!pronto) {
+      if (Date.now() - desde < 30000) setTimeout(function () { tentarFila(desde); }, 500);
+      return;
+    }
+    cobrarPendente = false;
+    if (document.querySelector('.modal-backdrop[style*="display:flex"], .modal-backdrop[style*="display: flex"]')) {
+      // já tem uma janela aberta: não empilha outra por cima
+      if (typeof showToast === 'function') showToast('Feche a janela aberta e toque em "Cobrar em sequência".');
+      return;
+    }
+    if (typeof window.startDailyQueueBilling === 'function') window.startDailyQueueBilling();
+  }
+  try {
+    var qs = new URLSearchParams(location.search);
+    if (qs.get('acao') === 'cobrar') {
+      qs.delete('acao');
+      history.replaceState(null, '', location.pathname + (qs.toString() ? '?' + qs.toString() : '') + location.hash);
+      pedirFila();
+    }
+  } catch (e) {}
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', function (ev) {
+      var d = ev.data || {};
+      if (d.tipo === 'notificacao' && /[?&]acao=cobrar\b/.test(String(d.url || ''))) pedirFila();
+    });
+  }
+
   // Carrega quando o usuário entra (e de novo ao abrir Ajustes)
   function iniciar() {
     try {

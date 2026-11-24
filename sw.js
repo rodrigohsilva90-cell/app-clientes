@@ -2,7 +2,7 @@
 // SERVICE WORKER - PWA, CACHE OFFLINE & SAME-ORIGIN SECURITY
 // ============================================================
 
-const CACHE_VERSION = 'v58';
+const CACHE_VERSION = 'v59';
 const CACHE_NAME = `gestao-clientes-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [
@@ -110,7 +110,11 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((lista) => {
       for (const c of lista) {
-        if (c.url.startsWith(self.registration.scope) && 'focus' in c) return c.focus();
+        if (c.url.startsWith(self.registration.scope) && 'focus' in c) {
+          // App já aberto: avisa qual ação a notificação pede (ex.: abrir a fila de cobrança)
+          c.postMessage({ tipo: 'notificacao', url: alvo });
+          return c.focus();
+        }
       }
       return self.clients.openWindow(alvo);
     })
