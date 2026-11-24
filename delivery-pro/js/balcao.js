@@ -1,6 +1,7 @@
 import { db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
-import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { montarItem } from './cardapio.js';
+import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
 let wakeLock = null;
@@ -143,7 +144,9 @@ function criarCardPedidoBalcao(p) {
   if (p.status === 'novo') {
     botaoAcao = `<button class="btn-primary" data-next="preparo">Aceitar Pedido</button>`;
   } else if (p.status === 'preparo') {
-    botaoAcao = `<button class="btn-primary" data-next="entrega">Despachar Motoboy</button>`;
+    botaoAcao = p.tipoEntrega === 'retirada'
+      ? `<button class="btn-primary" data-next="concluido">✅ Cliente retirou</button>`
+      : `<button class="btn-primary" data-next="entrega">Despachar Motoboy</button>`;
   } else if (p.status === 'entrega') {
     botaoAcao = `<button class="btn-outline-sm" style="width:100%;" data-next="concluido">Marcar Entregue</button>`;
   }
@@ -153,7 +156,7 @@ function criarCardPedidoBalcao(p) {
       <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
       <button class="btn-outline-sm" style="padding:2px 8px;" data-print="1" title="Imprimir Comanda">🖨️</button>
     </div>
-    <p style="font-size:14px; margin:4px 0;"><strong>${esc(p.clienteNome)}</strong> (${esc(p.clienteWhatsapp)})</p>
+    <p style="font-size:14px; margin:4px 0;"><strong>${esc(p.clienteNome)}</strong> ${p.clienteWhatsapp ? `(${esc(p.clienteWhatsapp)})` : ''}</p>
     <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
     <div style="margin:8px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
       ${(p.itens || []).map(i => `<div>${esc(i.quantidade)}x ${esc(i.nome)} ${i.detalhes?.length ? `(${esc(i.detalhes.join(', '))})` : ''}</div>`).join('')}
@@ -211,25 +214,253 @@ function imprimirComandaTermica(p) {
   window.print();
 }
 
+// Pedido de balcão/telefone: o atendente escolhe os itens do próprio cardápio
 async function abrirPedidoManualRapido() {
-  const cliente = prompt('Nome do cliente (Balcão / Telefone):');
-  if (!cliente) return;
-  const descricao = prompt('Item e valor (Ex: 1x Pizza Calabresa):');
-  const valorReais = Number(prompt('Valor total em R$ (Ex: 45.00):') || 0);
-  if (!descricao || valorReais <= 0) return;
+  let produtos = [];
+  let categorias = [];
+  try {
+    const snap = await getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo'));
+    const dados = snap.exists() ? snap.data() : {};
+    produtos = (dados.produtos || []).filter(p => !p.excluido);
+    categorias = dados.categorias || [];
+  } catch (err) {
+    console.error(err);
+    showToast('Erro ao carregar o cardápio.');
+    return;
+  }
+  if (!produtos.length) {
+    showToast('Cardápio vazio: cadastre produtos primeiro (botão "Cardápio de exemplo").');
+    return;
+  }
 
-  await addDoc(collection(db, 'lojas', AppState.lojaId, 'pedidos'), {
-    numeroPedido: Math.floor(100 + Math.random() * 900),
-    clienteNome: `${cliente} (Balcão)`,
-    clienteWhatsapp: '00000000000',
-    enderecoTexto: 'Retirada / Pedido Manual no Balcão',
-    itens: [{ nome: descricao, quantidade: 1, unitarioCentavos: Math.round(valorReais * 100), detalhes: [] }],
-    totalCentavos: Math.round(valorReais * 100),
-    formaPagamento: 'balcao',
-    status: 'preparo',
-    criadoEm: serverTimestamp()
-  });
-  showToast('Pedido manual lançado direto na cozinha!');
+  const sacola = [];
+  const campo = 'width:100%; padding:10px; margin:4px 0 10px; border:1px solid var(--border); border-radius:8px;';
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:1000; display:flex; align-items:center; justify-content:center; padding:12px;';
+  overlay.innerHTML = `
+    <div class="card" style="max-width:920px; width:100%; max-height:94vh; overflow-y:auto; margin:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3>Pedido Balcão / Telefone</h3>
+        <button class="btn-outline-sm" data-fechar>✕</button>
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+        <div id="pm-cardapio"></div>
+        <div>
+          <h4 style="margin-bottom:6px;">🧾 Itens do pedido</h4>
+          <div id="pm-sacola"></div>
+
+          <label style="display:block; font-size:13px; font-weight:600; margin-top:10px;">Nome do cliente</label>
+          <input id="pm-nome" type="text" placeholder="Ex: Maria" style="${campo}" />
+
+          <label style="display:block; font-size:13px; font-weight:600;">Telefone (opcional)</label>
+          <input id="pm-tel" type="tel" placeholder="11999999999" style="${campo}" />
+
+          <label style="display:block; font-size:13px; font-weight:600;">Tipo</label>
+          <select id="pm-tipo" style="${campo}">
+            <option value="retirada">Retirada no balcão</option>
+            <option value="entrega">Entrega (motoboy)</option>
+          </select>
+
+          <div id="pm-box-endereco" class="hidden">
+            <label style="display:block; font-size:13px; font-weight:600;">Endereço e referência</label>
+            <input id="pm-endereco" type="text" placeholder="Rua, número - bairro" style="${campo}" />
+          </div>
+
+          <label style="display:block; font-size:13px; font-weight:600;">Pagamento</label>
+          <select id="pm-pag" style="${campo}">
+            <option value="dinheiro">Dinheiro</option>
+            <option value="cartao">Cartão</option>
+            <option value="pix">Pix</option>
+          </select>
+
+          <div id="pm-box-troco">
+            <label style="display:block; font-size:13px; font-weight:600;">Troco para quanto? (R$, opcional)</label>
+            <input id="pm-troco" type="number" placeholder="Ex: 100" style="${campo}" />
+          </div>
+
+          <div style="display:flex; justify-content:space-between; font-size:17px; margin:8px 0 12px;">
+            <span>Total:</span><strong id="pm-total">R$ 0,00</strong>
+          </div>
+          <button class="btn-primary" id="pm-lancar">Lançar pedido na cozinha</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const $ = (sel) => overlay.querySelector(sel);
+  $('[data-fechar]').onclick = () => overlay.remove();
+  $('#pm-tipo').onchange = () => $('#pm-box-endereco').classList.toggle('hidden', $('#pm-tipo').value !== 'entrega');
+  $('#pm-pag').onchange = () => $('#pm-box-troco').classList.toggle('hidden', $('#pm-pag').value !== 'dinheiro');
+
+  const totalSacola = () => sacola.reduce((acc, i) => acc + i.unitarioCentavos * i.quantidade, 0);
+
+  function adicionar(item) {
+    const chave = JSON.stringify([item.produtoId, item.detalhes, item.unitarioCentavos]);
+    const igual = sacola.find(i => JSON.stringify([i.produtoId, i.detalhes, i.unitarioCentavos]) === chave);
+    if (igual) igual.quantidade += 1;
+    else sacola.push(item);
+    renderSacola();
+  }
+
+  function renderSacola() {
+    const box = $('#pm-sacola');
+    if (!sacola.length) {
+      box.innerHTML = '<p style="color:var(--text-muted); font-size:14px;">Toque nos produtos ao lado para adicionar.</p>';
+    } else {
+      box.innerHTML = sacola.map((i, idx) => `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); font-size:14px;">
+          <div style="flex:1;">
+            <strong>${esc(i.nome)}</strong>
+            ${i.detalhes.length ? `<div style="font-size:12px; color:var(--text-muted);">${esc(i.detalhes.join(' | '))}</div>` : ''}
+            <div style="font-size:12px;">${formatarCentavos(i.unitarioCentavos)} cada</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button class="btn-outline-sm" style="padding:2px 10px;" data-menos="${idx}">−</button>
+            <strong style="min-width:22px; text-align:center;">${i.quantidade}</strong>
+            <button class="btn-outline-sm" style="padding:2px 10px;" data-mais="${idx}">+</button>
+          </div>
+        </div>
+      `).join('');
+      box.querySelectorAll('[data-mais]').forEach(b => b.onclick = () => { sacola[Number(b.dataset.mais)].quantidade += 1; renderSacola(); });
+      box.querySelectorAll('[data-menos]').forEach(b => b.onclick = () => {
+        const i = Number(b.dataset.menos);
+        sacola[i].quantidade -= 1;
+        if (sacola[i].quantidade <= 0) sacola.splice(i, 1);
+        renderSacola();
+      });
+    }
+    $('#pm-total').textContent = formatarCentavos(totalSacola());
+  }
+
+  function renderListaProdutos() {
+    const idsCategorias = new Set(categorias.map(c => c.id));
+    const grupos = [
+      ...categorias.map(c => ({ nome: c.nome, itens: produtos.filter(p => p.categoriaId === c.id) })),
+      { nome: 'Outros', itens: produtos.filter(p => !idsCategorias.has(p.categoriaId)) }
+    ].filter(g => g.itens.length);
+
+    $('#pm-cardapio').innerHTML = grupos.map(g => `
+      <h4 style="margin:6px 0;">${esc(g.nome)}</h4>
+      <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap:8px; margin-bottom:10px;">
+        ${g.itens.map(p => {
+          const esgotado = p.controlarEstoque && p.estoque <= 0;
+          return `
+            <button class="btn-outline-sm" data-prod="${esc(p.id)}" ${esgotado ? 'disabled' : ''} style="text-align:left; padding:10px; min-height:64px; ${esgotado ? 'opacity:0.5;' : ''}">
+              <div>${esc(p.nome)}</div>
+              <div style="color:var(--primary); font-size:13px;">${p.grupos?.length ? 'Escolher opções' : formatarCentavos(p.precoCentavos)}</div>
+              ${esgotado ? '<div style="font-size:12px;">Esgotado</div>' : ''}
+            </button>
+          `;
+        }).join('')}
+      </div>
+    `).join('');
+
+    $('#pm-cardapio').querySelectorAll('[data-prod]').forEach(btn => {
+      btn.onclick = () => {
+        const prod = produtos.find(p => p.id === btn.dataset.prod);
+        if (!prod) return;
+        if (!prod.grupos || !prod.grupos.length) {
+          const r = montarItem(prod, {});
+          adicionar(r.item);
+          showToast(`${prod.nome} adicionado`);
+        } else {
+          renderOpcoes(prod);
+        }
+      };
+    });
+  }
+
+  function renderOpcoes(prod) {
+    const selecoes = {};
+    $('#pm-cardapio').innerHTML = `
+      <button class="btn-outline-sm" data-voltar style="margin-bottom:8px;">← Voltar ao cardápio</button>
+      <h4>${esc(prod.nome)}</h4>
+      ${prod.grupos.map((grp, gi) => `
+        <div style="border-top:1px solid var(--border); padding:8px 0;">
+          <strong>${esc(grp.titulo)}</strong>
+          <small style="display:block; color:var(--text-muted);">Escolha de ${grp.minimo || 0} até ${grp.maximo || 1}</small>
+          ${(grp.opcoes || []).map((op, oi) => `
+            <label style="display:flex; justify-content:space-between; padding:6px 0; cursor:pointer;">
+              <span><input type="checkbox" data-g="${gi}" data-o="${oi}" /> ${esc(op.nome)}</span>
+              <span>+${formatarCentavos(op.precoCentavos)}</span>
+            </label>
+          `).join('')}
+        </div>
+      `).join('')}
+      <button class="btn-primary" data-add-opcoes style="margin-top:8px;">Adicionar ao pedido</button>
+    `;
+    $('[data-voltar]').onclick = renderListaProdutos;
+    $('#pm-cardapio').querySelectorAll('input[type="checkbox"]').forEach(chk => {
+      chk.onchange = () => {
+        const gi = Number(chk.dataset.g);
+        const grupo = prod.grupos[gi];
+        const opcao = grupo.opcoes[Number(chk.dataset.o)];
+        selecoes[gi] = selecoes[gi] || [];
+        if (chk.checked) {
+          if (selecoes[gi].length >= (grupo.maximo || 1)) {
+            chk.checked = false;
+            showToast(`Máximo de ${grupo.maximo || 1} em "${grupo.titulo}".`);
+            return;
+          }
+          selecoes[gi].push(opcao);
+        } else {
+          selecoes[gi] = selecoes[gi].filter(o => o !== opcao);
+        }
+      };
+    });
+    $('[data-add-opcoes]').onclick = () => {
+      const r = montarItem(prod, selecoes);
+      if (r.erro) { showToast(r.erro); return; }
+      adicionar(r.item);
+      showToast(`${prod.nome} adicionado`);
+      renderListaProdutos();
+    };
+  }
+
+  $('#pm-lancar').onclick = async () => {
+    const nome = $('#pm-nome').value.trim();
+    const telefone = $('#pm-tel').value.replace(/\D/g, '');
+    const tipo = $('#pm-tipo').value;
+    const endereco = $('#pm-endereco').value.trim();
+    const pagamento = $('#pm-pag').value;
+    const totalCentavos = totalSacola();
+    const trocoParaCentavos = pagamento === 'dinheiro' ? Math.round((Number($('#pm-troco').value) || 0) * 100) : 0;
+
+    if (!sacola.length) { showToast('Adicione pelo menos um item.'); return; }
+    if (!nome) { showToast('Informe o nome do cliente.'); return; }
+    if (tipo === 'entrega' && !endereco) { showToast('Informe o endereço de entrega.'); return; }
+    if (trocoParaCentavos && trocoParaCentavos < totalCentavos) { showToast('O valor do troco é menor que o total.'); return; }
+
+    const btn = $('#pm-lancar');
+    btn.disabled = true;
+    btn.textContent = 'Lançando...';
+    try {
+      await addDoc(collection(db, 'lojas', AppState.lojaId, 'pedidos'), {
+        numeroPedido: Math.floor(100 + Math.random() * 900),
+        clienteNome: nome,
+        clienteWhatsapp: telefone,
+        enderecoTexto: tipo === 'entrega' ? endereco : 'Retirada no balcão',
+        tipoEntrega: tipo,
+        itens: sacola,
+        totalCentavos,
+        formaPagamento: pagamento,
+        trocoParaCentavos,
+        status: 'preparo',
+        origem: 'balcao',
+        criadoEm: serverTimestamp()
+      });
+      overlay.remove();
+      showToast('Pedido lançado direto na cozinha!');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao lançar o pedido.');
+      btn.disabled = false;
+      btn.textContent = 'Lançar pedido na cozinha';
+    }
+  };
+
+  renderListaProdutos();
+  renderSacola();
 }
 
 // Cria um cardápio de teste (pizza meio a meio + bebidas) no documento único da vitrine

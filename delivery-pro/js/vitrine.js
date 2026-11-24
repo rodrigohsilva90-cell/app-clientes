@@ -1,5 +1,6 @@
 import { db, formatarCentavos, showToast, WORKER_API_URL } from './config.js';
 import { AppState } from './router.js';
+import { montarItem } from './cardapio.js';
 import { doc, getDoc, collection, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let carrinho = [];
@@ -175,36 +176,12 @@ function abrirModalProduto(prod) {
   });
 
   document.getElementById('confirmar-item-modal').onclick = () => {
-    let totalCentavos = prod.precoCentavos || 0;
-    const detalhes = [];
-
-    for (let i = 0; i < (prod.grupos || []).length; i++) {
-      const grp = prod.grupos[i];
-      const escolhidos = selecoesAtuais[i] || [];
-      if (escolhidos.length < (grp.minimo || 0)) {
-        showToast(`Selecione pelo menos ${grp.minimo} em "${grp.titulo}".`);
-        return;
-      }
-      if (escolhidos.length > 0) {
-        const precos = escolhidos.map(e => Number(e.precoCentavos) || 0);
-        if (grp.regraDePreco === 'MAIOR_VALOR') {
-          totalCentavos += Math.max(...precos);
-        } else if (grp.regraDePreco === 'MEDIA') {
-          totalCentavos += Math.round(precos.reduce((a, b) => a + b, 0) / precos.length);
-        } else {
-          totalCentavos += precos.reduce((a, b) => a + b, 0);
-        }
-        detalhes.push(`${grp.titulo}: ${escolhidos.map(e => e.nome).join(' / ')}`);
-      }
+    const resultado = montarItem(prod, selecoesAtuais);
+    if (resultado.erro) {
+      showToast(resultado.erro);
+      return;
     }
-
-    adicionarAoCarrinho({
-      produtoId: prod.id,
-      nome: prod.nome,
-      quantidade: 1,
-      unitarioCentavos: totalCentavos,
-      detalhes
-    });
+    adicionarAoCarrinho(resultado.item);
     modal.classList.add('hidden');
   };
 }

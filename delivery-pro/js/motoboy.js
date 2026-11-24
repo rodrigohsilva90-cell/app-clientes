@@ -129,7 +129,7 @@ function escutarEntregas(motoboyUid) {
         if (p.formaPagamento === 'dinheiro' && p.trocoParaCentavos > p.totalCentavos) {
           trocoTotalCentavos += (p.trocoParaCentavos - p.totalCentavos);
         }
-      } else if (!p.motoboyId && p.status === 'preparo') {
+      } else if (!p.motoboyId && p.status === 'preparo' && p.tipoEntrega !== 'retirada') {
         disponiveis.push(p);
       }
     });

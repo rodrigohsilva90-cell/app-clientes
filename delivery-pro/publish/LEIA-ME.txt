@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 6dac37a889b7370caa3e885254a609f88509f76537dd622be9fd5ba8ed9448dd).
+worker.js = cópia EXATA do que está no ar (sha256 9126ca81b22292046a4f065ba61beab4a40fc10ff178082441413c895cbf7952).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
