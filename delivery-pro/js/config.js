@@ -2,14 +2,14 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import { getFirestore } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
-// Substitua pelos dados do seu projeto Firebase (Região: southamerica-east1)
+// Projeto Firebase delivery-pro-38f75 (Firestore em southamerica-east1)
 export const FIREBASE_CONFIG = {
-  apiKey: "SUA_API_KEY",
-  authDomain: "seu-projeto.firebaseapp.com",
-  projectId: "seu-projeto",
-  storageBucket: "seu-projeto.appspot.com",
-  messagingSenderId: "000000000000",
-  appId: "1:000000000000:web:000000000000"
+  apiKey: "AIzaSyCTvLJxBS8qXw5krZpXh5TL-VsV5tDgRws",
+  authDomain: "delivery-pro-38f75.firebaseapp.com",
+  projectId: "delivery-pro-38f75",
+  storageBucket: "delivery-pro-38f75.firebasestorage.app",
+  messagingSenderId: "185334892887",
+  appId: "1:185334892887:web:985baa10a159a6caa61612"
 };
 
 // URL do seu Cloudflare Worker
@@ -33,4 +33,9 @@ export function showToast(mensagem, duracao = 3500) {
   el.textContent = mensagem;
   container.appendChild(el);
   setTimeout(() => el.remove(), duracao);
+}
+
+// Escapa texto antes de colocar em innerHTML (impede que um pedido injete código no painel)
+export function esc(valor) {
+  return String(valor ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }

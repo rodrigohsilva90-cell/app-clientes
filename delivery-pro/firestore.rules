@@ -1,0 +1,107 @@
+rules_version = '2';
+
+// Regras do Delivery Pro (projeto delivery-pro-38f75)
+// Quem é quem:
+//   - Equipe da loja (dono/balcão/cozinha): documento em lojas/{lojaId}/equipe/{uid}
+//   - Entregador: documento em lojas/{lojaId}/entregadores/{uid}
+//   - Cliente: não precisa de login, só pode CRIAR pedido novo
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function logado() { return request.auth != null; }
+    function ehEquipe(lojaId) {
+      return logado() && exists(/databases/$(database)/documents/lojas/$(lojaId)/equipe/$(request.auth.uid));
+    }
+    function ehDono(lojaId) {
+      return ehEquipe(lojaId) &&
+        get(/databases/$(database)/documents/lojas/$(lojaId)/equipe/$(request.auth.uid)).data.papel == 'dono';
+    }
+    function ehEntregador(lojaId) {
+      return logado() && exists(/databases/$(database)/documents/lojas/$(lojaId)/entregadores/$(request.auth.uid));
+    }
+    function textoAte(v, max) { return v is string && v.size() > 0 && v.size() <= max; }
+
+    // Perfil do usuário (papéis para o alternador). Só o próprio lê; alterações pelo Console.
+    match /usuarios/{uid} {
+      allow read: if logado() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Endereço da loja (/pizzariateste). Público para leitura; criado pelo Console/Master.
+    match /slugs/{slug} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /lojas/{lojaId} {
+      allow read: if true;
+      allow update: if ehDono(lojaId);
+      allow create, delete: if false;
+
+      // Cardápio consolidado (vitrine)
+      match /publico/{docId} {
+        allow read: if true;
+        allow write: if ehEquipe(lojaId);
+      }
+
+      // Chaves Pix e afins: nunca acessíveis pelo navegador (só pelo Worker)
+      match /segredos/{docId} {
+        allow read, write: if false;
+      }
+
+      match /equipe/{uid} {
+        allow read: if ehEquipe(lojaId);
+        allow write: if ehDono(lojaId);
+      }
+
+      match /entregadores/{uid} {
+        allow read: if ehEquipe(lojaId) || (logado() && request.auth.uid == uid);
+        allow write: if ehDono(lojaId);
+      }
+
+      match /pedidos/{pedidoId} {
+        // Cliente sem login: só cria pedido NOVO, com campos e tamanhos controlados
+        allow create: if ehEquipe(lojaId) || (
+          request.resource.data.keys().hasOnly([
+            'checkoutToken', 'numeroPedido', 'clienteNome', 'clienteWhatsapp', 'enderecoTexto',
+            'itens', 'totalCentavos', 'formaPagamento', 'trocoParaCentavos', 'status', 'origem', 'criadoEm'
+          ])
+          && request.resource.data.status == 'novo'
+          && request.resource.data.criadoEm == request.time
+          && textoAte(request.resource.data.clienteNome, 80)
+          && textoAte(request.resource.data.clienteWhatsapp, 15)
+          && textoAte(request.resource.data.enderecoTexto, 250)
+          && request.resource.data.itens is list
+          && request.resource.data.itens.size() > 0
+          && request.resource.data.itens.size() <= 50
+          && request.resource.data.totalCentavos is int
+          && request.resource.data.totalCentavos > 0
+          && request.resource.data.formaPagamento in ['pix', 'cartao_entrega', 'dinheiro']
+        );
+
+        // Equipe vê e movimenta tudo; entregador vê pedidos prontos e em rota
+        allow read: if ehEquipe(lojaId)
+          || (ehEntregador(lojaId) && resource.data.status in ['preparo', 'entrega']);
+
+        allow update: if ehEquipe(lojaId)
+          // Entregador assume um pedido livre (transação)
+          || (ehEntregador(lojaId)
+              && resource.data.get('motoboyId', null) == null
+              && resource.data.status == 'preparo'
+              && request.resource.data.motoboyId == request.auth.uid
+              && request.resource.data.status == 'entrega'
+              && request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['motoboyId', 'status', 'saiuParaEntregaEm', 'motoboyCoords']))
+          // Entregador atualiza GPS / dá baixa só no pedido dele
+          || (ehEntregador(lojaId)
+              && resource.data.get('motoboyId', null) == request.auth.uid
+              && request.resource.data.motoboyId == request.auth.uid
+              && request.resource.data.status in ['entrega', 'concluido', 'ocorrencia']
+              && request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['status', 'motoboyCoords', 'gpsAtualizadoEm', 'entregueEm', 'coordsBaixa', 'justificativaBaixa']));
+
+        allow delete: if ehDono(lojaId);
+      }
+    }
+  }
+}

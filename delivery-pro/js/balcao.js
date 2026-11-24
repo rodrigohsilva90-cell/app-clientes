@@ -1,4 +1,4 @@
-import { db, formatarCentavos, showToast } from './config.js';
+import { db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
@@ -118,6 +118,11 @@ function escutarPedidosEmTempoReal() {
     if (temNovoPedido && campainhaAtiva) {
       tocarBipeCampainha();
     }
+  }, (err) => {
+    console.error(err);
+    document.getElementById('col-novo').innerHTML = err.code === 'permission-denied'
+      ? '<div class="card">🔒 Entre com uma conta da equipe desta loja (botão "Entrar" no topo).</div>'
+      : '<div class="card">Erro ao carregar pedidos. Veja o console (F12).</div>';
   });
 }
 
@@ -141,16 +146,16 @@ function criarCardPedidoBalcao(p) {
 
   div.innerHTML = `
     <div style="display:flex; justify-content:space-between; align-items:center;">
-      <strong>Pedido #${p.numeroPedido || p.id.slice(0, 4)}</strong>
+      <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
       <button class="btn-outline-sm" style="padding:2px 8px;" data-print="1" title="Imprimir Comanda">🖨️</button>
     </div>
-    <p style="font-size:14px; margin:4px 0;"><strong>${p.clienteNome}</strong> (${p.clienteWhatsapp})</p>
-    <p style="font-size:13px; color:var(--text-muted);">${p.enderecoTexto}</p>
+    <p style="font-size:14px; margin:4px 0;"><strong>${esc(p.clienteNome)}</strong> (${esc(p.clienteWhatsapp)})</p>
+    <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
     <div style="margin:8px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
-      ${(p.itens || []).map(i => `<div>${i.quantidade}x ${i.nome} ${i.detalhes?.length ? `(${i.detalhes.join(', ')})` : ''}</div>`).join('')}
+      ${(p.itens || []).map(i => `<div>${esc(i.quantidade)}x ${esc(i.nome)} ${i.detalhes?.length ? `(${esc(i.detalhes.join(', '))})` : ''}</div>`).join('')}
     </div>
     <div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:8px;">
-      <span>${(p.formaPagamento || '').toUpperCase()}</span>
+      <span>${esc((p.formaPagamento || '').toUpperCase())}</span>
       <strong>${formatarCentavos(p.totalCentavos)}</strong>
     </div>
     ${trocoTxt}
@@ -167,7 +172,7 @@ function criarCardPedidoBalcao(p) {
         status: novoStatus,
         atualizadoEm: serverTimestamp()
       });
-      showToast(`Pedido #${p.numeroPedido} movido para ${novoStatus.toUpperCase()}`);
+      showToast(`Pedido #${esc(p.numeroPedido)} movido para ${novoStatus.toUpperCase()}`);
     };
   }
 
@@ -179,23 +184,23 @@ function imprimirComandaTermica(p) {
   area.innerHTML = `
     <div style="text-align:center; border-bottom:1px dashed #000; padding-bottom:6px;">
       <strong>${AppState.lojaDados.nome.toUpperCase()}</strong><br/>
-      PEDIDO #${p.numeroPedido || p.id.slice(0, 4)}<br/>
+      PEDIDO #${esc(p.numeroPedido || p.id.slice(0, 4))}<br/>
       ${new Date().toLocaleString('pt-BR')}
     </div>
     <div style="padding:6px 0; border-bottom:1px dashed #000;">
-      Cliente: ${p.clienteNome}<br/>
-      Tel: ${p.clienteWhatsapp}<br/>
-      End: ${p.enderecoTexto}
+      Cliente: ${esc(p.clienteNome)}<br/>
+      Tel: ${esc(p.clienteWhatsapp)}<br/>
+      End: ${esc(p.enderecoTexto)}
     </div>
     <div style="padding:6px 0; border-bottom:1px dashed #000;">
       ${(p.itens || []).map(i => `
-        <div>${i.quantidade}x ${i.nome} - ${formatarCentavos(i.unitarioCentavos * i.quantidade)}</div>
-        ${i.detalhes?.length ? `<div style="font-size:11px;">  * ${i.detalhes.join(' | ')}</div>` : ''}
+        <div>${esc(i.quantidade)}x ${esc(i.nome)} - ${formatarCentavos(i.unitarioCentavos * i.quantidade)}</div>
+        ${i.detalhes?.length ? `<div style="font-size:11px;">  * ${esc(i.detalhes.join(' | '))}</div>` : ''}
       `).join('')}
     </div>
     <div style="padding-top:6px;">
       <strong>TOTAL: ${formatarCentavos(p.totalCentavos)}</strong><br/>
-      Pagamento: ${(p.formaPagamento || '').toUpperCase()}
+      Pagamento: ${esc((p.formaPagamento || '').toUpperCase())}
       ${p.trocoParaCentavos > p.totalCentavos ? `<br/>TROCO P/ ${formatarCentavos(p.trocoParaCentavos)}: ${formatarCentavos(p.trocoParaCentavos - p.totalCentavos)}` : ''}
     </div>
   `;

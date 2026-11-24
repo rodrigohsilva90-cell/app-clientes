@@ -1,5 +1,5 @@
 import { auth, db, showToast } from './config.js';
-import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import { doc, getDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import { iniciarVitrine } from './vitrine.js';
 import { iniciarBalcao } from './balcao.js';
@@ -142,6 +142,8 @@ onAuthStateChanged(auth, async (user) => {
   const switcher = document.getElementById('profile-switcher');
   const authBtn = document.getElementById('btn-auth-action');
 
+  authBtn.onclick = () => (user ? signOut(auth).then(() => window.location.reload()) : abrirModalLogin());
+
   if (user) {
     authBtn.textContent = 'Sair';
     const userSnap = await getDoc(doc(db, 'usuarios', user.uid));
@@ -176,4 +178,36 @@ function configurarAlternadorPerfil(selectEl, profile) {
   };
 }
 
-resolverRota();
+// Login simples (e-mail e senha) para equipe da loja e entregadores
+function abrirModalLogin() {
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:1000; display:flex; align-items:center; justify-content:center; padding:16px;';
+  modal.innerHTML = `
+    <form class="card" style="max-width:360px; width:100%;">
+      <h3 style="margin-bottom:12px;">Entrar</h3>
+      <input name="email" type="email" placeholder="E-mail" required autocomplete="username" style="width:100%; padding:10px; margin-bottom:8px; border:1px solid var(--border); border-radius:8px;" />
+      <input name="senha" type="password" placeholder="Senha" required autocomplete="current-password" style="width:100%; padding:10px; margin-bottom:12px; border:1px solid var(--border); border-radius:8px;" />
+      <button class="btn-primary" type="submit">Entrar</button>
+      <button class="btn-outline-sm" type="button" data-fechar style="width:100%; margin-top:8px;">Cancelar</button>
+    </form>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelector('[data-fechar]').onclick = () => modal.remove();
+  modal.querySelector('form').onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = 'Entrando...';
+    try {
+      await signInWithEmailAndPassword(auth, e.target.email.value.trim(), e.target.senha.value);
+      window.location.reload();
+    } catch (err) {
+      showToast('E-mail ou senha incorretos.');
+      btn.disabled = false;
+      btn.textContent = 'Entrar';
+    }
+  };
+}
+
+// Espera o Firebase dizer se há alguém logado antes de abrir a tela (o motoboy precisa disso)
+auth.authStateReady().then(resolverRota);

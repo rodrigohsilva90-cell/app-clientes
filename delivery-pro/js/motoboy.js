@@ -1,4 +1,4 @@
-import { auth, db, formatarCentavos, showToast } from './config.js';
+import { auth, db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { validarCercaEntrega, criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros } from './geo.js';
 import {
@@ -142,6 +142,11 @@ function escutarEntregas(motoboyUid) {
 
     renderizarEntregaAtiva(minhaEntrega, motoboyUid);
     renderizarFilaDisponivel(disponiveis, motoboyUid, Boolean(minhaEntrega));
+  }, (err) => {
+    console.error(err);
+    document.getElementById('lista-entregas-disponiveis').innerHTML = err.code === 'permission-denied'
+      ? '<div class="card">🔒 Sua conta não está cadastrada como entregador desta loja.</div>'
+      : '<div class="card">Erro ao carregar entregas.</div>';
   });
 }
 
@@ -195,7 +200,7 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
     <div class="card" style="border: 2px solid var(--primary);">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <span class="badge">EM ROTA AGORA</span>
-        <strong>Pedido #${pedido.numeroPedido || pedido.id.slice(0, 4)}</strong>
+        <strong>Pedido #${esc(pedido.numeroPedido || pedido.id.slice(0, 4))}</strong>
       </div>
 
       ${trocoNecessario > 0 ? `
@@ -204,13 +209,13 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
         </div>
       ` : ''}
 
-      <p style="margin-top:8px;"><strong>Cliente:</strong> ${pedido.clienteNome}</p>
-      <p style="font-size:14px; color:var(--text-muted); margin:4px 0;"><strong>Endereço:</strong> ${pedido.enderecoTexto}</p>
-      <p style="font-size:14px;"><strong>Cobrar:</strong> ${formatarCentavos(pedido.totalCentavos)} (${(pedido.formaPagamento || '').toUpperCase()})</p>
+      <p style="margin-top:8px;"><strong>Cliente:</strong> ${esc(pedido.clienteNome)}</p>
+      <p style="font-size:14px; color:var(--text-muted); margin:4px 0;"><strong>Endereço:</strong> ${esc(pedido.enderecoTexto)}</p>
+      <p style="font-size:14px;"><strong>Cobrar:</strong> ${formatarCentavos(pedido.totalCentavos)} (${esc((pedido.formaPagamento || '').toUpperCase())})</p>
 
       <div style="margin:10px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
         <strong>Conferência de Itens:</strong>
-        ${(pedido.itens || []).map(i => `<div>• ${i.quantidade}x ${i.nome}</div>`).join('')}
+        ${(pedido.itens || []).map(i => `<div>• ${esc(i.quantidade)}x ${esc(i.nome)}</div>`).join('')}
       </div>
 
       <!-- Mapa Leaflet ao Vivo -->
@@ -303,9 +308,9 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
   lista.innerHTML = pedidos.map(p => `
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
       <div>
-        <strong>Pedido #${p.numeroPedido || p.id.slice(0, 4)}</strong>
-        <p style="font-size:13px; color:var(--text-muted);">${p.enderecoTexto}</p>
-        <span style="font-size:13px; font-weight:600;">${formatarCentavos(p.totalCentavos)} • ${(p.formaPagamento || '').toUpperCase()}</span>
+        <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
+        <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
+        <span style="font-size:13px; font-weight:600;">${formatarCentavos(p.totalCentavos)} • ${esc((p.formaPagamento || '').toUpperCase())}</span>
       </div>
       <button class="btn-primary" style="width:auto;" ${bloqueadoPorRotaAtiva ? 'disabled' : ''} data-assumir="${p.id}">
         ${bloqueadoPorRotaAtiva ? 'Em rota' : 'Pegar Entrega'}
