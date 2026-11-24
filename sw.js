@@ -2,7 +2,7 @@
 // SERVICE WORKER - PWA, CACHE OFFLINE & SAME-ORIGIN SECURITY
 // ============================================================
 
-const CACHE_VERSION = 'v57';
+const CACHE_VERSION = 'v58';
 const CACHE_NAME = `gestao-clientes-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [
@@ -20,6 +20,7 @@ const STATIC_ASSETS = [
   './ai-report.js',
   './whatsnew.js',
   './push.js',
+  './support-report.js',
   './manifest.json'
 ];
 

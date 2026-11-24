@@ -1056,6 +1056,7 @@
 
       <section class="settings-card">
         <button type="button" id="btnAiReport" class="btn-tool" style="display:none; width:100%; margin-bottom:8px; background:#7c3aed; padding:8px; font-size:0.78rem; font-weight:bold;" onclick="openAiReport()">🤖 Análise da carteira com IA</button>
+        <button type="button" id="btnSupportReport" class="btn-tool" style="display:none; width:100%; margin-bottom:8px; background:#0d9488; padding:8px; font-size:0.78rem; font-weight:bold;" onclick="openSupportReport()">🛠️ Relatório de suportes com IA</button>
         <h3>💾 Backup & Relatórios</h3>
         <p id="backupReminder" style="font-size:0.72rem; color:var(--text-muted); margin:0 0 6px;"></p>
         <button type="button" class="btn-tool" style="background:transparent; color:var(--text-muted); border:1px dashed var(--border); width:100%; margin:0 0 8px; padding:6px; font-size:0.7rem;" onclick="forcarExibicaoClientes()">🔄 Recarregar lista de clientes (só se algo não aparecer)</button>
@@ -1079,6 +1080,7 @@
       <button type="button" class="fab-item-btn" onclick="handleQuickServerClick()">🚀 Abrir Painel</button>
       <button type="button" class="fab-item-btn" onclick="openQuickSearch()">🔎 Buscar Cliente</button>
       <button type="button" id="fabAiReport" class="fab-item-btn" style="display:none;" onclick="openAiReport()">🤖 Análise com IA</button>
+      <button type="button" id="fabSupportReport" class="fab-item-btn" style="display:none;" onclick="openSupportReport()">🛠️ Relatório de Suportes</button>
       <button type="button" class="fab-item-btn" onclick="openQuickCredits()">📦 Adicionar Crédito</button>
       <button type="button" class="fab-item-btn" onclick="openGrowthSimulator()">📈 Simular Crescimento</button>
     </div>
@@ -1111,6 +1113,7 @@
   <script src="./ai-report.js"></script>
   <script src="./whatsnew.js"></script>
   <script src="./push.js"></script>
+  <script src="./support-report.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
