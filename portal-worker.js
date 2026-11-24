@@ -642,7 +642,7 @@ function avisarAjuda(env, ctx, tdoc, client, aparelho, descricao, resultado) {
 
 // Mesma regra das "Ações do Dia" do app
 function resumoDoDono(clientes, hoje) {
-  let atraso = 0, venceHoje = 0, breve = 0, antigos = 0;
+  let atraso = 0, venceHoje = 0, breve = 0, antigos = 0, pendentes = 0;
   for (const c of clientes) {
     if (c.isArchived === true || c.isTrial === true || c.isDeleted === true || !c.dueDate) continue;
     const d = diffDaysFrom(hoje, c.dueDate);
@@ -650,13 +650,15 @@ function resumoDoDono(clientes, hoje) {
     else if (d < 0) atraso++;
     else if (d === 0) venceHoje++;
     else if (d <= 2) breve++;
+    // Ainda não cobrado hoje (o app grava lastChargedAt ao abrir o WhatsApp) e com telefone: entra na fila
+    if (d >= -7 && d <= 2 && c.lastChargedAt !== hoje && String(c.phone || '').replace(/\D/g, '').length >= 8) pendentes++;
   }
   const partes = [];
   if (venceHoje) partes.push(`${venceHoje} vence${venceHoje > 1 ? 'm' : ''} hoje`);
   if (atraso) partes.push(`${atraso} em atraso`);
   if (breve) partes.push(`${breve} vence${breve > 1 ? 'm' : ''} em até 2 dias`);
   if (antigos) partes.push(`${antigos} atrasado${antigos > 1 ? 's' : ''} há mais de 7 dias`);
-  return { total: atraso + venceHoje + breve, partes };
+  return { total: atraso + venceHoje + breve, partes, pendentes };
 }
 
 async function resumoDiario(env) {
@@ -672,16 +674,17 @@ async function resumoDiario(env) {
     try {
       const clientes = await runQuery(env, {
         from: [{ collectionId: 'clients' }],
-        select: { fields: ['dueDate', 'isArchived', 'isTrial', 'isDeleted'].map((f) => ({ fieldPath: f })) },
+        select: { fields: ['dueDate', 'isArchived', 'isTrial', 'isDeleted', 'lastChargedAt', 'phone'].map((f) => ({ fieldPath: f })) },
         where: { fieldFilter: { field: { fieldPath: 'ownerId' }, op: 'EQUAL', value: { stringValue: s.id } } },
       });
       const r = resumoDoDono(clientes, hoje);
       if (!r.partes.length) continue; // nada pendente: não incomoda
       await pushToOwner(env, s.id, s, {
-        title: r.total ? `📋 ${r.total} cobrança${r.total > 1 ? 's' : ''} para hoje` : '📋 Resumo do dia',
-        body: r.partes.join(' · '),
+        // Com cobrança pendente, o toque abre o app direto na fila "Cobrar em sequência"
+        title: r.pendentes ? `💬 ${r.pendentes} cobrança${r.pendentes > 1 ? 's' : ''} para enviar hoje` : (r.total ? `📋 ${r.total} cobrança${r.total > 1 ? 's' : ''} para hoje` : '📋 Resumo do dia'),
+        body: r.partes.join(' · ') + (r.pendentes ? ' — toque para abrir a fila de cobrança' : ''),
         tag: 'resumo-diario',
-        url: './',
+        url: r.pendentes ? './?acao=cobrar' : './',
       });
     } catch (e) { console.warn('resumo', s.id, e && e.message); }
   }
