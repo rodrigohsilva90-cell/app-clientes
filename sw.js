@@ -2,7 +2,7 @@
 // SERVICE WORKER - PWA, CACHE OFFLINE & SAME-ORIGIN SECURITY
 // ============================================================
 
-const CACHE_VERSION = 'v56';
+const CACHE_VERSION = 'v57';
 const CACHE_NAME = `gestao-clientes-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [
@@ -19,6 +19,7 @@ const STATIC_ASSETS = [
   './ai-config.js',
   './ai-report.js',
   './whatsnew.js',
+  './push.js',
   './manifest.json'
 ];
 
@@ -84,4 +85,33 @@ self.addEventListener('fetch', (event) => {
         return caches.match(req, { ignoreSearch: true });
       })
   );
-});
+});
+
+// ============================================================
+// NOTIFICAÇÕES (resumo do dia e pedidos de ajuda do portal)
+// ============================================================
+self.addEventListener('push', (event) => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; } catch (e) { d = { body: event.data ? event.data.text() : '' }; }
+  event.waitUntil(self.registration.showNotification(d.title || 'GestãoPro', {
+    body: d.body || '',
+    icon: './icons/icon-192.png',
+    badge: './icons/icon-192.png',
+    tag: d.tag || undefined,
+    renotify: Boolean(d.tag),
+    data: { url: d.url || './' }
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const alvo = new URL((event.notification.data && event.notification.data.url) || './', self.registration.scope).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((lista) => {
+      for (const c of lista) {
+        if (c.url.startsWith(self.registration.scope) && 'focus' in c) return c.focus();
+      }
+      return self.clients.openWindow(alvo);
+    })
+  );
+});

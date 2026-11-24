@@ -872,6 +872,19 @@
         <button type="button" class="btn-tool" style="background: #dc2626; width: 100%; font-weight: bold; padding: 8px; font-size: 0.78rem;" onclick="contactMasterUpgrade()">⚡ Solicitar Upgrade</button>
       </section>
 
+      <section class="settings-card" id="pushCard">
+        <h3>🔔 Notificações no celular</h3>
+        <p class="settings-card-desc">Receba o resumo das cobranças do dia às 8h e um aviso na hora quando um cliente pedir ajuda no portal.</p>
+        <div id="pushPrefs" style="display: none; margin-bottom: 8px;">
+          <label style="display: flex; gap: 8px; align-items: center; font-size: 0.8rem; margin-bottom: 6px;"><input type="checkbox" id="pushDaily" checked onchange="savePushPrefs()"> Resumo do dia (8h)</label>
+          <label style="display: flex; gap: 8px; align-items: center; font-size: 0.8rem;"><input type="checkbox" id="pushHelp" checked onchange="savePushPrefs()"> Cliente pediu ajuda no portal</label>
+        </div>
+        <button type="button" id="pushBtnOn" class="btn-tool" style="background: #2563eb; width: 100%; font-weight: bold; padding: 8px; font-size: 0.78rem;" onclick="enablePushNotifications()">🔔 Ativar neste aparelho</button>
+        <button type="button" id="pushBtnTest" class="btn-tool" style="display: none; background: #0d9488; width: 100%; font-weight: bold; padding: 8px; font-size: 0.78rem; margin-bottom: 6px;" onclick="sendTestPush()">📨 Enviar teste</button>
+        <button type="button" id="pushBtnOff" class="btn-tool" style="display: none; background: #64748b; width: 100%; font-weight: bold; padding: 8px; font-size: 0.78rem;" onclick="disablePushNotifications()">🔕 Desativar neste aparelho</button>
+        <p id="pushStatus" style="font-size: 0.74rem; margin: 6px 0 0; color: var(--text-muted);"></p>
+      </section>
+
       <section class="settings-card">
         <h3>✨ Novidades</h3>
         <p class="settings-card-desc">Reveja o tour com o que mudou na última atualização.</p>
@@ -1097,6 +1110,7 @@
   <script src="./ai-config.js"></script>
   <script src="./ai-report.js"></script>
   <script src="./whatsnew.js"></script>
+  <script src="./push.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
@@ -1105,4 +1119,4 @@
     }
   </script>
 </body>
-</html>
+</html>
