@@ -39,6 +39,19 @@ export const AppState = {
   entregaAtiva: false   // Trava troca de perfil enquanto motoboy está em rota
 };
 
+// Descobre o modo pela URL logo no início (antes do login responder), para o topo já nascer certo
+const NOMES_MODO = { cliente: 'Modo Cliente', balcao: 'Modo Balcão', motoboy: 'Modo Entregador', master: 'Modo Master' };
+function modoDaUrl() {
+  const partes = window.location.pathname.split('/').filter(Boolean);
+  if (partes[0] === 'master') return 'master';
+  if (partes[1] === 'painel') return 'balcao';
+  if (partes[1] === 'motoboy') return 'motoboy';
+  return 'cliente';
+}
+AppState.modoAtual = modoDaUrl();
+const badgeModo = document.getElementById('topbar-badge');
+if (badgeModo) badgeModo.textContent = NOMES_MODO[AppState.modoAtual];
+
 // 3. Captura parâmetro ?ref= de parceiros comerciais por 30 dias
 function capturarIndicacaoParceiro() {
   const params = new URLSearchParams(window.location.search);
@@ -161,7 +174,7 @@ function configurarAlternadorPerfil(selectEl, profile) {
   const papeis = profile.roles || [profile.role || 'cliente'];
   if (papeis.length <= 1) return;
 
-  selectEl.innerHTML = papeis.map(r => `<option value="${r}">Modo ${r.toUpperCase()}</option>`).join('');
+  selectEl.innerHTML = papeis.map(r => `<option value="${r}">${NOMES_MODO[r] || r}</option>`).join('');
   selectEl.value = AppState.modoAtual;
   selectEl.classList.remove('hidden');
 
