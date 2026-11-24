@@ -1,6 +1,6 @@
 import { db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
-import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
 let wakeLock = null;
@@ -90,8 +90,7 @@ function tocarBipeCampainha() {
 function escutarPedidosEmTempoReal() {
   const q = query(
     collection(db, 'lojas', AppState.lojaId, 'pedidos'),
-    where('status', 'in', ['novo', 'preparo', 'entrega']),
-    orderBy('criadoEm', 'asc')
+    where('status', 'in', ['novo', 'preparo', 'entrega'])
   );
 
   onSnapshot(q, (snapshot) => {
@@ -106,8 +105,11 @@ function escutarPedidosEmTempoReal() {
 
     let temNovoPedido = false;
 
-    snapshot.forEach((docSnap) => {
-      const p = { id: docSnap.id, ...docSnap.data() };
+    // Ordena por chegada aqui no navegador (dispensa índice composto no Firestore)
+    const tempo = (p) => (p.criadoEm?.toMillis ? p.criadoEm.toMillis() : Date.now());
+    const pedidos = snapshot.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => tempo(a) - tempo(b));
+
+    pedidos.forEach((p) => {
       if (p.status === 'novo' && !pedidosConhecidos.has(p.id)) {
         temNovoPedido = true;
       }
