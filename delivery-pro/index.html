@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#ea1d2c" id="meta-theme-color" />
+  <title id="page-title">Delivery Pro — Sistema White-Label</title>
+
+  <!-- Open Graph dinâmico (sobrescrito pelo Cloudflare Worker por loja) -->
+  <meta property="og:title" content="Delivery Pro — Peça Online" />
+  <meta property="og:description" content="Faça seu pedido rápido e acompanhe a entrega ao vivo no mapa." />
+  <meta property="og:type" content="website" />
+
+  <!-- Manifest dinâmico (ajustado pelo router/Worker por slug) -->
+  <link rel="manifest" href="/manifest.webmanifest" id="pwa-manifest" />
+
+  <!-- Leaflet CSS (Mapas OpenStreetMap gratuitos) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+
+  <!-- Estilos Principais -->
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <!-- Barra Superior Global (Alternador de Perfil quando logado com múltiplos papéis) -->
+  <header id="global-topbar" class="topbar hidden">
+    <div class="topbar-brand">
+      <span id="topbar-store-name">Delivery Pro</span>
+      <span id="topbar-badge" class="badge">Modo Cliente</span>
+    </div>
+    <div class="topbar-actions">
+      <select id="profile-switcher" class="profile-select hidden" aria-label="Alternar Perfil"></select>
+      <button id="btn-auth-action" class="btn-outline-sm">Entrar</button>
+    </div>
+  </header>
+
+  <!-- Banner de Atualização do PWA -->
+  <div id="sw-update-banner" class="update-banner hidden">
+    <span>Nova versão disponível!</span>
+    <button id="btn-sw-reload" class="btn-primary-xs">Atualizar agora</button>
+  </div>
+
+  <!-- Área Principal Dinâmica -->
+  <main id="app-root" class="app-container">
+    <div class="loader-screen">
+      <div class="spinner"></div>
+      <p>Carregando sistema...</p>
+    </div>
+  </main>
+
+  <!-- Toast de Notificações Rápidas -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+  <!-- Inicialização Modular (ES Modules) -->
+  <script type="module" src="/js/router.js"></script>
+</body>
+</html>
