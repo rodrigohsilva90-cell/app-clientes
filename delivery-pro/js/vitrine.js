@@ -1,4 +1,4 @@
-import { db, formatarCentavos, showToast, WORKER_API_URL } from './config.js';
+import { db, formatarCentavos, showToast, esc, WORKER_API_URL } from './config.js';
 import { AppState } from './router.js';
 import { montarItem } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes } from './acompanhar.js';
@@ -27,14 +27,24 @@ export async function iniciarVitrine() {
   const modoLayout = loja.layoutVitrine || 'gastronomia'; // 'gastronomia' | 'varejo'
   const tempoEstimado = loja.tempoEstimado || '30-45 min';
 
+  const urlSegura = (u) => (typeof u === 'string' && /^https:\/\//i.test(u) ? esc(u) : '');
+  const banner = urlSegura(loja.bannerUrl);
+  const logo = urlSegura(loja.logoUrl);
+  const iniciais = esc((loja.nome || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase());
+  const chips = [
+    loja.taxaEntregaTexto ? `🛵 ${esc(loja.taxaEntregaTexto)}` : '',
+    `⏱️ ${esc(tempoEstimado)}`,
+    loja.pedidoMinimoCentavos ? `💲 Mín. ${formatarCentavos(loja.pedidoMinimoCentavos)}` : ''
+  ].filter(Boolean);
+
   root.innerHTML = `
-    <div class="card" style="border-left: 5px solid var(--primary);">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-        <div>
-          <h2>${loja.nome}</h2>
-          <p style="color: var(--text-muted); font-size: 14px;">⏱️ Tempo estimado: <strong>${tempoEstimado}</strong></p>
-        </div>
-        <span class="badge" style="background:#dcfce7; color:#166534;">● Aberto agora</span>
+    <section class="vt-capa" style="${banner ? `background-image:url('${banner}');` : ''}"></section>
+    <div class="vt-loja">
+      <div class="vt-logo">${logo ? `<img src="${logo}" alt="" />` : `<span>${iniciais}</span>`}</div>
+      <div class="vt-loja-info">
+        <h1>${esc(loja.nome)}</h1>
+        <span class="vt-aberto">● Aberto</span>
+        <div class="vt-chips">${chips.map(c => `<span class="vt-chip">${c}</span>`).join('')}</div>
       </div>
     </div>
 
@@ -45,10 +55,15 @@ export async function iniciarVitrine() {
       </a>
     `).join('')}
 
+    <div class="vt-barra" id="vt-barra">
+      <nav class="vt-abas" id="vt-abas"></nav>
+      <input class="vt-busca" id="vt-busca" type="search" placeholder="🔍 Buscar no cardápio" />
+    </div>
+
     <div id="lista-categorias"></div>
 
     <!-- Barra Flutuante do Carrinho -->
-    <div id="barra-carrinho" class="card hidden" style="position:sticky; bottom:12px; background:var(--primary); color:#fff; display:flex; justify-content:space-between; align-items:center; cursor:pointer; z-index:800;">
+    <div id="barra-carrinho" class="vt-carrinho hidden">
       <span id="carrinho-resumo">0 itens</span>
       <strong id="carrinho-total">R$ 0,00 — Ver Sacola</strong>
     </div>
@@ -70,49 +85,71 @@ export async function iniciarVitrine() {
   document.getElementById('barra-carrinho').onclick = () => abrirModalCheckout();
 }
 
+// Menor preço possível do produto (para mostrar "A partir de")
+function precoMinimo(prod) {
+  let total = Number(prod.precoCentavos) || 0;
+  for (const grp of prod.grupos || []) {
+    const minimo = grp.minimo || 0;
+    const precos = (grp.opcoes || []).map(o => Number(o.precoCentavos) || 0).sort((a, b) => a - b);
+    if (!minimo || !precos.length) continue;
+    total += grp.regraDePreco === 'SOMA' || !grp.regraDePreco
+      ? precos.slice(0, minimo).reduce((a, b) => a + b, 0)
+      : precos[0];
+  }
+  return total;
+}
+
 function renderizarProdutos(dados, modoLayout) {
   const container = document.getElementById('lista-categorias');
+  const abas = document.getElementById('vt-abas');
   const { categorias = [], produtos = [] } = dados;
+  const ativos = produtos.filter(p => !p.excluido);
 
-  if (!produtos.length) {
+  if (!ativos.length) {
     container.innerHTML = `<div class="card"><p>Nenhum produto cadastrado nesta vitrine ainda.</p></div>`;
+    document.getElementById('vt-barra').classList.add('hidden');
     return;
   }
 
-  container.innerHTML = categorias.map(cat => {
-    const itensCat = produtos.filter(p => p.categoriaId === cat.id && !p.excluido);
-    if (!itensCat.length) return '';
+  const idsCategorias = new Set(categorias.map(c => c.id));
+  const secoes = [
+    ...categorias.map(c => ({ id: c.id, nome: c.nome, itens: ativos.filter(p => p.categoriaId === c.id) })),
+    { id: '_outros', nome: 'Outros', itens: ativos.filter(p => !idsCategorias.has(p.categoriaId)) }
+  ].filter(s => s.itens.length);
 
-    const gridStyle = modoLayout === 'varejo'
-      ? 'display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:12px;'
-      : 'display:flex; flex-direction:column; gap:10px;';
+  const urlSegura = (u) => (typeof u === 'string' && /^https:\/\//i.test(u) ? esc(u) : '');
 
-    return `
-      <h3 style="margin: 16px 0 8px;">${cat.nome}</h3>
-      <div style="${gridStyle}">
-        ${itensCat.map(prod => {
+  abas.innerHTML = secoes.map((s, i) => `<button class="vt-aba${i === 0 ? ' ativa' : ''}" data-alvo="sec-${esc(s.id)}">${esc(s.nome)}</button>`).join('');
+
+  container.innerHTML = secoes.map(s => `
+    <section class="vt-secao" id="sec-${esc(s.id)}">
+      <h2 class="vt-secao-titulo">${esc(s.nome)}</h2>
+      <div class="vt-grade">
+        ${s.itens.map(prod => {
           const esgotado = prod.controlarEstoque && (prod.estoque <= 0);
+          const temOpcoes = prod.grupos && prod.grupos.length;
+          const foto = urlSegura(prod.imagemUrl);
+          const preco = temOpcoes ? precoMinimo(prod) : Number(prod.precoCentavos) || 0;
           return `
-            <div class="card" style="margin-bottom:0; display:flex; justify-content:space-between; align-items:center; gap:12px; opacity:${esgotado ? '0.55' : '1'};">
-              <div style="flex:1;">
-                <strong>${prod.nome}</strong>
-                <p style="font-size:13px; color:var(--text-muted); margin:4px 0;">${prod.descricao || ''}</p>
-                <span style="font-weight:700; color:var(--primary);">${formatarCentavos(prod.precoCentavos)}</span>
-                ${esgotado ? '<span class="badge" style="margin-left:6px;">Esgotado</span>' : ''}
+            <button class="vt-produto${esgotado ? ' esgotado' : ''}" data-prod-id="${esc(prod.id)}" data-busca="${esc(`${prod.nome} ${prod.descricao || ''}`.toLowerCase())}" ${esgotado ? 'disabled' : ''}>
+              <div class="vt-foto">${foto ? `<img src="${foto}" alt="" loading="lazy" />` : '<span>🍽️</span>'}</div>
+              <div class="vt-produto-info">
+                <strong>${esc(prod.nome)}</strong>
+                ${prod.descricao ? `<p>${esc(prod.descricao)}</p>` : ''}
+                <span class="vt-preco">${esgotado ? 'Esgotado' : `${temOpcoes ? '<small>A partir de</small> ' : ''}${formatarCentavos(preco)}`}</span>
               </div>
-              <button class="btn-outline-sm" ${esgotado ? 'disabled' : ''} data-prod-id="${prod.id}">
-                ${modoLayout === 'varejo' && (!prod.grupos || !prod.grupos.length) ? '+ Adicionar' : 'Escolher'}
-              </button>
-            </div>
+              ${esgotado ? '' : '<span class="vt-mais">+</span>'}
+            </button>
           `;
         }).join('')}
       </div>
-    `;
-  }).join('');
+    </section>
+  `).join('') + '<p class="vt-vazio hidden" id="vt-vazio">Nenhum produto encontrado.</p>';
 
-  container.querySelectorAll('button[data-prod-id]').forEach(btn => {
+  // Toque no produto: adiciona direto ou abre as opções
+  container.querySelectorAll('[data-prod-id]').forEach(btn => {
     btn.onclick = () => {
-      const prod = produtos.find(p => p.id === btn.dataset.prodId);
+      const prod = ativos.find(p => p.id === btn.dataset.prodId);
       if (!prod) return;
       if (!prod.grupos || prod.grupos.length === 0) {
         adicionarAoCarrinho({
@@ -127,6 +164,57 @@ function renderizarProdutos(dados, modoLayout) {
       }
     };
   });
+
+  // Barra de categorias gruda logo abaixo do topo, qualquer que seja a altura dele
+  const topo = document.getElementById('global-topbar');
+  document.getElementById('vt-barra').style.top = `${topo && !topo.classList.contains('hidden') ? topo.offsetHeight : 0}px`;
+
+  // Abas: rolar até a categoria
+  const alturaFixa = () => (document.getElementById('global-topbar')?.offsetHeight || 0) + document.getElementById('vt-barra').offsetHeight + 8;
+  let travadoAte = 0; // após tocar numa aba, ela fica marcada enquanto a página rola
+  abas.querySelectorAll('[data-alvo]').forEach(aba => {
+    aba.onclick = () => {
+      travadoAte = Date.now() + 1000;
+      abas.querySelectorAll('.vt-aba').forEach(a => a.classList.toggle('ativa', a === aba));
+      const alvo = document.getElementById(aba.dataset.alvo);
+      if (alvo) window.scrollTo({ top: alvo.getBoundingClientRect().top + window.scrollY - alturaFixa(), behavior: 'smooth' });
+    };
+  });
+
+  // Marca a aba da categoria que está na tela
+  const marcarAba = () => {
+    if (Date.now() < travadoAte) return;
+    let atual = secoes[0] && `sec-${secoes[0].id}`;
+    for (const s of container.querySelectorAll('.vt-secao:not(.hidden)')) {
+      if (s.getBoundingClientRect().top - alturaFixa() <= 20) atual = s.id;
+    }
+    // No fim da página, a última categoria fica marcada mesmo sem chegar ao topo
+    const visiveis = container.querySelectorAll('.vt-secao:not(.hidden)');
+    if (visiveis.length && window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) atual = visiveis[visiveis.length - 1].id;
+    abas.querySelectorAll('.vt-aba').forEach(a => {
+      const ativa = a.dataset.alvo === atual;
+      a.classList.toggle('ativa', ativa);
+      if (ativa && abas.scrollWidth > abas.clientWidth) abas.scrollTo({ left: a.offsetLeft - 16, behavior: 'smooth' });
+    });
+  };
+  window.addEventListener('scroll', () => requestAnimationFrame(marcarAba), { passive: true });
+
+  // Busca no cardápio
+  document.getElementById('vt-busca').oninput = (e) => {
+    const termo = e.target.value.trim().toLowerCase();
+    let algum = false;
+    container.querySelectorAll('.vt-secao').forEach(sec => {
+      let visiveis = 0;
+      sec.querySelectorAll('[data-busca]').forEach(card => {
+        const mostra = !termo || card.dataset.busca.includes(termo);
+        card.classList.toggle('hidden', !mostra);
+        if (mostra) visiveis++;
+      });
+      sec.classList.toggle('hidden', !visiveis);
+      if (visiveis) algum = true;
+    });
+    document.getElementById('vt-vazio').classList.toggle('hidden', algum);
+  };
 }
 
 function abrirModalProduto(prod) {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'delivery-pro-v7';
+const CACHE_NAME = 'delivery-pro-v8';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
