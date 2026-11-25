@@ -1,6 +1,7 @@
 import { db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { montarItem } from './cardapio.js';
+import { abrirGestaoCardapio } from './gestao-cardapio.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
@@ -21,6 +22,7 @@ export function iniciarBalcao() {
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button id="btn-ativar-caixa" class="btn-primary" style="width:auto;">🔊 Abrir Caixa e Ativar Campainha</button>
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
+        <button id="btn-gerenciar-cardapio" class="btn-outline-sm">🍕 Gerenciar cardápio</button>
         <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
       </div>
     </div>
@@ -48,6 +50,7 @@ export function iniciarBalcao() {
   document.getElementById('btn-ativar-caixa').onclick = ativarSomEWakeLock;
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
   document.getElementById('btn-cardapio-exemplo').onclick = criarCardapioExemplo;
+  document.getElementById('btn-gerenciar-cardapio').onclick = abrirGestaoCardapio;
 
   escutarPedidosEmTempoReal();
 }

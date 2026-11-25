@@ -141,3 +141,49 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   .vt-grade { grid-template-columns: 1fr; }
   .vt-foto { width: 96px; height: 96px; }
 }
+
+/* ===== Gerenciador de cardápio (painel) ===== */
+.gc-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 12px; }
+.gc-janela { background: var(--surface); border-radius: 14px; width: min(1100px, 100%); height: min(92vh, 900px); display: flex; flex-direction: column; overflow: hidden; }
+.gc-topo { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.gc-status { font-size: 13px; color: var(--warning); font-weight: 600; }
+.gc-corpo { flex: 1; display: grid; grid-template-columns: 320px 1fr; min-height: 0; }
+.gc-lista { border-right: 1px solid var(--border); overflow-y: auto; padding: 12px; background: var(--bg); }
+.gc-editor { overflow-y: auto; padding: 16px; }
+.gc-largo { width: 100%; margin-bottom: 10px; }
+.gc-cat { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px; margin-bottom: 10px; }
+.gc-cat-topo { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 4px; }
+.gc-acoes { display: inline-flex; gap: 2px; flex-shrink: 0; }
+.gc-acoes button { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; cursor: pointer; font-size: 12px; }
+.gc-item { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+.gc-item:hover { background: var(--bg); }
+.gc-item.ativo { background: #fee2e2; outline: 2px solid var(--primary); }
+.gc-item-nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-item-nome em { color: var(--danger); font-style: normal; font-size: 12px; }
+.gc-add-prod { background: none; border: 1px dashed var(--border); border-radius: 8px; width: 100%; padding: 6px; margin-top: 4px; cursor: pointer; color: var(--primary); font-weight: 600; }
+.gc-vazio { height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; gap: 8px; color: var(--text-muted); }
+.gc-dica { font-size: 12px; color: var(--text-muted); margin: 4px 0 8px; }
+.gc-form label { display: block; font-size: 13px; font-weight: 600; margin-top: 10px; }
+.gc-form input:not([type="checkbox"]), .gc-form textarea, .gc-form select { width: 100%; padding: 9px; margin-top: 4px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-family: inherit; }
+.gc-linha { display: flex; gap: 10px; }
+.gc-linha > div { flex: 1; min-width: 0; }
+.gc-foto-linha { display: flex; gap: 10px; align-items: center; }
+.gc-foto { width: 64px; height: 64px; border-radius: 8px; background: var(--bg); overflow: hidden; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 26px; margin-top: 4px; }
+.gc-foto img { width: 100%; height: 100%; object-fit: cover; }
+.gc-check { display: flex !important; align-items: center; gap: 8px; font-weight: 500 !important; margin-top: 14px !important; cursor: pointer; }
+.gc-subtitulo { margin: 20px 0 8px; }
+.gc-subtitulo small { font-weight: 400; color: var(--text-muted); }
+.gc-grupo { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--bg); }
+.gc-opcoes { margin: 8px 0; }
+.gc-opcao { display: grid; grid-template-columns: 1fr 100px auto; gap: 6px; align-items: center; margin-bottom: 4px; }
+.gc-opcao input { margin-top: 0 !important; }
+.gc-perigo { color: var(--danger); border-color: var(--danger); }
+.gc-rodape { display: flex; gap: 8px; justify-content: space-between; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+@media (max-width: 760px) {
+  .gc-overlay { padding: 0; }
+  .gc-janela { height: 100%; border-radius: 0; }
+  .gc-corpo { grid-template-columns: 1fr; grid-template-rows: 40% 60%; }
+  .gc-lista { border-right: none; border-bottom: 1px solid var(--border); }
+  .gc-linha { flex-wrap: wrap; }
+}

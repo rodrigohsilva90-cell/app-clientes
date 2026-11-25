@@ -1,4 +1,4 @@
-const CACHE_NAME = 'delivery-pro-v8';
+const CACHE_NAME = 'delivery-pro-v9';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -10,7 +10,8 @@ const STATIC_ASSETS = [
   '/js/geo.js',
   '/js/motoboy.js',
   '/js/cardapio.js',
-  '/js/acompanhar.js'
+  '/js/acompanhar.js',
+  '/js/gestao-cardapio.js'
 ];
 
 self.addEventListener('install', (event) => {
