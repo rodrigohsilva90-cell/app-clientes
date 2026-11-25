@@ -378,3 +378,5 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .pix-ok span { font-size: 14px; color: var(--text-muted); }
 .pix-passos { margin: 8px 0 0 18px; font-size: 14px; display: flex; flex-direction: column; gap: 8px; }
 .pago-ok { color: var(--success); }
+.ass-escolha { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 14px; margin-bottom: 8px; font-size: 15px; }
+.ass-escolha span { color: var(--text-muted); }

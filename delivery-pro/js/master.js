@@ -183,9 +183,16 @@ async function abrirConfig() {
       <label>Comissão média dos apps de delivery (%) — usada no cálculo de economia</label>
       <input name="pct" inputmode="numeric" value="${Number(cfg.comissaoMarketplacePct) || 20}" />
       <button class="btn-primary" type="submit" style="margin-top:12px;">💾 Salvar</button>
+
+      <h4 class="gc-subtitulo">💳 Receber mensalidades por Pix (Mercado Pago)</h4>
+      <div id="ms-mp"><p class="gc-dica">Carregando...</p></div>
+      <h4 class="gc-subtitulo">Últimos pagamentos de mensalidade</h4>
+      <div id="ms-cobrancas"><p class="gc-dica">Carregando...</p></div>
     </form>`;
   document.body.appendChild(overlay);
   overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  desenharMercadoPago(overlay.querySelector('#ms-mp'));
+  desenharCobrancas(overlay.querySelector('#ms-cobrancas'));
   overlay.querySelector('form').onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -200,4 +207,46 @@ async function abrirConfig() {
     try { await api({ acao: 'salvarConfig', config: dados }); showToast('Configurações salvas!'); overlay.remove(); }
     catch (err) { showToast(err.message); }
   };
+}
+
+// Conta Mercado Pago do dono do SaaS: recebe as mensalidades e libera os dias sozinho
+async function desenharMercadoPago(box) {
+  let st = { conectado: false };
+  try { st = await api({ acao: 'mpStatus' }); } catch (_) {}
+  if (st.conectado) {
+    box.innerHTML = `
+      <div class="pix-ok">✅ <strong>Cobrança automática ligada</strong><span>Conta: ${esc(st.conta || 'Mercado Pago')}</span></div>
+      <p class="gc-dica">As lojas veem "Pagar com Pix" na faixa do teste, 5 dias antes de vencer e na tela de bloqueio. Pagou → +30 dias liberados na hora.</p>
+      <button class="btn-outline-sm gc-perigo" type="button" id="ms-mp-desligar">Desligar</button>`;
+    box.querySelector('#ms-mp-desligar').onclick = async () => {
+      if (!confirm('Desligar a cobrança automática? As lojas voltam a ver o botão do WhatsApp.')) return;
+      try { await api({ acao: 'mpDesligar' }); showToast('Desligado.'); desenharMercadoPago(box); } catch (err) { showToast(err.message); }
+    };
+    return;
+  }
+  box.innerHTML = `
+    <p class="gc-dica">Cole o <strong>Access Token de produção</strong> da SUA conta Mercado Pago (mercadopago.com.br/developers → Suas integrações → Criar aplicação → Credenciais de produção). Começa com <code>APP_USR-</code>.</p>
+    <input id="ms-mp-token" type="password" autocomplete="off" placeholder="APP_USR-..." />
+    <button class="btn-outline-sm" type="button" id="ms-mp-salvar" style="margin-top:8px;">Conectar Mercado Pago</button>`;
+  box.querySelector('#ms-mp-salvar').onclick = async (e) => {
+    const btn = e.currentTarget;
+    const token = box.querySelector('#ms-mp-token').value.trim();
+    if (!token) return showToast('Cole o Access Token.');
+    btn.disabled = true;
+    try { const r = await api({ acao: 'mpSalvar', token }); showToast(`Conectado: ${r.conta}`); desenharMercadoPago(box); }
+    catch (err) { showToast(err.message, 6000); btn.disabled = false; }
+  };
+}
+
+async function desenharCobrancas(box) {
+  try {
+    const { cobrancas = [] } = await api({ acao: 'cobrancas' });
+    const rotulo = { aprovado: '✅ pago', pendente: '⏳ aguardando', expirado: '⌛ expirou' };
+    box.innerHTML = cobrancas.length ? cobrancas.slice(0, 20).map(c => `
+      <div class="av-linha">
+        <span>${esc(c.lojaNome || c.lojaId)} · ${c.plano === 'pro' ? 'Pro' : 'Essencial'}</span>
+        <span>${formatarCentavos(c.valorCentavos)}</span>
+        <small>${rotulo[c.status] || esc(c.status)} ${c.pagoEm || c.criadoEm ? new Date(c.pagoEm || c.criadoEm).toLocaleDateString('pt-BR') : ''}</small>
+      </div>`).join('') : '<p class="gc-dica">Nenhum pagamento ainda.</p>';
+  } catch (_) { box.innerHTML = '<p class="gc-dica">Não foi possível carregar.</p>'; }
 }

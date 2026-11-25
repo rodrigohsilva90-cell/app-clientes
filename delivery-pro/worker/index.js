@@ -64,6 +64,12 @@ export default {
       if (url.pathname === '/api/mp/webhook' && request.method === 'POST') {
         return webhookMercadoPago(request, env, url);
       }
+      if (url.pathname === '/api/mp/webhook-saas' && request.method === 'POST') {
+        return webhookSaas(request, env, url);
+      }
+      if (url.pathname === '/api/assinatura' && request.method === 'POST') {
+        return pagarAssinatura(request, env);
+      }
       if (url.pathname === '/api/mp/verificar' && request.method === 'POST') {
         return verificarPix(request, env);
       }
@@ -473,6 +479,136 @@ async function verificarPix(request, env) {
   }
 }
 
+// Confere o Access Token direto no Mercado Pago antes de guardar
+async function validarTokenMP(bruto) {
+  const token = String(bruto || '').trim();
+  if (!/^APP_USR-[A-Za-z0-9-]{20,200}$/.test(token)) {
+    throw new ErroPedido(/^TEST-/.test(token) ? 'Esse é o token de TESTE. Use o "Access Token" de PRODUÇÃO (começa com APP_USR-).' : 'Token inválido. Copie o "Access Token" de produção (começa com APP_USR-).');
+  }
+  let eu;
+  try { eu = await chamarMP(token, '/users/me'); }
+  catch (_) { throw new ErroPedido('O Mercado Pago não aceitou esse token. Confira se copiou o Access Token de produção inteiro.'); }
+  return { token, conta: String(eu.nickname || eu.email || eu.id || 'conta Mercado Pago').slice(0, 80), mpUserId: String(eu.id || '') };
+}
+
+// =====================================================================
+// MENSALIDADES DAS LOJAS (Pix no Mercado Pago do dono do SaaS).
+// O dono da loja paga pelo painel; quando o Mercado Pago confirma, a
+// assinatura ganha +30 dias (somando ao que ainda falta, se renovar antes).
+// cobrancasSaas/{mpId} = cobrança criada; assinaturasPagas/{mpId} = já
+// aplicada (garante que um pagamento nunca vale duas vezes).
+// =====================================================================
+const DIAS_POR_PAGAMENTO = 30;
+async function tokenDoSaas(env, fs) {
+  const seg = await fs.ler('config/mercadopago');
+  if (!seg || !seg.token) throw new ErroPedido('Pagamento online ainda não disponível. Fale com o suporte pelo WhatsApp.', 503);
+  return decifrarTexto(env, seg.token);
+}
+
+async function pagarAssinatura(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT || !env.MP_CHAVE) throw new ErroPedido('Indisponível no momento.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const { fs } = await usuarioDaEquipe(request, env, lojaId, ['dono']);
+    const tokenSaas = await tokenDoSaas(env, fs);
+
+    if (corpo.acao === 'verificar') {
+      const mpId = String(corpo.mpId || '');
+      if (!/^\d{3,30}$/.test(mpId)) throw new ErroPedido('Cobrança inválida.');
+      const cob = await fs.ler(`cobrancasSaas/${mpId}`);
+      if (!cob || cob.lojaId !== lojaId) throw new ErroPedido('Cobrança não encontrada.', 404);
+      return jsonResponse(await aplicarPagamentoSaas(env, fs, mpId, tokenSaas));
+    }
+
+    const plano = ['essencial', 'pro'].includes(corpo.plano) ? corpo.plano : null;
+    if (!plano) throw new ErroPedido('Escolha o plano.');
+    const [cfg, loja] = await Promise.all([fs.ler('config/saas'), fs.ler(`lojas/${lojaId}`)]);
+    const valorCentavos = Number(plano === 'pro' ? cfg && cfg.precoProCentavos : cfg && cfg.precoEssencialCentavos) || 0;
+    if (valorCentavos < 100) throw new ErroPedido('O preço deste plano ainda não foi definido. Fale com o suporte.');
+    if (!loja) throw new ErroPedido('Loja não encontrada.', 404);
+    const usuarioEmail = await emailDoUsuario(request, env);
+    const ref = `assinatura:${lojaId}:${plano}:${crypto.randomUUID()}`;
+    const origem = new URL(request.url).origin;
+    const pag = await chamarMP(tokenSaas, '/v1/payments', {
+      method: 'POST',
+      headers: { 'X-Idempotency-Key': ref },
+      body: JSON.stringify({
+        transaction_amount: valorCentavos / 100,
+        description: `Delivery Pro - plano ${plano === 'pro' ? 'Pro' : 'Essencial'} (30 dias) - ${String(loja.nome || lojaId).slice(0, 50)}`,
+        payment_method_id: 'pix',
+        payer: { email: usuarioEmail || `loja-${lojaId.toLowerCase()}@pagamento.delivery-pro.app` },
+        external_reference: ref,
+        notification_url: `${origem}/api/mp/webhook-saas`,
+        date_of_expiration: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().replace('Z', '-00:00')
+      })
+    });
+    const dados = pag.point_of_interaction && pag.point_of_interaction.transaction_data;
+    if (!dados || !dados.qr_code) throw new Error('MP sem QR Code');
+    const mpId = String(pag.id);
+    await fs.gravarJuntos([{ caminho: `cobrancasSaas/${mpId}`, dados: { lojaId, lojaNome: loja.nome || null, plano, valorCentavos, ref, status: 'pendente', criadoEm: new Date() } }]);
+    return jsonResponse({ mpId, qrCode: dados.qr_code, qrBase64: dados.qr_code_base64 || null, valorCentavos, plano });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('pagarAssinatura', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível gerar o Pix agora. Tente de novo em instantes.' }, 500);
+  }
+}
+
+async function emailDoUsuario(request, env) {
+  try {
+    const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    const t = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    const u = await verificarTokenFirebase(t, conta.project_id);
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(u.email || '') ? u.email : null;
+  } catch (_) { return null; }
+}
+
+// Confere no Mercado Pago e, se pago (valor certo), estende a assinatura UMA vez
+async function aplicarPagamentoSaas(env, fs, mpId, tokenSaas) {
+  const pag = await chamarMP(tokenSaas || await tokenDoSaas(env, fs), `/v1/payments/${encodeURIComponent(mpId)}`);
+  const cob = await fs.ler(`cobrancasSaas/${mpId}`);
+  if (!cob || pag.external_reference !== cob.ref) return { ignorado: true };
+  if (cob.status === 'aprovado') return { pago: true, jaAplicado: true };
+  const valorOk = Math.round(Number(pag.transaction_amount) * 100) === Math.round(Number(cob.valorCentavos));
+  if (pag.status === 'approved' && valorOk) {
+    const primeira = await fs.criarSeNaoExiste(`assinaturasPagas/${mpId}`, { lojaId: cob.lojaId, plano: cob.plano, valorCentavos: cob.valorCentavos }, ['aplicadoEm']);
+    if (primeira) {
+      const loja = await fs.ler(`lojas/${cob.lojaId}`);
+      const agora = Date.now();
+      const base = Math.max(agora, (loja && loja.plano === cob.plano && emMs(loja.pagoAte)) || 0);
+      await fs.atualizar(`lojas/${cob.lojaId}`, { plano: cob.plano, pagoAte: new Date(base + DIAS_POR_PAGAMENTO * DIA_MS) });
+      cacheLojas.clear();
+    }
+    await fs.atualizar(`cobrancasSaas/${mpId}`, { status: 'aprovado', pagoEm: new Date() });
+    return { pago: true };
+  }
+  if (['cancelled', 'rejected', 'expired'].includes(pag.status)) {
+    await fs.atualizar(`cobrancasSaas/${mpId}`, { status: 'expirado' });
+    return { pago: false, status: 'expirado' };
+  }
+  return { pago: false, status: 'pendente' };
+}
+
+async function webhookSaas(request, env, url) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT || !env.MP_CHAVE) return new Response('ok');
+    let corpo = {};
+    try { corpo = await request.json(); } catch (_) {}
+    const tipo = corpo.type || corpo.topic || url.searchParams.get('type') || url.searchParams.get('topic');
+    const mpId = String((corpo.data && corpo.data.id) || url.searchParams.get('data.id') || url.searchParams.get('id') || '');
+    if (tipo !== 'payment' || !/^\d{3,30}$/.test(mpId)) return new Response('ok');
+    const fs = await firestore(env);
+    await aplicarPagamentoSaas(env, fs, mpId);
+    return new Response('ok');
+  } catch (err) {
+    if (err instanceof ErroPedido) return new Response('ok');
+    console.error('webhookSaas', err && err.stack || err);
+    return new Response('erro', { status: 500 });
+  }
+}
+
 // Painel do dono: conectar / ver / desligar o Mercado Pago da loja
 async function configMercadoPago(request, env) {
   try {
@@ -493,15 +629,8 @@ async function configMercadoPago(request, env) {
       return jsonResponse({ ok: true });
     }
     if (corpo.acao === 'salvar') {
-      const token = String(corpo.token || '').trim();
-      if (!/^APP_USR-[A-Za-z0-9-]{20,200}$/.test(token)) {
-        throw new ErroPedido(/^TEST-/.test(token) ? 'Esse é o token de TESTE. Use o "Access Token" de PRODUÇÃO (começa com APP_USR-).' : 'Token inválido. Copie o "Access Token" de produção (começa com APP_USR-).');
-      }
-      let eu;
-      try { eu = await chamarMP(token, '/users/me'); }
-      catch (_) { throw new ErroPedido('O Mercado Pago não aceitou esse token. Confira se copiou o Access Token de produção inteiro.'); }
-      const conta = String(eu.nickname || eu.email || eu.id || 'conta Mercado Pago').slice(0, 80);
-      await fs.gravarJuntos([{ caminho: caminhoSeg, dados: { token: await cifrarTexto(env, token), conta, mpUserId: String(eu.id || ''), atualizadoEm: new Date() } }]);
+      const { token, conta, mpUserId } = await validarTokenMP(corpo.token);
+      await fs.gravarJuntos([{ caminho: caminhoSeg, dados: { token: await cifrarTexto(env, token), conta, mpUserId, atualizadoEm: new Date() } }]);
       await fs.atualizar(`lojas/${lojaId}`, { pixOnline: true });
       cacheLojas.clear();
       return jsonResponse({ ok: true, conta });
@@ -1487,13 +1616,15 @@ async function configSaasPublica(env) {
   let dados = {};
   try {
     if (env.FIREBASE_SERVICE_ACCOUNT) {
-      const c = await (await firestore(env)).ler('config/saas');
+      const fsCfg = await firestore(env);
+      const [c, mp] = await Promise.all([fsCfg.ler('config/saas'), fsCfg.ler('config/mercadopago')]);
       if (c) dados = {
         whatsappSuporte: c.whatsappSuporte || null,
         precoEssencialCentavos: Number(c.precoEssencialCentavos) || null,
         precoProCentavos: Number(c.precoProCentavos) || null,
         comissaoMarketplacePct: Number(c.comissaoMarketplacePct) || 20
       };
+      dados.pagamentoOnline = Boolean(mp && mp.token && env.MP_CHAVE);
     }
   } catch (err) { console.error('configSaas', err && err.message); }
   configSaasCache = { dados, expira: Date.now() + 300000 };
@@ -1567,6 +1698,28 @@ async function painelMaster(request, env) {
       await fs.atualizar(`lojas/${lojaId}`, dados);
       cacheLojas.clear();
       return jsonResponse({ ok: true, loja: { plano, trialAte: dados.trialAte ? dados.trialAte.toISOString() : loja.trialAte || null, pagoAte: dados.pagoAte ? dados.pagoAte.toISOString() : loja.pagoAte || null } });
+    }
+
+    // Mercado Pago do DONO do SaaS (recebe as mensalidades das lojas)
+    if (corpo.acao === 'mpStatus') {
+      const seg = await fs.ler('config/mercadopago');
+      return jsonResponse({ conectado: Boolean(seg && seg.token), conta: (seg && seg.conta) || null });
+    }
+    if (corpo.acao === 'mpDesligar') {
+      await fs.apagar(['config/mercadopago']);
+      configSaasCache = { dados: null, expira: 0 };
+      return jsonResponse({ ok: true });
+    }
+    if (corpo.acao === 'mpSalvar') {
+      if (!env.MP_CHAVE) throw new ErroPedido('Indisponível no momento.', 503);
+      const { token, conta, mpUserId } = await validarTokenMP(corpo.token);
+      await fs.gravarJuntos([{ caminho: 'config/mercadopago', dados: { token: await cifrarTexto(env, token), conta, mpUserId, atualizadoEm: new Date() } }]);
+      configSaasCache = { dados: null, expira: 0 };
+      return jsonResponse({ ok: true, conta });
+    }
+    if (corpo.acao === 'cobrancas') {
+      const lista = (await fs.listar('cobrancasSaas')).sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || ''))).slice(0, 50);
+      return jsonResponse({ cobrancas: lista.map(c => ({ id: c.id, lojaId: c.lojaId, lojaNome: c.lojaNome || null, plano: c.plano, valorCentavos: c.valorCentavos, status: c.status, criadoEm: c.criadoEm || null, pagoEm: c.pagoEm || null })) });
     }
 
     if (corpo.acao === 'lerConfig') {
