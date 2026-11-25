@@ -261,3 +261,10 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   .hr-nome { width: auto; padding-top: 0; }
   .hr-faixas { width: 100%; min-width: 0; }
 }
+
+/* ===== Aparência (prévia do WhatsApp) ===== */
+.ap-previa { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #e7f6e9; margin-bottom: 6px; }
+.ap-img { height: 140px; background: center / cover no-repeat; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 56px; font-weight: 800; }
+.ap-txt { padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; background: #f0f2f5; }
+.ap-txt span { color: var(--text-muted); }
+.ap-txt small { color: var(--text-muted); font-size: 11px; }

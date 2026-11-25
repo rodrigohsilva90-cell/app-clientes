@@ -8,6 +8,7 @@ import { iniciarKds } from './kds.js';
 import { abrirEquipe } from './equipe.js';
 import { situacaoLoja } from './horario.js';
 import { abrirConfigHorarios } from './config-horarios.js';
+import { abrirConfigAparencia } from './config-aparencia.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
@@ -54,6 +55,7 @@ export async function iniciarBalcao() {
           <button id="btn-config-entrega" class="btn-outline-sm">🛵 Entrega e frete</button>
           <button id="btn-equipe" class="btn-outline-sm">👥 Equipe</button>
           <button id="btn-horarios" class="btn-outline-sm">🕒 Horários</button>
+          <button id="btn-aparencia" class="btn-outline-sm">🎨 Aparência</button>
           <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
         ` : ''}
       </div>
@@ -87,6 +89,7 @@ export async function iniciarBalcao() {
     document.getElementById('btn-config-entrega').onclick = abrirConfigEntrega;
     document.getElementById('btn-equipe').onclick = abrirEquipe;
     document.getElementById('btn-horarios').onclick = abrirConfigHorarios;
+    document.getElementById('btn-aparencia').onclick = abrirConfigAparencia;
   }
 
   document.getElementById('btn-pausa').onclick = () => pausarPedidos(!estadoCaixa.pausada);

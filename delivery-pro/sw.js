@@ -1,4 +1,4 @@
-const CACHE_NAME = 'delivery-pro-v15';
+const CACHE_NAME = 'delivery-pro-v16';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -19,7 +19,8 @@ const STATIC_ASSETS = [
   '/js/cadastro.js',
   '/js/equipe.js',
   '/js/horario.js',
-  '/js/config-horarios.js'
+  '/js/config-horarios.js',
+  '/js/config-aparencia.js'
 ];
 
 self.addEventListener('install', (event) => {

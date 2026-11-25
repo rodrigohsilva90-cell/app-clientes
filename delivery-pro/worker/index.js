@@ -1,5 +1,5 @@
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const pathParts = url.pathname.split('/').filter(Boolean);
 
@@ -14,21 +14,31 @@ export default {
       });
     }
 
-    // 2. Rota de Manifest PWA dinâmico por loja: /{slug}/manifest.webmanifest
-    if (pathParts.length === 2 && pathParts[1] === 'manifest.webmanifest') {
+    // 2. Ícone e manifest (instalação do app) por loja
+    if (url.pathname === '/icone.svg') {
+      return new Response(iconeSvg('Delivery Pro', '#ea1d2c'), { headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' } });
+    }
+    if (pathParts.length === 2 && (pathParts[1] === 'manifest.webmanifest' || pathParts[1] === 'icone.svg')) {
       const slug = pathParts[0].toLowerCase();
-      // Em produção, busca nome/cor/ícone da loja no KV ou Firestore REST
+      const pub = await dadosPublicosLoja(env, slug, ctx);
+      if (pathParts[1] === 'icone.svg') {
+        return new Response(iconeSvg(pub ? pub.nome : slug, pub ? pub.cor : '#ea1d2c'), {
+          headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=300' }
+        });
+      }
+      const nome = pub ? pub.nome : slug;
+      const curto = nome.length <= 12 ? nome : nome.split(/\s+/).filter(p => !/^(d[aeo]s?|e)$/i.test(p)).slice(0, 2).join(' ').slice(0, 12);
       const manifest = {
-        name: `Delivery — ${slug.toUpperCase()}`,
-        short_name: slug.toUpperCase(),
-        start_url: `/${slug}`,
+        id: `/${slug}`,
+        name: nome,
+        short_name: curto || nome.slice(0, 12),
+        description: pub ? descricaoLoja(pub) : undefined,
+        start_url: `/${slug}?origem=app`,
+        scope: `/${slug}`,
         display: 'standalone',
         background_color: '#ffffff',
-        theme_color: '#ea1d2c',
-        icons: [
-          { src: 'https://via.placeholder.com/192', sizes: '192x192', type: 'image/png' },
-          { src: 'https://via.placeholder.com/512', sizes: '512x512', type: 'image/png' }
-        ]
+        theme_color: pub ? pub.cor : '#ea1d2c',
+        icons: [{ src: `/${slug}/icone.svg`, sizes: 'any', type: 'image/svg+xml', purpose: 'any' }]
       };
       return new Response(JSON.stringify(manifest), {
         headers: { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'public, max-age=300' }
@@ -660,4 +670,94 @@ async function gerenciarEquipe(request, env) {
     console.error('gerenciarEquipe', err && err.stack || err);
     return jsonResponse({ erro: 'Não foi possível concluir agora. Tente novamente.' }, 500);
   }
+}
+
+// =====================================================================
+// DADOS PÚBLICOS DA LOJA (nome, cor, fotos) para prévia do WhatsApp,
+// manifest e ícone. Guardados 5 minutos para não gastar leituras.
+// =====================================================================
+const cacheLojas = new Map();
+
+async function dadosPublicosLoja(env, slug, ctx) {
+  if (!env.FIREBASE_SERVICE_ACCOUNT || !/^[a-z0-9-]{2,40}$/.test(slug) || SLUGS_RESERVADOS.has(slug)) return null;
+  const agora = Date.now();
+  const naMemoria = cacheLojas.get(slug);
+  if (naMemoria && naMemoria.expira > agora) return naMemoria.dados;
+
+  const chave = new Request(`https://cache-interno.delivery-pro/loja/${slug}`);
+  try {
+    const salvo = await caches.default.match(chave);
+    if (salvo) {
+      const dados = await salvo.json();
+      cacheLojas.set(slug, { dados, expira: agora + 300000 });
+      return dados;
+    }
+  } catch (_) {}
+
+  let dados = null;
+  try {
+    const fs = await firestore(env);
+    const s = await fs.ler(`slugs/${slug}`);
+    if (s && s.ativo && s.lojaId) {
+      const l = await fs.ler(`lojas/${s.lojaId}`);
+      if (l) {
+        const https = (u) => (typeof u === 'string' && /^https:\/\/\S+$/i.test(u) ? u : null);
+        dados = {
+          nome: String(l.nome || slug).slice(0, 60),
+          descricao: l.descricao ? String(l.descricao).slice(0, 160) : null,
+          cor: /^#[0-9a-f]{6}$/i.test(l.corPrimaria || '') ? l.corPrimaria : '#ea1d2c',
+          logoUrl: https(l.logoUrl),
+          bannerUrl: https(l.bannerUrl),
+          tempoEstimado: l.tempoEstimado ? String(l.tempoEstimado).slice(0, 20) : null
+        };
+      }
+    }
+  } catch (err) {
+    console.error('dadosPublicosLoja', err && err.message);
+    return null;
+  }
+  cacheLojas.set(slug, { dados, expira: agora + 300000 });
+  if (cacheLojas.size > 500) cacheLojas.clear();
+  try {
+    const gravar = caches.default.put(chave, new Response(JSON.stringify(dados), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' } }));
+    if (ctx && ctx.waitUntil) ctx.waitUntil(gravar); else await gravar;
+  } catch (_) {}
+  return dados;
+}
+
+function descricaoLoja(pub) {
+  return pub.descricao || `Faça seu pedido na ${pub.nome}${pub.tempoEstimado ? ` · entrega em ${pub.tempoEstimado}` : ''}. Acompanhe a entrega ao vivo.`;
+}
+
+function escAttr(v) {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function personalizarCasca(html, pub, slug, url) {
+  const titulo = `${pub.nome} — Peça online`;
+  const desc = descricaoLoja(pub);
+  const img = pub.bannerUrl || pub.logoUrl;
+  return html
+    .replace(/<title[^>]*>[\s\S]*?<\/title>/, `<title id="page-title">${escAttr(titulo)}</title>`)
+    .replace(/<meta name="theme-color"[^>]*>/, `<meta name="theme-color" content="${escAttr(pub.cor)}" id="meta-theme-color" />`)
+    .replace(/<meta property="og:title"[^>]*>/, `<meta property="og:title" content="${escAttr(titulo)}" />`)
+    .replace(/<meta property="og:description"[^>]*>/, `<meta property="og:description" content="${escAttr(desc)}" />\n  <meta name="description" content="${escAttr(desc)}" />`)
+    .replace(/<link rel="manifest"[^>]*>/, `<link rel="manifest" href="/${slug}/manifest.webmanifest" id="pwa-manifest" />`)
+    .replace(/<link rel="icon"[^>]*>/, `<link rel="icon" href="/${slug}/icone.svg" type="image/svg+xml" id="pwa-icone" />${pub.logoUrl ? `\n  <link rel="apple-touch-icon" href="${escAttr(pub.logoUrl)}" />` : ''}`)
+    .replace('</head>', `  <meta property="og:url" content="${escAttr(url.origin + '/' + slug)}" />
+  <meta property="og:site_name" content="${escAttr(pub.nome)}" />
+  <meta name="apple-mobile-web-app-title" content="${escAttr(pub.nome)}" />${img ? `
+  <meta property="og:image" content="${escAttr(img)}" />
+  <meta name="twitter:card" content="summary_large_image" />` : ''}
+</head>`);
+}
+
+// Ícone quadrado com as iniciais da loja na cor dela
+function iconeSvg(nome, cor) {
+  const palavras = String(nome || '?').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9 ]/g, ' ').split(/\s+/).filter(p => p && !/^(d[aeo]s?|e)$/i.test(p));
+  const ini = escAttr(((palavras[0] || '?')[0] + (palavras[1] ? palavras[1][0] : '')).toUpperCase());
+  const corOk = /^#[0-9a-f]{6}$/i.test(cor || '') ? cor : '#ea1d2c';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="104" fill="${corOk}"/>` +
+    `<text x="256" y="256" dy=".35em" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="${ini.length > 1 ? 210 : 280}" fill="#ffffff">${ini}</text></svg>`;
 }
