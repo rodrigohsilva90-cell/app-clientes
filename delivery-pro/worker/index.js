@@ -14,6 +14,11 @@ export default {
       });
     }
 
+    // Fotos enviadas pelas lojas (guardadas no KV "FOTOS"; o endereço nunca muda, então o cache é longo)
+    if (pathParts[0] === 'fotos' && pathParts.length === 3 && request.method === 'GET') {
+      return servirFoto(env, `${pathParts[1]}/${pathParts[2]}`);
+    }
+
     // 2. Ícone e manifest (instalação do app) por loja
     if (url.pathname === '/icone.svg') {
       return new Response(iconeSvg('Delivery Pro', '#ea1d2c'), { headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' } });
@@ -52,6 +57,9 @@ export default {
       }
       if (url.pathname === '/api/pedidos' && request.method === 'POST') {
         return criarPedidoSeguro(request, env);
+      }
+      if (url.pathname === '/api/foto' && request.method === 'POST') {
+        return receberFoto(request, env, url);
       }
       if (url.pathname === '/api/avaliar' && request.method === 'POST') {
         return avaliarPedido(request, env);
@@ -230,6 +238,67 @@ async function criarPedidoSeguro(request, env) {
     console.error('criarPedidoSeguro', err && err.stack || err);
     return jsonResponse({ erro: 'Não foi possível registrar o pedido agora. Tente novamente.' }, 500);
   }
+}
+
+// =====================================================================
+// FOTOS: o painel comprime no celular (WebP ou JPEG, até 1200 px) e manda
+// aqui. Só o dono da loja envia. Guardadas no KV (binding FOTOS).
+// =====================================================================
+const FOTO_MAX_BYTES = 450 * 1024;
+const envios = new Map();
+function dentroDoLimiteFotos(chave) {
+  const agora = Date.now();
+  const lista = (envios.get(chave) || []).filter(t => agora - t < 10 * 60 * 1000);
+  if (lista.length >= 80) return false;
+  lista.push(agora);
+  envios.set(chave, lista);
+  if (envios.size > 2000) envios.clear();
+  return true;
+}
+function tipoDaImagem(b) {
+  if (b.length > 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return ['webp', 'image/webp'];
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return ['jpg', 'image/jpeg'];
+  return null;
+}
+async function receberFoto(request, env, url) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT || !env.FOTOS) throw new ErroPedido('Envio de fotos indisponível no momento.', 503);
+    const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    let usuario;
+    try { usuario = await verificarTokenFirebase(token, conta.project_id); }
+    catch (_) { throw new ErroPedido('Sessão inválida. Entre de novo e tente outra vez.', 401); }
+    if (!dentroDoLimiteFotos(usuario.sub)) throw new ErroPedido('Muitas fotos em pouco tempo. Aguarde alguns minutos.', 429);
+    const lojaId = String(url.searchParams.get('loja') || '');
+    if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId)) throw new ErroPedido('Loja inválida.');
+    const fs = await firestore(env);
+    const eu = await fs.ler(`lojas/${lojaId}/equipe/${usuario.sub}`);
+    if (!eu || eu.papel !== 'dono') throw new ErroPedido('Só o dono da loja pode enviar fotos.', 403);
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    if (!bytes.length) throw new ErroPedido('Foto vazia.');
+    if (bytes.length > FOTO_MAX_BYTES) throw new ErroPedido('Foto grande demais. Tente outra.', 413);
+    const tipo = tipoDaImagem(bytes);
+    if (!tipo) throw new ErroPedido('Formato de foto não aceito. Use JPG, PNG ou WebP.');
+    const nome = `${Date.now().toString(36)}${Array.from(crypto.getRandomValues(new Uint8Array(6))).map(x => x.toString(16).padStart(2, '0')).join('')}.${tipo[0]}`;
+    await env.FOTOS.put(`${lojaId}/${nome}`, bytes, { metadata: { tipo: tipo[1], uid: usuario.sub } });
+    return jsonResponse({ url: `${url.origin}/fotos/${lojaId}/${nome}` }, 201);
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('receberFoto', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível enviar a foto agora.' }, 500);
+  }
+}
+async function servirFoto(env, chave) {
+  if (!env.FOTOS || !/^[A-Za-z0-9_-]{2,60}\/[a-z0-9]{8,40}\.(webp|jpg)$/.test(chave)) return new Response('Foto não encontrada', { status: 404 });
+  const { value, metadata } = await env.FOTOS.getWithMetadata(chave, { type: 'arrayBuffer', cacheTtl: 86400 });
+  if (!value) return new Response('Foto não encontrada', { status: 404 });
+  return new Response(value, {
+    headers: {
+      'Content-Type': (metadata && metadata.tipo) || (chave.endsWith('.jpg') ? 'image/jpeg' : 'image/webp'),
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      'X-Content-Type-Options': 'nosniff'
+    }
+  });
 }
 
 // Oferta do dia: MESMA conta de js/cardapio.js (se mudar lá, mude aqui)
@@ -588,7 +657,7 @@ function deCampos(campos) {
 // token; aqui conferimos a assinatura do token (Web Crypto) e criamos
 // loja + link + equipe + perfil numa gravação única.
 // =====================================================================
-const SLUGS_RESERVADOS = new Set(['api', 'master', 'admin', 'painel', 'motoboy', 'pedido', 'js', 'css', 'sw', 'www', 'app', 'login', 'entrar', 'cadastro', 'suporte', 'ajuda', 'termos', 'privacidade', 'manifest']);
+const SLUGS_RESERVADOS = new Set(['api', 'master', 'admin', 'painel', 'motoboy', 'pedido', 'js', 'css', 'sw', 'www', 'app', 'login', 'entrar', 'cadastro', 'suporte', 'ajuda', 'termos', 'privacidade', 'manifest', 'fotos']);
 
 async function criarLoja(request, env) {
   try {

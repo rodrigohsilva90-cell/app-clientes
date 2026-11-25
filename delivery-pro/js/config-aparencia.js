@@ -2,6 +2,7 @@
 // Esses dados aparecem no cardápio, na prévia do WhatsApp e no ícone do app instalado.
 import { db, showToast, esc, formatarCentavos } from './config.js';
 import { AppState } from './router.js';
+import { enviarFoto } from './fotos.js';
 import { doc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const urlOk = (u) => !u || /^https:\/\/\S+$/i.test(u);
@@ -57,11 +58,17 @@ export function abrirConfigAparencia() {
       <label style="${rotulo}">Pedido mínimo (R$, 0 = sem mínimo)</label>
       <input name="minimo" inputmode="decimal" value="${((Number(l.pedidoMinimoCentavos) || 0) / 100).toFixed(2).replace('.', ',')}" style="${campo}" />
 
-      <label style="${rotulo}">Link do logo (quadrado, começa com https://)</label>
-      <input name="logo" value="${esc(l.logoUrl || '')}" placeholder="https://..." style="${campo}" />
+      <label style="${rotulo}">Logo (quadrado)</label>
+      <div class="foto-campo">
+        <button type="button" class="btn-outline-sm" data-foto="logo">📷 Enviar foto</button>
+        <input name="logo" value="${esc(l.logoUrl || '')}" placeholder="ou cole um link https://..." style="${campo}" />
+      </div>
 
-      <label style="${rotulo}">Link da foto de capa (horizontal, começa com https://)</label>
-      <input name="banner" value="${esc(l.bannerUrl || '')}" placeholder="https://..." style="${campo}" />
+      <label style="${rotulo}">Foto de capa (horizontal)</label>
+      <div class="foto-campo">
+        <button type="button" class="btn-outline-sm" data-foto="capa">📷 Enviar foto</button>
+        <input name="banner" value="${esc(l.bannerUrl || '')}" placeholder="ou cole um link https://..." style="${campo}" />
+      </div>
 
       <button class="btn-primary" type="submit">💾 Salvar aparência</button>
     </form>
@@ -84,6 +91,18 @@ export function abrirConfigAparencia() {
   };
   form.oninput = desenharPrevia;
   desenharPrevia();
+
+  overlay.querySelectorAll('[data-foto]').forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      const url = await enviarFoto(btn.dataset.foto);
+      btn.disabled = false;
+      if (!url) return;
+      (btn.dataset.foto === 'logo' ? form.logo : form.banner).value = url;
+      desenharPrevia();
+      showToast('Foto pronta! Toque em 💾 Salvar aparência.');
+    };
+  });
 
   form.onsubmit = async (e) => {
     e.preventDefault();

@@ -70,6 +70,7 @@ export function iniciarAcompanhamento(pedidoId) {
   root.innerHTML = `
     <a href="/${esc(AppState.slug)}" class="btn-outline-sm" style="text-decoration:none; display:inline-block; margin-bottom:12px;">← Voltar ao cardápio</a>
     <div class="card" id="acomp-status"><p>Carregando seu pedido...</p></div>
+    <div class="card hidden acomp-chegando" id="acomp-chegando">🏁 <strong>O entregador está chegando ao seu endereço!</strong><span>Fique de olho no portão ou no interfone.</span></div>
     <div class="card hidden" id="acomp-mapa-card">
       <strong>🛵 Entregador a caminho</strong>
       <div id="acomp-mapa" style="height:260px; border-radius:8px; margin-top:10px; z-index:1;"></div>
@@ -108,17 +109,22 @@ export function iniciarAcompanhamento(pedidoId) {
   );
 }
 
+// Varejo (adega, farmácia, mercadinho) separa o pedido em vez de preparar
+const etapaPreparo = () => (AppState.lojaDados && AppState.lojaDados.layoutVitrine === 'varejo'
+  ? { icone: '📦', titulo: 'Em separação', texto: 'A loja está separando seus produtos.' }
+  : { icone: '🔥', titulo: 'Em preparo', texto: 'A loja está preparando seu pedido.' });
+
 function etapasDo(p) {
   if (p.tipoEntrega === 'retirada') {
     return [
       { status: 'novo', icone: '📝', titulo: 'Pedido recebido', texto: 'Aguardando a loja confirmar.' },
-      { status: 'preparo', icone: '🔥', titulo: 'Em preparo', texto: 'A loja está preparando seu pedido.' },
+      { status: 'preparo', ...etapaPreparo() },
       { status: 'concluido', icone: '✅', titulo: 'Retirado', texto: 'Obrigado pela preferência!' }
     ];
   }
   return [
     { status: 'novo', icone: '📝', titulo: 'Pedido recebido', texto: 'Aguardando a loja confirmar.' },
-    { status: 'preparo', icone: '🔥', titulo: 'Em preparo', texto: 'A loja está preparando seu pedido.' },
+    { status: 'preparo', ...etapaPreparo() },
     { status: 'entrega', icone: '🛵', titulo: 'Saiu para entrega', texto: 'O entregador está a caminho.' },
     { status: 'concluido', icone: '✅', titulo: 'Entregue', texto: 'Bom apetite!' }
   ];
@@ -207,11 +213,21 @@ function renderItens(p) {
   `;
 }
 
+function distanciaMetros(a, b) {
+  const rad = (g) => (g * Math.PI) / 180;
+  const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lng - a.lng) / 2) ** 2;
+  return 2 * 6371000 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
 function renderMapa(p) {
   const card = document.getElementById('acomp-mapa-card');
   if (!card) return;
   const coords = p.motoboyCoords;
-  if (p.status !== 'entrega' || !coords || typeof L === 'undefined') {
+  const aviso = document.getElementById('acomp-chegando');
+  // Privacidade: a 50 m do destino o mapa ao vivo é encerrado
+  const perto = coords && (coords.chegou || (p.destinoCoords && Number.isFinite(coords.lat) && distanciaMetros(coords, p.destinoCoords) <= 50));
+  if (aviso) aviso.classList.toggle('hidden', !(p.status === 'entrega' && perto));
+  if (p.status !== 'entrega' || !coords || perto || !Number.isFinite(coords.lat) || typeof L === 'undefined') {
     card.classList.add('hidden');
     return;
   }

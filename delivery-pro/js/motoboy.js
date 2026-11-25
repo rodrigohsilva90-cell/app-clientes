@@ -89,12 +89,16 @@ async function iniciarTelemetriaGPS(motoboyUid) {
         ultimaPosicao = coords;
 
         // Atualiza posição apenas no pedido ativo para privacidade e economia
-        if (pedidoEmRotaAtual && navigator.onLine) {
+        // Privacidade: a menos de 50 m do cliente, para de transmitir e avisa "chegando" (o mapa some na tela dele)
+        const destinoAtual = pedidoEmRotaAtual && pedidoEmRotaAtual.destinoCoords;
+        const chegou = destinoAtual && calcularDistanciaMetros(destinoAtual.lat, destinoAtual.lng, latitude, longitude) <= 50;
+        if (pedidoEmRotaAtual && navigator.onLine && !(chegou && pedidoEmRotaAtual.avisouChegada)) {
           try {
             await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', pedidoEmRotaAtual.id), {
-              motoboyCoords: coords,
+              motoboyCoords: chegou ? { chegou: true } : coords,
               gpsAtualizadoEm: serverTimestamp()
             });
+            if (chegou) pedidoEmRotaAtual.avisouChegada = true;
           } catch (_) {}
         }
       }

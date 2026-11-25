@@ -2,6 +2,7 @@
 // Edita um rascunho em memória e grava tudo de uma vez no documento único publico/cardapio_completo.
 import { db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
+import { enviarFoto } from './fotos.js';
 import { doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const REGRAS = [
@@ -104,6 +105,7 @@ export async function abrirGestaoCardapio() {
             <div class="gc-item${p.id === selecionadoId ? ' ativo' : ''}" data-acao="abrir" data-id="${esc(p.id)}">
               <span class="gc-item-nome">${esc(p.nome || '(sem nome)')}${p.oferta && p.oferta.precoCentavos ? ' 🔥' : ''}${p.controlarEstoque && p.estoque <= 0 ? ' <em>· esgotado</em>' : ''}</span>
               <span class="gc-acoes">
+                <button title="${p.controlarEstoque && p.estoque <= 0 ? 'Esgotado: toque para voltar a vender' : 'À venda: toque para marcar esgotado'}" class="gc-venda${p.controlarEstoque && p.estoque <= 0 ? ' off' : ''}" data-acao="prod-venda" data-id="${esc(p.id)}">${p.controlarEstoque && p.estoque <= 0 ? '⛔ Esgotado' : '✅ Ativo'}</button>
                 <button title="Subir" data-acao="prod-subir" data-id="${esc(p.id)}">↑</button>
                 <button title="Descer" data-acao="prod-descer" data-id="${esc(p.id)}">↓</button>
               </span>
@@ -164,6 +166,14 @@ export async function abrirGestaoCardapio() {
       marcarAlterado();
     } else if (acao === 'abrir') {
       selecionadoId = alvo.dataset.id;
+    } else if (acao === 'prod-venda') {
+      e.stopPropagation();
+      const p = rascunho.produtos.find(x => x.id === alvo.dataset.id);
+      if (!p) return;
+      if (p.controlarEstoque && p.estoque <= 0) { delete p.controlarEstoque; delete p.estoque; }
+      else { p.controlarEstoque = true; p.estoque = 0; }
+      marcarAlterado();
+      showToast('Toque em 💾 Salvar para os clientes verem a mudança.');
     } else if (acao === 'prod-subir' || acao === 'prod-descer') {
       e.stopPropagation();
       moverProduto(alvo.dataset.id, acao === 'prod-subir' ? -1 : 1);
@@ -210,10 +220,13 @@ export async function abrirGestaoCardapio() {
         </div>
         <p class="gc-dica">${p.grupos.length ? 'Produto com opções: o preço acima é somado ao das opções escolhidas. Para pizza por sabor, deixe 0,00.' : 'Preço final do produto.'}</p>
 
-        <label>Foto (link que começa com https://)</label>
+        <label>Foto</label>
         <div class="gc-foto-linha">
           <div class="gc-foto">${foto ? `<img src="${esc(foto)}" alt="" />` : '🍽️'}</div>
-          <input data-campo="imagemUrl" value="${esc(p.imagemUrl || '')}" placeholder="https://..." />
+          <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
+            <button class="btn-outline-sm" data-acao="enviar-foto">📷 ${foto ? 'Trocar foto' : 'Enviar foto'}</button>
+            <input data-campo="imagemUrl" value="${esc(p.imagemUrl || '')}" placeholder="ou cole um link https://..." />
+          </div>
         </div>
 
         <label class="gc-check"><input type="checkbox" data-campo="esgotado" ${esgotado ? 'checked' : ''} /> Esgotado (pausar venda deste produto)</label>
@@ -340,6 +353,19 @@ export async function abrirGestaoCardapio() {
     const gi = Number(alvo.dataset.g);
     const acao = alvo.dataset.acao;
 
+    if (acao === 'enviar-foto') {
+      alvo.disabled = true;
+      enviarFoto('produto').then(url => {
+        alvo.disabled = false;
+        if (!url || !rascunho.produtos.includes(p)) return;
+        p.imagemUrl = url;
+        marcarAlterado();
+        renderLista();
+        renderEditor();
+        showToast('Foto pronta! Toque em 💾 Salvar para publicar.');
+      });
+      return;
+    }
     if (acao === 'add-grupo') {
       p.grupos.push({ titulo: '', minimo: 0, maximo: 1, regraDePreco: 'SOMA', opcoes: [{ nome: '', precoCentavos: 0 }] });
     } else if (acao === 'rem-grupo') {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'delivery-pro-v18';
+const CACHE_NAME = 'delivery-pro-v19';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -24,7 +24,8 @@ const STATIC_ASSETS = [
   '/js/plano.js',
   '/js/assinatura.js',
   '/js/master.js',
-  '/js/avaliacoes.js'
+  '/js/avaliacoes.js',
+  '/js/fotos.js'
 ];
 
 self.addEventListener('install', (event) => {

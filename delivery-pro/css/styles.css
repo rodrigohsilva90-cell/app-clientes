@@ -335,3 +335,14 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .av-nota.baixa { color: var(--danger); }
 .av-alerta-box { background: #fff7ed !important; }
 .btn-whats { display: block; text-align: center; text-decoration: none; background: #25d366; color: #fff; border-color: #25d366; }
+.gc-acoes button.gc-venda { color: #166534; border-color: #86efac; background: #f0fdf4; white-space: nowrap; }
+.gc-acoes button.gc-venda.off { color: var(--danger); border-color: #fca5a5; background: #fef2f2; }
+.acomp-chegando { background: #ecfdf5; border: 2px solid #34d399; display: flex; flex-direction: column; gap: 4px; font-size: 16px; }
+.acomp-chegando span { font-size: 14px; color: var(--text-muted); }
+.conc-resumo { display: flex; justify-content: space-between; align-items: center; background: #ecfdf5; border-left: 4px solid var(--success); }
+.conc-item { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; font-size: 14px; opacity: .85; }
+.conc-item small { display: block; color: var(--text-muted); font-size: 12px; }
+.conc-item.ocorrencia { border-left: 4px solid var(--warning); }
+.foto-campo { display: flex; gap: 8px; align-items: center; }
+.foto-campo button { flex-shrink: 0; white-space: nowrap; }
+.foto-campo input { flex: 1; min-width: 0; }

@@ -19,6 +19,7 @@ let wakeLock = null;
 let campainhaAtiva = false;
 let pedidosConhecidos = new Set();
 let ultimosPedidos = [];
+let concluidosHoje = [];
 let estadoCaixa = { caixaAberto: false };
 let papel = null;
 
@@ -68,18 +69,22 @@ export async function iniciarBalcao() {
     </div>
 
     <!-- Kanban de Pedidos -->
-    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:12px;">
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px;">
       <div>
         <h3 style="margin-bottom:8px;">🔔 Novos Pedidos</h3>
         <div id="col-novo"></div>
       </div>
       <div>
-        <h3 style="margin-bottom:8px;">🔥 Em Preparo</h3>
+        <h3 style="margin-bottom:8px;">${AppState.lojaDados.layoutVitrine === 'varejo' ? '📦 Em Separação' : '🔥 Em Preparo'}</h3>
         <div id="col-preparo"></div>
       </div>
       <div>
         <h3 style="margin-bottom:8px;">🛵 Saiu para Entrega</h3>
         <div id="col-entrega"></div>
+      </div>
+      <div>
+        <h3 style="margin-bottom:8px;">✅ Concluídos hoje</h3>
+        <div id="col-concluido"></div>
       </div>
     </div>
 
@@ -199,6 +204,15 @@ function escutarPedidosEmTempoReal() {
     where('status', 'in', ['novo', 'preparo', 'entrega'])
   );
 
+  // Concluídos de hoje (entregueEm a partir da meia-noite): consulta simples, sem índice composto
+  const meiaNoite = new Date();
+  meiaNoite.setHours(0, 0, 0, 0);
+  onSnapshot(query(collection(db, 'lojas', AppState.lojaId, 'pedidos'), where('entregueEm', '>=', meiaNoite)), (snap) => {
+    const ms = (p) => (p.entregueEm?.toMillis ? p.entregueEm.toMillis() : 0);
+    concluidosHoje = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => p.status === 'concluido' || p.status === 'ocorrencia').sort((a, b) => ms(b) - ms(a));
+    renderizarConcluidos();
+  }, (err) => console.error('concluídos', err));
+
   onSnapshot(q, (snapshot) => {
     // Ordena por chegada aqui no navegador (dispensa índice composto no Firestore)
     const tempo = (p) => (p.criadoEm?.toMillis ? p.criadoEm.toMillis() : Date.now());
@@ -251,6 +265,22 @@ function renderizarColunas() {
   ultimosPedidos.forEach((p) => {
     if (colunas[p.status]) colunas[p.status].appendChild(criarCardPedidoBalcao(p));
   });
+}
+
+function renderizarConcluidos() {
+  const col = document.getElementById('col-concluido');
+  if (!col) return;
+  const ok = concluidosHoje.filter(p => p.status === 'concluido');
+  const total = ok.reduce((a, p) => a + (Number(p.totalCentavos) || 0), 0);
+  col.innerHTML = `
+    <div class="card conc-resumo"><span>${ok.length} pedido(s) hoje</span><strong>${formatarCentavos(total)}</strong></div>
+    ${concluidosHoje.slice(0, 30).map(p => `
+      <div class="card conc-item${p.status === 'ocorrencia' ? ' ocorrencia' : ''}">
+        <div><strong>#${esc(p.numeroPedido || p.id.slice(0, 4))}</strong> · ${esc(String(p.clienteNome || '').split(/\s+/)[0])}
+          <small>${p.status === 'ocorrencia' ? '⚠ ocorrência' : p.tipoEntrega === 'retirada' ? '🏪 retirou' : `🛵 ${esc(p.motoboyNome || 'entregue')}`}${p.entregueEm?.toDate ? ` · ${p.entregueEm.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : ''}${p.avaliacaoNota ? ` · ${'★'.repeat(p.avaliacaoNota)}` : ''}</small>
+        </div>
+        <span>${formatarCentavos(p.totalCentavos)}</span>
+      </div>`).join('') || '<p class="gc-dica">Nenhum pedido concluído ainda hoje.</p>'}`;
 }
 
 function criarCardPedidoBalcao(p) {
@@ -322,7 +352,8 @@ function criarCardPedidoBalcao(p) {
       if (novoStatus === 'entrega') return despacharParaEntregador(p);
       await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
         status: novoStatus,
-        atualizadoEm: serverTimestamp()
+        atualizadoEm: serverTimestamp(),
+        ...(novoStatus === 'concluido' ? { entregueEm: serverTimestamp() } : {})
       });
       showToast(`Pedido #${esc(p.numeroPedido)} movido para ${novoStatus.toUpperCase()}`);
     };
