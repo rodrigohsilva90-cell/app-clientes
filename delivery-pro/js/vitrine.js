@@ -4,6 +4,7 @@ import { montarItem } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes } from './acompanhar.js';
 import { calcularFrete, coordsValidas } from './frete.js';
 import { situacaoLoja } from './horario.js';
+import { statusAssinatura } from './plano.js';
 import { doc, getDoc, collection, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let carrinho = [];
@@ -17,6 +18,10 @@ let situacao = { aberta: true };
 export async function iniciarVitrine() {
   const root = document.getElementById('app-root');
   const loja = AppState.lojaDados;
+  if (!statusAssinatura(loja).ativa) {
+    root.innerHTML = `<div class="card" style="text-align:center; padding:40px 20px;"><h2>${esc(loja.nome)}</h2><p style="color:var(--text-muted); margin-top:8px;">Esta loja está temporariamente indisponível para pedidos online. Volte em breve!</p></div>`;
+    return;
+  }
   const storageKey = `carrinho_${AppState.lojaId}`;
 
   // Recupera carrinho salvo localmente (custo zero de banco)

@@ -59,6 +59,12 @@ export default {
       if (url.pathname === '/api/equipe' && request.method === 'POST') {
         return gerenciarEquipe(request, env);
       }
+      if (url.pathname === '/api/master' && request.method === 'POST') {
+        return painelMaster(request, env);
+      }
+      if (url.pathname === '/api/saas' && request.method === 'GET') {
+        return jsonResponse(await configSaasPublica(env));
+      }
       return jsonResponse({ error: 'Rota de API não encontrada' }, 404);
     }
 
@@ -148,6 +154,7 @@ async function criarPedidoSeguro(request, env) {
       fs.ler(`lojas/${lojaId}/publico/estado`)
     ]);
     if (!loja) throw new ErroPedido('Loja não encontrada.', 404);
+    if (!statusAssinatura(loja).ativa) throw new ErroPedido('Esta loja está temporariamente indisponível para pedidos online.', 403);
     const situacao = situacaoLoja(loja, estado);
     if (!situacao.aberta) {
       throw new ErroPedido(situacao.pausada
@@ -367,6 +374,55 @@ async function firestore(env) {
       if (resp.status === 404) return null;
       if (!resp.ok) throw new Error(`Firestore GET ${caminho}: ${resp.status} ${await resp.text()}`);
       return deCampos((await resp.json()).fields || {});
+    },
+    // Atualiza só os campos informados de um documento existente
+    async atualizar(caminho, dados) {
+      const resp = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
+        method: 'POST',
+        headers: await cabecalhos(),
+        body: JSON.stringify({ writes: [{ update: { name: `${base}/${caminho}`, fields: paraCampos(dados) }, updateMask: { fieldPaths: Object.keys(dados) }, currentDocument: { exists: true } }] })
+      });
+      if (!resp.ok) throw new Error(`Firestore update ${caminho}: ${resp.status} ${await resp.text()}`);
+    },
+    // Lista todos os documentos de uma coleção (até 2000)
+    async listar(colecao) {
+      const docs = [];
+      let pagina = '';
+      for (let i = 0; i < 10; i++) {
+        const resp = await fetch(`${url}/${colecao}?pageSize=200${pagina ? `&pageToken=${encodeURIComponent(pagina)}` : ''}`, { headers: await cabecalhos() });
+        if (!resp.ok) throw new Error(`Firestore list ${colecao}: ${resp.status} ${await resp.text()}`);
+        const r = await resp.json();
+        (r.documents || []).forEach(d => docs.push({ id: d.name.split('/').pop(), ...deCampos(d.fields || {}) }));
+        if (!r.nextPageToken) break;
+        pagina = r.nextPageToken;
+      }
+      return docs;
+    },
+    // Quantidade e soma dos pedidos de uma loja desde uma data (inclui cancelados)
+    async resumoPedidos(lojaId, desdeIso) {
+      const resp = await fetch(`${url}/lojas/${lojaId}:runAggregationQuery`, {
+        method: 'POST',
+        headers: await cabecalhos(),
+        body: JSON.stringify({ structuredAggregationQuery: {
+          structuredQuery: { from: [{ collectionId: 'pedidos' }], where: { fieldFilter: { field: { fieldPath: 'criadoEm' }, op: 'GREATER_THAN_OR_EQUAL', value: { timestampValue: desdeIso } } } },
+          aggregations: [{ alias: 'n', count: {} }, { alias: 'total', sum: { field: { fieldPath: 'totalCentavos' } } }]
+        } })
+      });
+      if (!resp.ok) throw new Error(`Firestore agg: ${resp.status} ${await resp.text()}`);
+      const r = await resp.json();
+      const campos = (r[0] && r[0].result && r[0].result.aggregateFields) || {};
+      return { pedidos: deValor(campos.n || { integerValue: '0' }) || 0, totalCentavos: Math.round(deValor(campos.total || { integerValue: '0' }) || 0) };
+    },
+    async ultimoPedido(lojaId) {
+      const resp = await fetch(`${url}/lojas/${lojaId}:runQuery`, {
+        method: 'POST',
+        headers: await cabecalhos(),
+        body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'pedidos' }], orderBy: [{ field: { fieldPath: 'criadoEm' }, direction: 'DESCENDING' }], limit: 1, select: { fields: [{ fieldPath: 'criadoEm' }] } } })
+      });
+      if (!resp.ok) throw new Error(`Firestore query: ${resp.status} ${await resp.text()}`);
+      const r = await resp.json();
+      const d = r.find(x => x.document);
+      return d ? deValor(d.document.fields.criadoEm || { nullValue: null }) : null;
     },
     // Apaga documentos (tudo ou nada)
     async apagar(caminhos) {
@@ -760,4 +816,148 @@ function iconeSvg(nome, cor) {
   const corOk = /^#[0-9a-f]{6}$/i.test(cor || '') ? cor : '#ea1d2c';
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="104" fill="${corOk}"/>` +
     `<text x="256" y="256" dy=".35em" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="${ini.length > 1 ? 210 : 280}" fill="#ffffff">${ini}</text></svg>`;
+}
+
+// =====================================================================
+// ASSINATURA: MESMA conta de js/plano.js (se mudar lá, mude aqui)
+// =====================================================================
+const CARENCIA_MS = 48 * 60 * 60 * 1000;
+const DIA_MS = 24 * 60 * 60 * 1000;
+const emMs = (v) => {
+  if (!v) return null;
+  if (typeof v.toMillis === 'function') return v.toMillis();
+  if (v instanceof Date) return v.getTime();
+  const n = Date.parse(v);
+  return Number.isFinite(n) ? n : null;
+};
+function statusAssinatura(loja, agora = Date.now()) {
+  const plano = loja && loja.plano;
+  if (!plano) return { ativa: true, plano: 'livre' };
+  if (plano === 'bloqueada') return { ativa: false, plano, motivo: 'bloqueada' };
+  if (plano === 'teste') {
+    const fim = emMs(loja.trialAte);
+    if (!fim) return { ativa: true, plano, emTeste: true };
+    return fim > agora
+      ? { ativa: true, plano, emTeste: true, fim, diasRestantes: Math.ceil((fim - agora) / DIA_MS) }
+      : { ativa: false, plano, motivo: 'teste_vencido', fim };
+  }
+  const fim = emMs(loja.pagoAte);
+  if (!fim) return { ativa: true, plano };
+  if (fim > agora) return { ativa: true, plano, fim, diasRestantes: Math.ceil((fim - agora) / DIA_MS) };
+  if (fim + CARENCIA_MS > agora) return { ativa: true, plano, fim, emCarencia: true };
+  return { ativa: false, plano, motivo: 'pagamento_vencido', fim };
+}
+
+// Configuração pública do SaaS (WhatsApp de vendas, preços), guardada 5 min
+let configSaasCache = { dados: null, expira: 0 };
+async function configSaasPublica(env) {
+  if (configSaasCache.dados && configSaasCache.expira > Date.now()) return configSaasCache.dados;
+  let dados = {};
+  try {
+    if (env.FIREBASE_SERVICE_ACCOUNT) {
+      const c = await (await firestore(env)).ler('config/saas');
+      if (c) dados = {
+        whatsappSuporte: c.whatsappSuporte || null,
+        precoEssencialCentavos: Number(c.precoEssencialCentavos) || null,
+        precoProCentavos: Number(c.precoProCentavos) || null,
+        comissaoMarketplacePct: Number(c.comissaoMarketplacePct) || 20
+      };
+    }
+  } catch (err) { console.error('configSaas', err && err.message); }
+  configSaasCache = { dados, expira: Date.now() + 300000 };
+  return dados;
+}
+
+// =====================================================================
+// PAINEL MASTER: só para os logins listados em MASTER_UIDS (variável do Worker)
+// =====================================================================
+async function painelMaster(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível no momento.', 503);
+    const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    let usuario;
+    try { usuario = await verificarTokenFirebase(token, conta.project_id); }
+    catch (_) { throw new ErroPedido('Sessão inválida. Entre de novo.', 401); }
+    const masters = String(env.MASTER_UIDS || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!masters.includes(usuario.sub)) throw new ErroPedido('Acesso restrito ao administrador.', 403);
+
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const fs = await firestore(env);
+
+    if (corpo.acao === 'listar') {
+      const lojas = (await fs.listar('lojas')).map(l => ({
+        id: l.id, nome: l.nome || l.id, slug: l.slug || null, plano: l.plano || null,
+        trialAte: l.trialAte || null, pagoAte: l.pagoAte || null, criadoEm: l.criadoEm || null,
+        whatsapp: l.whatsapp || null, origemParceiro: l.origemParceiro || null
+      }));
+      // Lojas antigas sem "slug" gravado: busca no índice de endereços
+      if (lojas.some(l => !l.slug)) {
+        const slugs = await fs.listar('slugs');
+        lojas.forEach(l => { if (!l.slug) { const s = slugs.find(x => x.lojaId === l.id); if (s) l.slug = s.id; } });
+      }
+      lojas.sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
+      return jsonResponse({ lojas });
+    }
+
+    if (corpo.acao === 'estatisticas') {
+      const ids = (Array.isArray(corpo.lojaIds) ? corpo.lojaIds : []).filter(id => /^[A-Za-z0-9_-]{2,60}$/.test(id)).slice(0, 10);
+      const desde = new Date(Date.now() - 7 * DIA_MS).toISOString();
+      const estatisticas = {};
+      await Promise.all(ids.map(async (id) => {
+        try {
+          const [r, ultimo] = await Promise.all([fs.resumoPedidos(id, desde), fs.ultimoPedido(id)]);
+          estatisticas[id] = { pedidos7d: r.pedidos, total7dCentavos: r.totalCentavos, ultimoPedido: ultimo };
+        } catch (err) { console.error('estatisticas', id, err && err.message); }
+      }));
+      return jsonResponse({ estatisticas });
+    }
+
+    if (corpo.acao === 'plano') {
+      const lojaId = String(corpo.lojaId || '');
+      if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId)) throw new ErroPedido('Loja inválida.');
+      const plano = ['teste', 'essencial', 'pro', 'bloqueada'].includes(corpo.plano) ? corpo.plano : null;
+      if (!plano) throw new ErroPedido('Plano inválido.');
+      const dias = Math.min(366, Math.max(0, Number(corpo.dias) || 0));
+      const loja = await fs.ler(`lojas/${lojaId}`);
+      if (!loja) throw new ErroPedido('Loja não encontrada.', 404);
+      const agora = Date.now();
+      const dados = { plano };
+      if (plano === 'teste') {
+        // soma a partir do fim atual do teste (se ainda vale) ou de agora
+        const base = Math.max(agora, emMs(loja.trialAte) || 0);
+        dados.trialAte = new Date(base + (dias || 7) * DIA_MS);
+      } else if (plano === 'essencial' || plano === 'pro') {
+        const base = Math.max(agora, (loja.plano === plano && emMs(loja.pagoAte)) || 0);
+        dados.pagoAte = new Date(base + (dias || 30) * DIA_MS);
+      }
+      await fs.atualizar(`lojas/${lojaId}`, dados);
+      cacheLojas.clear();
+      return jsonResponse({ ok: true, loja: { plano, trialAte: dados.trialAte ? dados.trialAte.toISOString() : loja.trialAte || null, pagoAte: dados.pagoAte ? dados.pagoAte.toISOString() : loja.pagoAte || null } });
+    }
+
+    if (corpo.acao === 'lerConfig') {
+      return jsonResponse({ config: (await fs.ler('config/saas')) || {} });
+    }
+
+    if (corpo.acao === 'salvarConfig') {
+      const c = corpo.config || {};
+      const inteiro = (v) => (Number.isInteger(v) && v >= 0 && v < 100000000 ? v : 0);
+      await fs.gravarJuntos([{ caminho: 'config/saas', dados: {
+        whatsappSuporte: String(c.whatsappSuporte || '').replace(/\D/g, '').slice(0, 13) || null,
+        precoEssencialCentavos: inteiro(c.precoEssencialCentavos),
+        precoProCentavos: inteiro(c.precoProCentavos),
+        comissaoMarketplacePct: Math.min(50, Math.max(0, Number(c.comissaoMarketplacePct) || 0))
+      } }]);
+      configSaasCache = { dados: null, expira: 0 };
+      return jsonResponse({ ok: true });
+    }
+
+    throw new ErroPedido('Ação inválida.');
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('painelMaster', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível concluir agora.' }, 500);
+  }
 }

@@ -9,6 +9,8 @@ import { abrirEquipe } from './equipe.js';
 import { situacaoLoja } from './horario.js';
 import { abrirConfigHorarios } from './config-horarios.js';
 import { abrirConfigAparencia } from './config-aparencia.js';
+import { statusAssinatura } from './plano.js';
+import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
@@ -34,6 +36,8 @@ export async function iniciarBalcao() {
       papel = snap.exists() ? (snap.data().papel || 'balcao') : null;
     } catch (_) { papel = null; }
   }
+  const assinatura = statusAssinatura(AppState.lojaDados);
+  if (!assinatura.ativa) return telaBloqueio(assinatura, papel === 'dono');
   if (papel === 'cozinha') return iniciarKds();
   const ehDono = papel === 'dono';
 
@@ -122,6 +126,7 @@ export async function iniciarBalcao() {
     }
   });
 
+  bannerAssinatura(assinatura).then(html => { if (html) root.insertAdjacentHTML('afterbegin', html); });
   escutarPedidosEmTempoReal();
   iniciarCaoDeGuarda();
 }

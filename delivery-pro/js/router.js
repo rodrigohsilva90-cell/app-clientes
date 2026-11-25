@@ -6,6 +6,7 @@ import { iniciarBalcao } from './balcao.js';
 import { iniciarMotoboy } from './motoboy.js';
 import { iniciarAcompanhamento } from './acompanhar.js';
 import { abrirCadastroLoja } from './cadastro.js';
+import { iniciarMaster } from './master.js';
 
 // 1. Registro do Service Worker com aviso de atualização
 if ('serviceWorker' in navigator) {
@@ -75,7 +76,7 @@ async function resolverRota() {
   // Rota Master SaaS
   if (pathParts[0] === 'master') {
     AppState.modoAtual = 'master';
-    return renderizarPlaceholder('Painel Master SaaS', 'Gerenciamento de assinaturas, planos e lojas parceiras.');
+    return iniciarMaster();
   }
 
   // Landing Page SaaS (sem slug na URL)
