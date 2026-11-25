@@ -1,31 +1,54 @@
-import { db, formatarCentavos, showToast, esc } from './config.js';
+import { db, auth, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { montarItem } from './cardapio.js';
 import { abrirGestaoCardapio } from './gestao-cardapio.js';
 import { abrirConfigEntrega } from './config-entrega.js';
+import { escutarEstadoCaixa, abrirCaixa, fecharCaixa } from './turno.js';
+import { iniciarKds } from './kds.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
 let wakeLock = null;
 let campainhaAtiva = false;
 let pedidosConhecidos = new Set();
+let ultimosPedidos = [];
+let estadoCaixa = { caixaAberto: false };
+let papel = null;
 
-export function iniciarBalcao() {
+const MIN_ALERTA = 5;     // pedido novo sem aceite: alerta e campainha repetindo
+const MIN_CANCELAR = 15;  // pedido novo sem aceite: cancelado automaticamente
+const minutosDesde = (p) => (p.criadoEm?.toMillis ? (Date.now() - p.criadoEm.toMillis()) / 60000 : 0);
+
+export async function iniciarBalcao() {
   const root = document.getElementById('app-root');
 
+  // Nível de acesso: dono | balcao | cozinha (documento lojas/{id}/equipe/{uid})
+  papel = null;
+  if (auth.currentUser) {
+    try {
+      const snap = await getDoc(doc(db, 'lojas', AppState.lojaId, 'equipe', auth.currentUser.uid));
+      papel = snap.exists() ? (snap.data().papel || 'balcao') : null;
+    } catch (_) { papel = null; }
+  }
+  if (papel === 'cozinha') return iniciarKds();
+  const ehDono = papel === 'dono';
+
   root.innerHTML = `
-    <!-- Barra de Ativação de Som e Controle de Pico -->
-    <div class="card" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+    <div class="card painel-topo">
       <div>
-        <strong>Painel Operacional — ${AppState.lojaDados.nome}</strong>
-        <div id="status-som" style="font-size:13px; color:var(--warning);">🔇 Campainha aguardando ativação</div>
+        <strong>Painel Operacional — ${esc(AppState.lojaDados.nome)}</strong>
+        <div id="status-caixa" class="painel-status">⏳ Verificando caixa...</div>
+        <div id="status-som" class="painel-status" style="color:var(--warning);">🔇 Campainha desligada</div>
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button id="btn-ativar-caixa" class="btn-primary" style="width:auto;">🔊 Abrir Caixa e Ativar Campainha</button>
+      <div class="painel-botoes">
+        <button id="btn-caixa" class="btn-primary" style="width:auto;" disabled>Caixa</button>
+        <button id="btn-som" class="btn-outline-sm">🔊 Ativar campainha</button>
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
-        <button id="btn-gerenciar-cardapio" class="btn-outline-sm">🍕 Gerenciar cardápio</button>
-        <button id="btn-config-entrega" class="btn-outline-sm">🛵 Entrega e frete</button>
-        <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
+        ${ehDono ? `
+          <button id="btn-gerenciar-cardapio" class="btn-outline-sm">🍕 Gerenciar cardápio</button>
+          <button id="btn-config-entrega" class="btn-outline-sm">🛵 Entrega e frete</button>
+          <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
+        ` : ''}
       </div>
     </div>
 
@@ -49,34 +72,85 @@ export function iniciarBalcao() {
     <div id="print-receipt"></div>
   `;
 
-  document.getElementById('btn-ativar-caixa').onclick = ativarSomEWakeLock;
+  document.getElementById('btn-som').onclick = ativarSomEWakeLock;
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
-  document.getElementById('btn-cardapio-exemplo').onclick = criarCardapioExemplo;
-  document.getElementById('btn-gerenciar-cardapio').onclick = abrirGestaoCardapio;
-  document.getElementById('btn-config-entrega').onclick = abrirConfigEntrega;
+  if (ehDono) {
+    document.getElementById('btn-cardapio-exemplo').onclick = criarCardapioExemplo;
+    document.getElementById('btn-gerenciar-cardapio').onclick = abrirGestaoCardapio;
+    document.getElementById('btn-config-entrega').onclick = abrirConfigEntrega;
+  }
+
+  // Caixa por turno
+  escutarEstadoCaixa((estado) => {
+    estadoCaixa = estado;
+    const status = document.getElementById('status-caixa');
+    const btn = document.getElementById('btn-caixa');
+    if (!status || !btn) return;
+    btn.disabled = false;
+    if (estado.caixaAberto) {
+      const desde = estado.abertoEm?.toDate ? estado.abertoEm.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+      status.innerHTML = `🟢 Caixa aberto${desde ? ` desde ${desde}` : ''} · fundo ${formatarCentavos(estado.fundoTrocoCentavos || 0)}`;
+      status.style.color = 'var(--success)';
+      btn.textContent = '🔒 Fechar caixa';
+      btn.className = 'btn-outline-sm';
+      btn.onclick = () => fecharCaixa(estadoCaixa);
+    } else {
+      status.textContent = '🔴 Caixa fechado — abra o caixa para começar o turno';
+      status.style.color = 'var(--danger)';
+      btn.textContent = '🔓 Abrir caixa';
+      btn.className = 'btn-primary';
+      btn.style.width = 'auto';
+      btn.onclick = async () => {
+        if (await abrirCaixa() && !campainhaAtiva) ativarSomEWakeLock();
+      };
+    }
+  });
 
   escutarPedidosEmTempoReal();
+  iniciarCaoDeGuarda();
 }
 
 async function ativarSomEWakeLock() {
   try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') await audioCtx.resume();
     tocarBipeCampainha();
     campainhaAtiva = true;
 
     if ('wakeLock' in navigator) {
-      wakeLock = await navigator.wakeLock.request('screen');
+      try { wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
     }
 
     const statusEl = document.getElementById('status-som');
     statusEl.textContent = '🔊 Campainha ativa e tela mantida acordada';
     statusEl.style.color = 'var(--success)';
-    document.getElementById('btn-ativar-caixa').classList.add('hidden');
-    showToast('Caixa aberto! Campainha pronta para novos pedidos.');
+    document.getElementById('btn-som').classList.add('hidden');
   } catch (err) {
     showToast('Não foi possível ativar o áudio automático.');
   }
+}
+
+// Cão de guarda: alerta com 5 min sem aceite e cancela com 15 min
+function iniciarCaoDeGuarda() {
+  let tique = 0;
+  setInterval(async () => {
+    tique++;
+    const novos = ultimosPedidos.filter(p => p.status === 'novo' && p.criadoEm?.toMillis);
+    const atrasados = novos.filter(p => minutosDesde(p) >= MIN_ALERTA);
+    if (atrasados.length && campainhaAtiva && tique % 2 === 0) tocarBipeCampainha(); // a cada ~30 s
+    for (const p of novos.filter(p => minutosDesde(p) >= MIN_CANCELAR)) {
+      try {
+        await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
+          status: 'cancelado',
+          motivoCancelamento: `Sem aceite em ${MIN_CANCELAR} minutos (cancelado automaticamente)`,
+          canceladoEm: serverTimestamp(),
+          atualizadoEm: serverTimestamp()
+        });
+        showToast(`Pedido #${p.numeroPedido || ''} cancelado: ficou ${MIN_CANCELAR} min sem aceite.`, 6000);
+      } catch (err) { console.error(err); }
+    }
+    renderizarColunas(); // atualiza os minutos nos cartões
+  }, 15000);
 }
 
 function tocarBipeCampainha() {
@@ -101,34 +175,17 @@ function escutarPedidosEmTempoReal() {
   );
 
   onSnapshot(q, (snapshot) => {
-    const colunas = {
-      novo: document.getElementById('col-novo'),
-      preparo: document.getElementById('col-preparo'),
-      entrega: document.getElementById('col-entrega')
-    };
-    colunas.novo.innerHTML = '';
-    colunas.preparo.innerHTML = '';
-    colunas.entrega.innerHTML = '';
-
-    let temNovoPedido = false;
-
     // Ordena por chegada aqui no navegador (dispensa índice composto no Firestore)
     const tempo = (p) => (p.criadoEm?.toMillis ? p.criadoEm.toMillis() : Date.now());
-    const pedidos = snapshot.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => tempo(a) - tempo(b));
+    ultimosPedidos = snapshot.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => tempo(a) - tempo(b));
 
-    pedidos.forEach((p) => {
-      if (p.status === 'novo' && !pedidosConhecidos.has(p.id)) {
-        temNovoPedido = true;
-      }
+    let temNovoPedido = false;
+    ultimosPedidos.forEach((p) => {
+      if (p.status === 'novo' && !pedidosConhecidos.has(p.id)) temNovoPedido = true;
       pedidosConhecidos.add(p.id);
-
-      const card = criarCardPedidoBalcao(p);
-      if (colunas[p.status]) colunas[p.status].appendChild(card);
     });
-
-    if (temNovoPedido && campainhaAtiva) {
-      tocarBipeCampainha();
-    }
+    renderizarColunas();
+    if (temNovoPedido && campainhaAtiva) tocarBipeCampainha();
   }, (err) => {
     console.error(err);
     document.getElementById('col-novo').innerHTML = err.code === 'permission-denied'
@@ -137,9 +194,23 @@ function escutarPedidosEmTempoReal() {
   });
 }
 
+function renderizarColunas() {
+  const colunas = {
+    novo: document.getElementById('col-novo'),
+    preparo: document.getElementById('col-preparo'),
+    entrega: document.getElementById('col-entrega')
+  };
+  if (!colunas.novo) return;
+  Object.values(colunas).forEach(c => { c.innerHTML = ''; });
+  ultimosPedidos.forEach((p) => {
+    if (colunas[p.status]) colunas[p.status].appendChild(criarCardPedidoBalcao(p));
+  });
+}
+
 function criarCardPedidoBalcao(p) {
   const div = document.createElement('div');
-  div.className = 'card';
+  const minutos = Math.floor(minutosDesde(p));
+  div.className = `card${p.status === 'novo' && minutos >= MIN_ALERTA ? ' pedido-atrasado' : ''}`;
   div.style.borderLeft = p.status === 'novo' ? '4px solid var(--danger)' : '4px solid var(--primary)';
 
   const trocoTxt = (p.formaPagamento === 'dinheiro' && p.trocoParaCentavos > p.totalCentavos)
@@ -148,7 +219,8 @@ function criarCardPedidoBalcao(p) {
 
   let botaoAcao = '';
   if (p.status === 'novo') {
-    botaoAcao = `<button class="btn-primary" data-next="preparo">Aceitar Pedido</button>`;
+    botaoAcao = `<button class="btn-primary" data-next="preparo">Aceitar Pedido</button>
+      <button class="btn-outline-sm gc-perigo" style="width:100%; margin-top:6px;" data-recusar="1">Recusar</button>`;
   } else if (p.status === 'preparo') {
     botaoAcao = p.tipoEntrega === 'retirada'
       ? `<button class="btn-primary" data-next="concluido">✅ Cliente retirou</button>`
@@ -160,7 +232,10 @@ function criarCardPedidoBalcao(p) {
   div.innerHTML = `
     <div style="display:flex; justify-content:space-between; align-items:center;">
       <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
-      <button class="btn-outline-sm" style="padding:2px 8px;" data-print="1" title="Imprimir Comanda">🖨️</button>
+      <span style="display:flex; gap:6px; align-items:center;">
+        ${p.criadoEm?.toMillis ? `<span class="pedido-idade${p.status === 'novo' && minutos >= MIN_ALERTA ? ' alerta' : ''}">⏱ ${minutos} min</span>` : ''}
+        <button class="btn-outline-sm" style="padding:2px 8px;" data-print="1" title="Imprimir Comanda">🖨️</button>
+      </span>
     </div>
     <p style="font-size:14px; margin:4px 0;"><strong>${esc(p.clienteNome)}</strong> ${p.clienteWhatsapp ? `(${esc(p.clienteWhatsapp)})` : ''}</p>
     <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
@@ -173,11 +248,24 @@ function criarCardPedidoBalcao(p) {
       <strong>${formatarCentavos(p.totalCentavos)}</strong>
     </div>
     ${trocoTxt}
+    ${p.status === 'novo' && minutos >= MIN_ALERTA ? `<div class="pedido-aviso">⚠️ Aguardando aceite há ${minutos} min — cancela sozinho com ${MIN_CANCELAR} min</div>` : ''}
+    ${p.status === 'preparo' && p.pronto ? '<div class="pedido-pronto">✅ Cozinha: pronto</div>' : ''}
     ${p.status === 'entrega' ? `<div style="font-size:13px; margin-bottom:8px;">🛵 Com: <strong>${esc(p.motoboyNome || (p.motoboyId ? 'entregador (app)' : 'sem entregador'))}</strong></div>` : ''}
     ${botaoAcao}
   `;
 
   div.querySelector('[data-print]')?.addEventListener('click', () => imprimirComandaTermica(p));
+  div.querySelector('[data-recusar]')?.addEventListener('click', async () => {
+    const motivo = prompt('Motivo da recusa (o cliente verá que o pedido foi cancelado):', 'Loja sem condições de atender agora');
+    if (motivo === null) return;
+    await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
+      status: 'cancelado',
+      motivoCancelamento: motivo.trim().slice(0, 120) || 'Recusado pela loja',
+      canceladoEm: serverTimestamp(),
+      atualizadoEm: serverTimestamp()
+    });
+    showToast(`Pedido #${p.numeroPedido || ''} recusado.`);
+  });
 
   const btnNext = div.querySelector('[data-next]');
   if (btnNext) {
@@ -458,6 +546,8 @@ async function abrirPedidoManualRapido() {
         trocoParaCentavos,
         status: 'preparo',
         origem: 'balcao',
+        canal: 'balcao',
+        turnoId: estadoCaixa.caixaAberto ? estadoCaixa.turnoId : null,
         criadoEm: serverTimestamp()
       });
       overlay.remove();

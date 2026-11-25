@@ -41,7 +41,14 @@ service cloud.firestore {
       // Cardápio consolidado (vitrine)
       match /publico/{docId} {
         allow read: if true;
-        allow write: if ehEquipe(lojaId);
+        // Cardápio: só o dono. Estado do caixa (aberto/fechado): qualquer pessoa da equipe.
+        allow write: if ehDono(lojaId) || (docId == 'estado' && ehEquipe(lojaId));
+      }
+
+      // Histórico de turnos do caixa (abertura, fechamento e resumo)
+      match /turnos/{turnoId} {
+        allow read, create, update: if ehEquipe(lojaId);
+        allow delete: if false;
       }
 
       // Chaves Pix e afins: nunca acessíveis pelo navegador (só pelo Worker)

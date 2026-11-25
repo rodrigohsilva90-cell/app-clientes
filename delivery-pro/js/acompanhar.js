@@ -108,7 +108,9 @@ function renderStatus(p) {
     box.innerHTML = `
       <h2>Pedido #${numero}</h2>
       <div style="background:#fee2e2; color:#991b1b; padding:12px; border-radius:8px; margin-top:12px;">
-        ⚠️ Houve um problema com este pedido. A loja vai entrar em contato com você.
+        ${p.status === 'cancelado'
+          ? `❌ Este pedido foi cancelado pela loja.${p.motivoCancelamento ? `<br/><small>Motivo: ${esc(p.motivoCancelamento)}</small>` : ''}<br/><small>Se você já pagou, fale com a loja para o estorno.</small>`
+          : '⚠️ Houve um problema com este pedido. A loja vai entrar em contato com você.'}
       </div>
     `;
     return;

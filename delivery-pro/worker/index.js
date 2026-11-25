@@ -126,9 +126,10 @@ async function criarPedidoSeguro(request, env) {
     const slugDoc = await fs.ler(`slugs/${slug}`);
     if (!slugDoc || !slugDoc.ativo || !slugDoc.lojaId) throw new ErroPedido('Loja não encontrada ou fechada.', 404);
     const lojaId = String(slugDoc.lojaId);
-    const [loja, cardapio] = await Promise.all([
+    const [loja, cardapio, estado] = await Promise.all([
       fs.ler(`lojas/${lojaId}`),
-      fs.ler(`lojas/${lojaId}/publico/cardapio_completo`)
+      fs.ler(`lojas/${lojaId}/publico/cardapio_completo`),
+      fs.ler(`lojas/${lojaId}/publico/estado`)
     ]);
     if (!loja) throw new ErroPedido('Loja não encontrada.', 404);
     const produtos = (cardapio?.produtos || []).filter(p => !p.excluido);
@@ -183,7 +184,8 @@ async function criarPedidoSeguro(request, env) {
       trocoParaCentavos: formaPagamento === 'dinheiro' ? trocoParaCentavos : 0,
       status: 'novo',
       origem,
-      canal: 'vitrine'
+      canal: 'vitrine',
+      turnoId: estado && estado.caixaAberto && estado.turnoId ? String(estado.turnoId) : null
     };
 
     // O ID do pedido é o próprio token: clicar duas vezes não cria dois pedidos
