@@ -63,24 +63,9 @@ service cloud.firestore {
         // Acompanhamento: qualquer um com o link (ID longo e aleatório) abre UM pedido; listar continua proibido
         allow get: if true;
 
-        // Cliente sem login: só cria pedido NOVO, com campos e tamanhos controlados
-        allow create: if ehEquipe(lojaId) || (
-          request.resource.data.keys().hasOnly([
-            'checkoutToken', 'numeroPedido', 'clienteNome', 'clienteWhatsapp', 'enderecoTexto',
-            'itens', 'totalCentavos', 'formaPagamento', 'trocoParaCentavos', 'status', 'origem', 'criadoEm'
-          ])
-          && request.resource.data.status == 'novo'
-          && request.resource.data.criadoEm == request.time
-          && textoAte(request.resource.data.clienteNome, 80)
-          && textoAte(request.resource.data.clienteWhatsapp, 15)
-          && textoAte(request.resource.data.enderecoTexto, 250)
-          && request.resource.data.itens is list
-          && request.resource.data.itens.size() > 0
-          && request.resource.data.itens.size() <= 50
-          && request.resource.data.totalCentavos is int
-          && request.resource.data.totalCentavos > 0
-          && request.resource.data.formaPagamento in ['pix', 'cartao_entrega', 'dinheiro']
-        );
+        // Pedidos de clientes são criados SOMENTE pelo Worker (checkout seguro, preço recalculado).
+        // Pelo app, só a equipe da loja cria pedidos (balcão/telefone).
+        allow create: if ehEquipe(lojaId);
 
         // Equipe vê e movimenta tudo; entregador vê pedidos prontos e em rota
         allow read: if ehEquipe(lojaId)

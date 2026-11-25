@@ -6,6 +6,7 @@
 export function montarItem(prod, selecoes) {
   let totalCentavos = Number(prod.precoCentavos) || 0;
   const detalhes = [];
+  const indices = {}; // { indiceDoGrupo: [indicesDasOpcoes] } -> enviado ao servidor para recalcular o preço
   const grupos = prod.grupos || [];
 
   for (let i = 0; i < grupos.length; i++) {
@@ -24,10 +25,11 @@ export function montarItem(prod, selecoes) {
         totalCentavos += precos.reduce((a, b) => a + b, 0);
       }
       detalhes.push(`${grp.titulo}: ${escolhidos.map(e => e.nome).join(' / ')}`);
+      indices[i] = escolhidos.map(e => (grp.opcoes || []).indexOf(e));
     }
   }
 
   return {
-    item: { produtoId: prod.id, nome: prod.nome, quantidade: 1, unitarioCentavos: totalCentavos, detalhes }
+    item: { produtoId: prod.id, nome: prod.nome, quantidade: 1, unitarioCentavos: totalCentavos, detalhes, selecoes: indices }
   };
 }

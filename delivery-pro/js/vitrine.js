@@ -7,7 +7,9 @@ import { doc, getDoc, collection, addDoc, serverTimestamp } from 'https://www.gs
 let carrinho = [];
 let produtoSelecionado = null;
 let selecoesAtuais = {};
-let checkoutToken = `chk_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+// Chave única por tentativa de compra (vira o ID do pedido: clicar duas vezes não duplica)
+const novoCheckoutToken = () => `chk_${(crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}${Math.random()}`).replace(/[^a-zA-Z0-9]/g, '')}`;
+let checkoutToken = novoCheckoutToken();
 
 export async function iniciarVitrine() {
   const root = document.getElementById('app-root');
@@ -391,25 +393,35 @@ function abrirModalCheckout() {
     btn.textContent = 'Enviando pedido...';
 
     try {
-      const numeroPedido = Math.floor(100 + Math.random() * 900);
-      const pedidoRef = await addDoc(collection(db, 'lojas', AppState.lojaId, 'pedidos'), {
-        checkoutToken,
-        numeroPedido,
-        clienteNome: nome,
-        clienteWhatsapp: whatsapp,
-        enderecoTexto: endereco,
-        itens: carrinho,
-        totalCentavos: subtotalCentavos,
-        formaPagamento: pagamento,
-        trocoParaCentavos,
-        status: 'novo',
-        origem: new URLSearchParams(window.location.search).get('origem') || 'direto',
-        criadoEm: serverTimestamp()
+      // O Worker recalcula os preços com o cardápio oficial e grava o pedido
+      const resp = await fetch('/api/pedidos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          slug: AppState.slug,
+          checkoutToken,
+          clienteNome: nome,
+          clienteWhatsapp: whatsapp,
+          enderecoTexto: endereco,
+          formaPagamento: pagamento,
+          trocoParaCentavos,
+          origem: new URLSearchParams(window.location.search).get('origem') || 'direto',
+          itens: carrinho.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade, selecoes: i.selecoes || {} }))
+        })
       });
+      const resultado = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(resultado.erro || 'Erro ao enviar pedido. Tente novamente.', 6000);
+        btn.disabled = false;
+        btn.textContent = 'Enviar Pedido Agora';
+        return;
+      }
+      const pedidoRef = { id: resultado.id };
+      const numeroPedido = resultado.numeroPedido;
 
       carrinho = [];
       localStorage.removeItem(`carrinho_${AppState.lojaId}`);
-      checkoutToken = `chk_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      checkoutToken = novoCheckoutToken();
       salvarPedidoLocal(AppState.lojaId, { id: pedidoRef.id, numero: numeroPedido });
       showToast('Pedido enviado com sucesso!');
       // Vai direto para a tela de acompanhamento (o link fica salvo no aparelho)
