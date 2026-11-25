@@ -46,6 +46,9 @@ export default {
       if (url.pathname === '/api/lojas' && request.method === 'POST') {
         return criarLoja(request, env);
       }
+      if (url.pathname === '/api/equipe' && request.method === 'POST') {
+        return gerenciarEquipe(request, env);
+      }
       return jsonResponse({ error: 'Rota de API não encontrada' }, 404);
     }
 
@@ -272,7 +275,7 @@ async function tokenGoogle(conta) {
   const cabecalho = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const corpo = b64url(JSON.stringify({
     iss: conta.client_email,
-    scope: 'https://www.googleapis.com/auth/datastore',
+    scope: 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/identitytoolkit',
     aud: 'https://oauth2.googleapis.com/token',
     iat: agora,
     exp: agora + 3600
@@ -305,6 +308,38 @@ async function firestore(env) {
       if (resp.status === 404) return null;
       if (!resp.ok) throw new Error(`Firestore GET ${caminho}: ${resp.status} ${await resp.text()}`);
       return deCampos((await resp.json()).fields || {});
+    },
+    // Apaga documentos (tudo ou nada)
+    async apagar(caminhos) {
+      const resp = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
+        method: 'POST',
+        headers: await cabecalhos(),
+        body: JSON.stringify({ writes: caminhos.map(c => ({ delete: `${base}/${c}` })) })
+      });
+      if (!resp.ok) throw new Error(`Firestore delete: ${resp.status} ${await resp.text()}`);
+    },
+    // Logins (Firebase Authentication) via Identity Toolkit
+    async buscarLoginPorEmail(email) {
+      const resp = await fetch(`https://identitytoolkit.googleapis.com/v1/projects/${conta.project_id}/accounts:lookup`, {
+        method: 'POST', headers: await cabecalhos(), body: JSON.stringify({ email: [email] })
+      });
+      if (!resp.ok) throw new Error(`Auth lookup: ${resp.status} ${await resp.text()}`);
+      const r = await resp.json();
+      return r.users && r.users[0] ? r.users[0].localId : null;
+    },
+    async criarLogin(email, senha, nome) {
+      const resp = await fetch(`https://identitytoolkit.googleapis.com/v1/projects/${conta.project_id}/accounts`, {
+        method: 'POST', headers: await cabecalhos(), body: JSON.stringify({ email, password: senha, displayName: nome })
+      });
+      const r = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const msg = r.error?.message || '';
+        if (msg.includes('EMAIL_EXISTS')) return null;
+        if (msg.includes('WEAK_PASSWORD')) throw new ErroPedido('Senha fraca: use pelo menos 6 caracteres.');
+        if (msg.includes('INVALID_EMAIL')) throw new ErroPedido('E-mail inválido.');
+        throw new Error(`Auth create: ${resp.status} ${JSON.stringify(r)}`);
+      }
+      return r.localId;
     },
     // Várias gravações juntas (tudo ou nada). Cada item: { caminho, dados, novo: true|false, horaServidor: [campos] }
     async gravarJuntos(itens) {
@@ -483,4 +518,97 @@ async function verificarTokenFirebase(token, projectId) {
   if (!dados.sub || typeof dados.sub !== 'string') throw new Error('sub');
   if (!(dados.exp > agora) || dados.iat > agora + 300) throw new Error('tempo');
   return dados;
+}
+
+// =====================================================================
+// EQUIPE: o dono adiciona/remove balcão, cozinha e entregadores.
+// Conferimos o token e se quem pede é o DONO da loja informada.
+// =====================================================================
+async function gerenciarEquipe(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível no momento.', 503);
+    const ip = request.headers.get('CF-Connecting-IP') || 'local';
+    if (!dentroDoLimite('eq:' + ip)) throw new ErroPedido('Muitas tentativas. Aguarde alguns minutos.', 429);
+    const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    let usuario;
+    try { usuario = await verificarTokenFirebase(token, conta.project_id); }
+    catch (_) { throw new ErroPedido('Sessão inválida. Entre de novo e tente outra vez.', 401); }
+
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId)) throw new ErroPedido('Loja inválida.');
+
+    const fs = await firestore(env);
+    const eu = await fs.ler(`lojas/${lojaId}/equipe/${usuario.sub}`);
+    if (!eu || eu.papel !== 'dono') throw new ErroPedido('Só o dono da loja pode mexer na equipe.', 403);
+    const loja = await fs.ler(`lojas/${lojaId}`);
+    if (!loja) throw new ErroPedido('Loja não encontrada.', 404);
+    // Endereço (slug) da loja: o gravado nela, ou o enviado pelo app se apontar para esta loja
+    let slugLoja = loja.slug || null;
+    const slugEnviado = String(corpo.slug || '').toLowerCase();
+    if (!slugLoja && /^[a-z0-9-]{2,40}$/.test(slugEnviado)) {
+      const s = await fs.ler(`slugs/${slugEnviado}`);
+      if (s && s.lojaId === lojaId) slugLoja = slugEnviado;
+    }
+
+    if (corpo.acao === 'remover') {
+      const uid = String(corpo.uid || '');
+      const tipo = corpo.tipo === 'entregadores' ? 'entregadores' : 'equipe';
+      if (!/^[A-Za-z0-9]{6,128}$/.test(uid)) throw new ErroPedido('Pessoa inválida.');
+      if (uid === usuario.sub) throw new ErroPedido('Você não pode remover a si mesmo.');
+      const alvo = await fs.ler(`lojas/${lojaId}/${tipo}/${uid}`);
+      if (!alvo) throw new ErroPedido('Essa pessoa já não está na equipe.', 404);
+      if (alvo.papel === 'dono') throw new ErroPedido('O dono não pode ser removido.');
+      const caminhos = [`lojas/${lojaId}/${tipo}/${uid}`];
+      const perfil = await fs.ler(`usuarios/${uid}`);
+      if (perfil && perfil.lojaId === lojaId) caminhos.push(`usuarios/${uid}`);
+      await fs.apagar(caminhos);
+      return jsonResponse({ ok: true });
+    }
+
+    if (corpo.acao !== 'adicionar') throw new ErroPedido('Ação inválida.');
+    const papel = ['balcao', 'cozinha', 'entregador'].includes(corpo.papel) ? corpo.papel : null;
+    const nome = String(corpo.nome || '').trim().slice(0, 60);
+    const email = String(corpo.email || '').trim().toLowerCase();
+    const senha = String(corpo.senha || '');
+    if (!papel) throw new ErroPedido('Escolha a função.');
+    if (nome.length < 2) throw new ErroPedido('Informe o nome.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 120) throw new ErroPedido('E-mail inválido.');
+    if (senha.length < 6 || senha.length > 100) throw new ErroPedido('A senha inicial precisa ter pelo menos 6 caracteres.');
+
+    let uid = await fs.criarLogin(email, senha, nome);
+    const contaExistente = !uid;
+    if (!uid) uid = await fs.buscarLoginPorEmail(email);
+    if (!uid) throw new Error('login não encontrado após EMAIL_EXISTS');
+    if (uid === usuario.sub) throw new ErroPedido('Esse é o seu próprio e-mail.');
+
+    const itens = [];
+    if (papel === 'entregador') {
+      itens.push({ caminho: `lojas/${lojaId}/entregadores/${uid}`, dados: { nome, email } });
+    } else {
+      const atual = await fs.ler(`lojas/${lojaId}/equipe/${uid}`);
+      if (atual && atual.papel === 'dono') throw new ErroPedido('Essa pessoa já é dona desta loja.');
+      itens.push({ caminho: `lojas/${lojaId}/equipe/${uid}`, dados: { papel, nome, email } });
+    }
+    // Perfil para o login levar direto à tela certa (não sobrescreve quem já é dono de outra loja)
+    const perfil = await fs.ler(`usuarios/${uid}`);
+    if (!perfil || !perfil.slug || perfil.lojaId === lojaId) {
+      itens.push({
+        caminho: `usuarios/${uid}`,
+        dados: {
+          nome, email, lojaId, slug: slugLoja,
+          inicio: papel === 'entregador' ? 'motoboy' : 'painel',
+          roles: papel === 'entregador' ? ['motoboy'] : ['balcao']
+        }
+      });
+    }
+    await fs.gravarJuntos(itens);
+    return jsonResponse({ ok: true, uid, contaExistente }, 201);
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('gerenciarEquipe', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível concluir agora. Tente novamente.' }, 500);
+  }
 }

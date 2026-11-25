@@ -5,6 +5,7 @@ import { abrirGestaoCardapio } from './gestao-cardapio.js';
 import { abrirConfigEntrega } from './config-entrega.js';
 import { escutarEstadoCaixa, abrirCaixa, fecharCaixa } from './turno.js';
 import { iniciarKds } from './kds.js';
+import { abrirEquipe } from './equipe.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
@@ -47,6 +48,7 @@ export async function iniciarBalcao() {
         ${ehDono ? `
           <button id="btn-gerenciar-cardapio" class="btn-outline-sm">🍕 Gerenciar cardápio</button>
           <button id="btn-config-entrega" class="btn-outline-sm">🛵 Entrega e frete</button>
+          <button id="btn-equipe" class="btn-outline-sm">👥 Equipe</button>
           <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
         ` : ''}
       </div>
@@ -78,6 +80,7 @@ export async function iniciarBalcao() {
     document.getElementById('btn-cardapio-exemplo').onclick = criarCardapioExemplo;
     document.getElementById('btn-gerenciar-cardapio').onclick = abrirGestaoCardapio;
     document.getElementById('btn-config-entrega').onclick = abrirConfigEntrega;
+    document.getElementById('btn-equipe').onclick = abrirEquipe;
   }
 
   // Caixa por turno

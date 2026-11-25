@@ -1,5 +1,5 @@
 import { auth, db, showToast } from './config.js';
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import { doc, getDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import { iniciarVitrine } from './vitrine.js';
 import { iniciarBalcao } from './balcao.js';
@@ -152,9 +152,10 @@ async function renderizarLandingSaaS(root) {
     try {
       const perfil = await getDoc(doc(db, 'usuarios', auth.currentUser.uid));
       const slug = perfil.exists() ? perfil.data().slug : null;
+      const entregador = perfil.exists() && perfil.data().inicio === 'motoboy';
       if (slug) {
         document.getElementById('landing-acoes').innerHTML = `
-          <a class="btn-primary" style="text-decoration:none; display:block;" href="/${encodeURIComponent(slug)}/painel">📋 Abrir o painel da minha loja</a>
+          <a class="btn-primary" style="text-decoration:none; display:block;" href="/${encodeURIComponent(slug)}/${entregador ? 'motoboy' : 'painel'}">${entregador ? '🛵 Abrir app do entregador' : '📋 Abrir o painel da minha loja'}</a>
           <a class="btn-outline-sm" style="text-decoration:none; display:block; text-align:center;" href="/${encodeURIComponent(slug)}">👀 Ver meu cardápio</a>
           <button class="btn-outline-sm" id="btn-landing-sair">Sair</button>
         `;
@@ -226,12 +227,25 @@ function abrirModalLogin() {
       <input name="senha" type="password" placeholder="Senha" required autocomplete="current-password" style="width:100%; padding:10px; margin-bottom:12px; border:1px solid var(--border); border-radius:8px;" />
       <button class="btn-primary" type="submit">Entrar</button>
       <button class="btn-outline-sm" type="button" data-fechar style="width:100%; margin-top:8px;">Cancelar</button>
-      <p style="text-align:center; font-size:14px; margin-top:12px;">Ainda não tem loja? <a href="#" data-criar style="color:var(--primary); font-weight:700;">Criar conta grátis</a></p>
+      <p style="text-align:center; font-size:14px; margin-top:12px;"><a href="#" data-esqueci style="color:var(--text-muted);">Esqueci minha senha</a></p>
+      <p style="text-align:center; font-size:14px; margin-top:8px;">Ainda não tem loja? <a href="#" data-criar style="color:var(--primary); font-weight:700;">Criar conta grátis</a></p>
     </form>
   `;
   document.body.appendChild(modal);
   modal.querySelector('[data-fechar]').onclick = () => modal.remove();
   modal.querySelector('[data-criar]').onclick = (e) => { e.preventDefault(); modal.remove(); abrirCadastroLoja(); };
+  modal.querySelector('[data-esqueci]').onclick = async (e) => {
+    e.preventDefault();
+    const email = modal.querySelector('input[name="email"]').value.trim() || prompt('Digite seu e-mail para receber o link de nova senha:') || '';
+    if (!/^\S+@\S+\.\S+$/.test(email)) { showToast('Digite seu e-mail no campo acima.'); return; }
+    try {
+      auth.languageCode = 'pt-BR';
+      await sendPasswordResetEmail(auth, email);
+      showToast('Enviamos um link para criar nova senha. Veja seu e-mail (e a caixa de spam).', 7000);
+    } catch (_) {
+      showToast('Não foi possível enviar. Confira o e-mail digitado.');
+    }
+  };
   modal.querySelector('form').onsubmit = async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button[type="submit"]');
@@ -244,7 +258,7 @@ function abrirModalLogin() {
         try {
           const perfil = await getDoc(doc(db, 'usuarios', cred.user.uid));
           if (perfil.exists() && perfil.data().slug) {
-            window.location.href = `/${perfil.data().slug}/painel`;
+            window.location.href = `/${perfil.data().slug}/${perfil.data().inicio === 'motoboy' ? 'motoboy' : 'painel'}`;
             return;
           }
         } catch (_) {}

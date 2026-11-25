@@ -236,3 +236,11 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .cad-slug { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; margin: 4px 0 4px; overflow: hidden; background: var(--bg); }
 .cad-slug span { padding: 10px 0 10px 10px; font-size: 13px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
 .cad-slug input { flex: 1; min-width: 0; border: none; padding: 10px 10px 10px 2px; font-size: 15px; background: var(--surface); }
+
+/* ===== Equipe ===== */
+.eq-pessoa { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.eq-funcoes { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }
+.eq-funcoes label { border: 1px solid var(--border); border-radius: 10px; padding: 10px; cursor: pointer; display: flex; gap: 8px; align-items: flex-start; }
+.eq-funcoes label:has(input:checked) { border-color: var(--primary); background: #f0fdf4; }
+.eq-funcoes small { display: block; color: var(--text-muted); font-size: 12px; }
+.eq-ok { background: #dcfce7; color: #14532d; border-radius: 10px; padding: 12px; margin-top: 12px; font-size: 14px; }
