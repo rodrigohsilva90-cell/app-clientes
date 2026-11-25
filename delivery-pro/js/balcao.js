@@ -1,7 +1,7 @@
 import { db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { montarItem } from './cardapio.js';
-import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
 let wakeLock = null;
@@ -166,6 +166,7 @@ function criarCardPedidoBalcao(p) {
       <strong>${formatarCentavos(p.totalCentavos)}</strong>
     </div>
     ${trocoTxt}
+    ${p.status === 'entrega' ? `<div style="font-size:13px; margin-bottom:8px;">🛵 Com: <strong>${esc(p.motoboyNome || (p.motoboyId ? 'entregador (app)' : 'sem entregador'))}</strong></div>` : ''}
     ${botaoAcao}
   `;
 
@@ -175,6 +176,7 @@ function criarCardPedidoBalcao(p) {
   if (btnNext) {
     btnNext.onclick = async () => {
       const novoStatus = btnNext.dataset.next;
+      if (novoStatus === 'entrega') return despacharParaEntregador(p);
       await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
         status: novoStatus,
         atualizadoEm: serverTimestamp()
@@ -507,4 +509,58 @@ async function criarCardapioExemplo() {
     console.error(err);
     showToast(err.code === 'permission-denied' ? 'Sem permissão: entre com a conta da equipe.' : 'Erro ao criar o cardápio.');
   }
+}
+
+// Despacha o pedido para um entregador escolhido da lista (ele passa a ver no app na hora)
+async function despacharParaEntregador(p) {
+  let entregadores = [];
+  try {
+    const snap = await getDocs(collection(db, 'lojas', AppState.lojaId, 'entregadores'));
+    entregadores = snap.docs.map(d => ({ uid: d.id, nome: d.data().nome || 'Entregador' }));
+  } catch (err) {
+    console.error(err);
+    showToast('Erro ao carregar a lista de entregadores.');
+    return;
+  }
+  if (!entregadores.length) {
+    showToast('Nenhum entregador cadastrado nesta loja.');
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:1000; display:flex; align-items:center; justify-content:center; padding:16px;';
+  overlay.innerHTML = `
+    <div class="card" style="max-width:380px; width:100%; margin:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3>Quem vai entregar o #${esc(p.numeroPedido || p.id.slice(0, 4))}?</h3>
+        <button class="btn-outline-sm" data-fechar>✕</button>
+      </div>
+      ${entregadores.map(e => `
+        <button class="btn-outline-sm" data-uid="${esc(e.uid)}" style="width:100%; text-align:left; padding:12px; margin-bottom:8px; font-size:15px;">🛵 ${esc(e.nome)}</button>
+      `).join('')}
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  overlay.querySelectorAll('[data-uid]').forEach(btn => {
+    btn.onclick = async () => {
+      const escolhido = entregadores.find(e => e.uid === btn.dataset.uid);
+      btn.disabled = true;
+      try {
+        await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
+          status: 'entrega',
+          motoboyId: escolhido.uid,
+          motoboyNome: escolhido.nome,
+          saiuParaEntregaEm: serverTimestamp(),
+          atualizadoEm: serverTimestamp()
+        });
+        overlay.remove();
+        showToast(`Pedido #${p.numeroPedido || ''} enviado para ${escolhido.nome}`);
+      } catch (err) {
+        console.error(err);
+        btn.disabled = false;
+        showToast('Erro ao despachar o pedido.');
+      }
+    };
+  });
 }

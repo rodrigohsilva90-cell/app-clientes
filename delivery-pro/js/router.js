@@ -4,6 +4,7 @@ import { doc, getDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase
 import { iniciarVitrine } from './vitrine.js';
 import { iniciarBalcao } from './balcao.js';
 import { iniciarMotoboy } from './motoboy.js';
+import { iniciarAcompanhamento } from './acompanhar.js';
 
 // 1. Registro do Service Worker com aviso de atualização
 if ('serviceWorker' in navigator) {
@@ -116,6 +117,9 @@ async function resolverRota() {
     } else if (subRota === 'motoboy') {
       AppState.modoAtual = 'motoboy';
       iniciarMotoboy();
+    } else if (subRota === 'pedido') {
+      AppState.modoAtual = 'cliente';
+      iniciarAcompanhamento(pathParts[2]);
     } else {
       AppState.modoAtual = 'cliente';
       iniciarVitrine();

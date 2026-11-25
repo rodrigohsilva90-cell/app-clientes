@@ -60,6 +60,9 @@ service cloud.firestore {
       }
 
       match /pedidos/{pedidoId} {
+        // Acompanhamento: qualquer um com o link (ID longo e aleatório) abre UM pedido; listar continua proibido
+        allow get: if true;
+
         // Cliente sem login: só cria pedido NOVO, com campos e tamanhos controlados
         allow create: if ehEquipe(lojaId) || (
           request.resource.data.keys().hasOnly([

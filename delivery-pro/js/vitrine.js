@@ -1,6 +1,7 @@
 import { db, formatarCentavos, showToast, WORKER_API_URL } from './config.js';
 import { AppState } from './router.js';
 import { montarItem } from './cardapio.js';
+import { salvarPedidoLocal, pedidosRecentes } from './acompanhar.js';
 import { doc, getDoc, collection, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let carrinho = [];
@@ -36,6 +37,13 @@ export async function iniciarVitrine() {
         <span class="badge" style="background:#dcfce7; color:#166534;">● Aberto agora</span>
       </div>
     </div>
+
+    ${pedidosRecentes(AppState.lojaId).map(p => `
+      <a href="/${AppState.slug}/pedido/${encodeURIComponent(p.id)}" class="card" style="display:flex; justify-content:space-between; align-items:center; gap:8px; text-decoration:none; color:inherit; border:2px solid var(--primary);">
+        <span>📦 Seu pedido <strong>#${String(p.numero || '').replace(/[^0-9]/g, '')}</strong> está em andamento</span>
+        <strong style="color:var(--primary); white-space:nowrap;">Acompanhar →</strong>
+      </a>
+    `).join('')}
 
     <div id="lista-categorias"></div>
 
@@ -295,9 +303,10 @@ function abrirModalCheckout() {
     btn.textContent = 'Enviando pedido...';
 
     try {
+      const numeroPedido = Math.floor(100 + Math.random() * 900);
       const pedidoRef = await addDoc(collection(db, 'lojas', AppState.lojaId, 'pedidos'), {
         checkoutToken,
-        numeroPedido: Math.floor(100 + Math.random() * 900),
+        numeroPedido,
         clienteNome: nome,
         clienteWhatsapp: whatsapp,
         enderecoTexto: endereco,
@@ -313,18 +322,10 @@ function abrirModalCheckout() {
       carrinho = [];
       localStorage.removeItem(`carrinho_${AppState.lojaId}`);
       checkoutToken = `chk_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      modal.classList.add('hidden');
-      atualizarBarraCarrinho();
+      salvarPedidoLocal(AppState.lojaId, { id: pedidoRef.id, numero: numeroPedido });
       showToast('Pedido enviado com sucesso!');
-
-      document.getElementById('app-root').innerHTML = `
-        <div class="card" style="text-align:center; padding:32px 16px;">
-          <h2>Pedido Confirmado! 🎉</h2>
-          <p style="margin:10px 0; color:var(--text-muted);">Código de acompanhamento: <strong>${pedidoRef.id.slice(0, 6).toUpperCase()}</strong></p>
-          <p>Assim que o motoboy sair, o rastreamento ao vivo aparecerá aqui.</p>
-          <button class="btn-outline-sm" style="margin-top:16px;" onclick="window.location.reload()">Fazer outro pedido</button>
-        </div>
-      `;
+      // Vai direto para a tela de acompanhamento (o link fica salvo no aparelho)
+      window.location.href = `/${AppState.slug}/pedido/${pedidoRef.id}`;
     } catch (err) {
       console.error(err);
       showToast('Erro ao enviar pedido. Tente novamente.');
