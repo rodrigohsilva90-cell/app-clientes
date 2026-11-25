@@ -11,6 +11,11 @@ let ultimaPosicao = null;
 let ultimoEnvioTimestamp = 0;
 let wakeLockMotoboy = null;
 let pedidoEmRotaAtual = null;
+let minhasEntregas = [];      // entregas deste motoboy, na ordem da rota (a primeira é a atual)
+let ordemRota = [];           // ids na ordem escolhida (mantida enquanto o conjunto não muda)
+const chegadaAvisada = new Set();
+let assinaturaTela = '';
+const MAX_ENTREGAS_ROTA = 4;
 let mapaMotoboy = null;
 let marcadorMoto = null;
 
@@ -55,6 +60,50 @@ export function iniciarMotoboy() {
   escutarEntregas(user.uid);
 }
 
+// Posição vai para TODAS as entregas da rota. Cada cliente recebe só quantas entregas vêm
+// antes da dele ("antes"), nunca os endereços dos outros. A 50 m do destino, para de transmitir
+// para aquele cliente e avisa "chegando" (privacidade).
+async function enviarPosicaoParaRota(coords) {
+  await Promise.all(minhasEntregas.map(async (p, indice) => {
+    const d = p.destinoCoords;
+    const chegou = d && calcularDistanciaMetros(d.lat, d.lng, coords.lat, coords.lng) <= 50;
+    if (chegou && chegadaAvisada.has(p.id)) return;
+    try {
+      await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
+        motoboyCoords: chegou ? { chegou: true } : { ...coords, antes: indice },
+        gpsAtualizadoEm: serverTimestamp()
+      });
+      if (chegou) { chegadaAvisada.add(p.id); avisarCliente(p.id); }
+    } catch (_) {}
+  }));
+}
+
+// Ordem da rota: sempre a entrega mais próxima de onde a moto está (a partir da loja no começo)
+function ordenarRota(lista) {
+  const ids = lista.map(p => p.id).sort().join(',');
+  const idsAtuais = [...ordemRota].sort().join(',');
+  if (ids !== idsAtuais) {
+    const restantes = [...lista];
+    const nova = [];
+    let ponto = ultimaPosicao || AppState.lojaDados.localizacao || null;
+    while (restantes.length) {
+      let melhor = 0;
+      if (ponto) {
+        let menor = Infinity;
+        restantes.forEach((p, i) => {
+          const dist = p.destinoCoords ? calcularDistanciaMetros(ponto.lat, ponto.lng, p.destinoCoords.lat, p.destinoCoords.lng) : Infinity;
+          if (dist < menor) { menor = dist; melhor = i; }
+        });
+      }
+      const [escolhido] = restantes.splice(melhor, 1);
+      nova.push(escolhido.id);
+      if (escolhido.destinoCoords) ponto = escolhido.destinoCoords;
+    }
+    ordemRota = nova;
+  }
+  return ordemRota.map(id => lista.find(p => p.id === id)).filter(Boolean);
+}
+
 // 1. Telemetria GPS Adaptativa (8s em movimento / 30s parado) + WakeLock
 async function iniciarTelemetriaGPS(motoboyUid) {
   if ('wakeLock' in navigator) {
@@ -90,18 +139,7 @@ async function iniciarTelemetriaGPS(motoboyUid) {
         ultimaPosicao = coords;
 
         // Atualiza posição apenas no pedido ativo para privacidade e economia
-        // Privacidade: a menos de 50 m do cliente, para de transmitir e avisa "chegando" (o mapa some na tela dele)
-        const destinoAtual = pedidoEmRotaAtual && pedidoEmRotaAtual.destinoCoords;
-        const chegou = destinoAtual && calcularDistanciaMetros(destinoAtual.lat, destinoAtual.lng, latitude, longitude) <= 50;
-        if (pedidoEmRotaAtual && navigator.onLine && !(chegou && pedidoEmRotaAtual.avisouChegada)) {
-          try {
-            await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', pedidoEmRotaAtual.id), {
-              motoboyCoords: chegou ? { chegou: true } : coords,
-              gpsAtualizadoEm: serverTimestamp()
-            });
-            if (chegou) { pedidoEmRotaAtual.avisouChegada = true; avisarCliente(pedidoEmRotaAtual.id); }
-          } catch (_) {}
-        }
+        if (navigator.onLine) enviarPosicaoParaRota(coords);
       }
     },
     (err) => {
@@ -124,13 +162,13 @@ function escutarEntregas(motoboyUid) {
 
   onSnapshot(q, (snapshot) => {
     const disponiveis = [];
-    let minhaEntrega = null;
+    const minhas = [];
     let trocoTotalCentavos = 0;
 
     snapshot.forEach((docSnap) => {
       const p = { id: docSnap.id, ...docSnap.data() };
       if (p.status === 'entrega' && p.motoboyId === motoboyUid) {
-        minhaEntrega = p;
+        minhas.push(p);
         if (p.formaPagamento === 'dinheiro' && p.trocoParaCentavos > p.totalCentavos) {
           trocoTotalCentavos += (p.trocoParaCentavos - p.totalCentavos);
         }
@@ -139,14 +177,19 @@ function escutarEntregas(motoboyUid) {
       }
     });
 
-    pedidoEmRotaAtual = minhaEntrega;
-    AppState.entregaAtiva = Boolean(minhaEntrega);
+    minhasEntregas = ordenarRota(minhas);
+    pedidoEmRotaAtual = minhasEntregas[0] || null;
+    AppState.entregaAtiva = Boolean(pedidoEmRotaAtual);
 
     const trocoEl = document.getElementById('carteira-troco-valor');
     if (trocoEl) trocoEl.textContent = formatarCentavos(trocoTotalCentavos);
 
-    renderizarEntregaAtiva(minhaEntrega, motoboyUid);
-    renderizarFilaDisponivel(disponiveis, motoboyUid, Boolean(minhaEntrega));
+    // Só redesenha a tela se mudou algo além do GPS (senão o mapa piscaria a cada 8 s)
+    const assinatura = JSON.stringify([minhasEntregas.map(p => [p.id, p.status, p.enderecoTexto, p.totalCentavos]), disponiveis.map(p => p.id)]);
+    if (assinatura === assinaturaTela) return;
+    assinaturaTela = assinatura;
+    renderizarEntregaAtiva(pedidoEmRotaAtual, motoboyUid);
+    renderizarFilaDisponivel(disponiveis, motoboyUid, minhasEntregas.length >= MAX_ENTREGAS_ROTA);
   }, (err) => {
     console.error(err);
     document.getElementById('lista-entregas-disponiveis').innerHTML = err.code === 'permission-denied'
@@ -193,6 +236,9 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
   }
 
   box.classList.remove('hidden');
+  mapaMotoboy = null; // o HTML é recriado abaixo, então o mapa também
+  marcadorMoto = null;
+  const proximas = minhasEntregas.slice(1);
   const trocoNecessario = (pedido.formaPagamento === 'dinheiro' && pedido.trocoParaCentavos > pedido.totalCentavos)
     ? pedido.trocoParaCentavos - pedido.totalCentavos
     : 0;
@@ -238,7 +284,27 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
         ⚠️ Reportar Problema / Cliente Ausente
       </button>
     </div>
+    ${proximas.length ? `
+      <div class="card rota-proximas">
+        <strong>🗺 Próximas na rota (${proximas.length})</strong>
+        <p class="gc-dica">Cada cliente vê só quantas entregas vêm antes da dele.</p>
+        ${proximas.map((p, i) => `
+          <div class="rota-item">
+            <div><strong>${i + 2}º · #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong><small>${esc(p.enderecoTexto)}</small></div>
+            <button class="btn-outline-sm" type="button" data-primeiro="${esc(p.id)}">Fazer agora</button>
+          </div>`).join('')}
+      </div>` : ''}
   `;
+  box.querySelectorAll('[data-primeiro]').forEach(b => {
+    b.onclick = () => {
+      ordemRota = [b.dataset.primeiro, ...ordemRota.filter(id => id !== b.dataset.primeiro)];
+      minhasEntregas = ordemRota.map(id => minhasEntregas.find(p => p.id === id)).filter(Boolean);
+      pedidoEmRotaAtual = minhasEntregas[0];
+      assinaturaTela = '';
+      renderizarEntregaAtiva(pedidoEmRotaAtual, motoboyUid);
+      if (ultimaPosicao) enviarPosicaoParaRota(ultimaPosicao);
+    };
+  });
 
   setTimeout(() => {
     const mapContainer = document.getElementById('mapa-motoboy');
@@ -320,7 +386,7 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
         <span style="font-size:13px; font-weight:600;">${formatarCentavos(p.totalCentavos)} • ${esc((p.formaPagamento || '').toUpperCase())}</span>
       </div>
       <button class="btn-primary" style="width:auto;" ${bloqueadoPorRotaAtiva ? 'disabled' : ''} data-assumir="${p.id}">
-        ${bloqueadoPorRotaAtiva ? 'Em rota' : 'Pegar Entrega'}
+        ${bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : minhasEntregas.length ? '+ Levar também' : 'Pegar Entrega'}
       </button>
     </div>
   `).join('');

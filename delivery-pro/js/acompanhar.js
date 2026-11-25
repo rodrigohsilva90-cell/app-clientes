@@ -74,6 +74,7 @@ export function iniciarAcompanhamento(pedidoId) {
     <div class="card hidden acomp-chegando" id="acomp-chegando">🏁 <strong>O entregador está chegando ao seu endereço!</strong><span>Fique de olho no portão ou no interfone.</span></div>
     <div class="card hidden" id="acomp-mapa-card">
       <strong>🛵 Entregador a caminho</strong>
+      <p class="acomp-antes hidden" id="acomp-antes"></p>
       <div id="acomp-mapa" style="height:260px; border-radius:8px; margin-top:10px; z-index:1;"></div>
     </div>
     <div class="card hidden" id="acomp-push"></div>
@@ -237,6 +238,13 @@ function renderMapa(p) {
     return;
   }
   card.classList.remove('hidden');
+  // Rota com várias entregas: mostra só quantas vêm antes (nunca os endereços dos outros clientes)
+  const antes = Number(coords.antes) || 0;
+  const avisoAntes = document.getElementById('acomp-antes');
+  if (avisoAntes) {
+    avisoAntes.classList.toggle('hidden', antes < 1);
+    avisoAntes.textContent = antes === 1 ? 'O entregador fará 1 entrega antes da sua.' : `O entregador fará ${antes} entregas antes da sua.`;
+  }
   if (!mapa) {
     mapa = criarMapaRastreamento('acomp-mapa', coords, 15);
     if (p.destinoCoords) L.marker([p.destinoCoords.lat, p.destinoCoords.lng]).addTo(mapa).bindPopup('Seu endereço');

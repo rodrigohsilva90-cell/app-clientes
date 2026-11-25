@@ -3,7 +3,7 @@
 import { auth, showToast } from './config.js';
 import { AppState } from './router.js';
 
-const LIMITE_BYTES = 440 * 1024;
+const ALVO_BYTES = 100 * 1024; // meta: foto leve (< 100 KB) para o cardápio abrir rápido no 4G
 
 function escolherArquivo() {
   return new Promise((resolve) => {
@@ -19,8 +19,18 @@ function escolherArquivo() {
 
 const paraBlob = (canvas, tipo, qualidade) => new Promise((r) => canvas.toBlob(r, tipo, qualidade));
 
-async function comprimir(arquivo, ladoMax, quadrada) {
+async function comprimir(arquivo, ladoMaxInicial, quadrada) {
   const bmp = await createImageBitmap(arquivo);
+  let ladoMax = ladoMaxInicial;
+  for (let tentativa = 0; tentativa < 4; tentativa++, ladoMax = Math.round(ladoMax * 0.8)) {
+    const blob = await desenharEComprimir(bmp, ladoMax, quadrada);
+    if (blob) { if (bmp.close) bmp.close(); return blob; }
+  }
+  if (bmp.close) bmp.close();
+  throw new Error('grande');
+}
+
+async function desenharEComprimir(bmp, ladoMax, quadrada) {
   let sx = 0, sy = 0, sw = bmp.width, sh = bmp.height;
   if (quadrada) { // recorta o centro (logo)
     const lado = Math.min(sw, sh);
@@ -34,14 +44,13 @@ async function comprimir(arquivo, ladoMax, quadrada) {
   ctx.fillStyle = '#fff'; // fundo branco para PNG transparente virar JPEG sem ficar preto
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-  if (bmp.close) bmp.close();
 
-  for (const q of [0.82, 0.7, 0.55, 0.4]) {
+  for (const q of [0.8, 0.7, 0.6, 0.5]) {
     let blob = await paraBlob(canvas, 'image/webp', q);
     if (!blob || blob.type !== 'image/webp') blob = await paraBlob(canvas, 'image/jpeg', q);
-    if (blob && blob.size <= LIMITE_BYTES) return blob;
+    if (blob && blob.size <= ALVO_BYTES) return blob;
   }
-  throw new Error('grande');
+  return null; // ainda grande: tenta de novo com a foto um pouco menor
 }
 
 // Abre a galeria/câmera e devolve o link https da foto enviada (ou null se cancelou/deu erro)

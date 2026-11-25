@@ -15,6 +15,11 @@
   <link rel="manifest" href="/manifest.webmanifest" id="pwa-manifest" />
   <link rel="icon" href="/icone.svg" type="image/svg+xml" id="pwa-icone" />
 
+  <!-- Abre as conexões cedo (cardápio carrega mais rápido no 4G) -->
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+  <link rel="modulepreload" href="/js/router.js" />
+
   <!-- Leaflet CSS (Mapas OpenStreetMap gratuitos) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 

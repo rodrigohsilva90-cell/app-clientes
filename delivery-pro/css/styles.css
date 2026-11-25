@@ -360,3 +360,11 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .car-acoes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .car-acoes .btn-whats { display: inline-block; }
 .chk-turnstile { margin: 6px 0; min-height: 0; }
+.rota-proximas { border: 1px dashed var(--primary); }
+.rota-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); }
+.rota-item div { display: flex; flex-direction: column; min-width: 0; }
+.rota-item small { color: var(--text-muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acomp-antes { margin-top: 6px; font-size: 14px; background: #fff7ed; color: #9a3412; border-radius: 8px; padding: 6px 10px; }
+.vt-repetir { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; border: 2px solid var(--primary); }
+.vt-repetir div { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.vt-repetir small { color: var(--text-muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

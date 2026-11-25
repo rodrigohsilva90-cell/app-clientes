@@ -94,16 +94,12 @@ export async function iniciarVitrine() {
     if (salvo) carrinho = JSON.parse(salvo);
   } catch (_) { carrinho = []; }
 
-  // Busca documento único consolidado do cardápio
-  const cardapioSnap = await getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo'));
+  // Cardápio (documento único) e aberto/fechado buscados ao mesmo tempo (abre mais rápido)
+  const [cardapioSnap, estadoLoja] = await Promise.all([
+    getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo')),
+    getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'estado')).then(e => (e.exists() ? e.data() : null)).catch(() => null)
+  ]);
   const dadosCardapio = cardapioSnap.exists() ? cardapioSnap.data() : { categorias: [], produtos: [] };
-
-  // Aberto/fechado agora (horário de funcionamento + pausa)
-  let estadoLoja = null;
-  try {
-    const est = await getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'estado'));
-    estadoLoja = est.exists() ? est.data() : null;
-  } catch (_) {}
   situacao = situacaoLoja(loja, estadoLoja);
 
   const modoLayout = loja.layoutVitrine || 'gastronomia'; // 'gastronomia' | 'varejo'
@@ -150,6 +146,8 @@ export async function iniciarVitrine() {
       </a>
     `).join('')}
 
+    <div id="vt-repetir"></div>
+
     <div class="vt-barra" id="vt-barra">
       <nav class="vt-abas" id="vt-abas"></nav>
       <input class="vt-busca" id="vt-busca" type="search" placeholder="🔍 Buscar no cardápio" />
@@ -177,6 +175,7 @@ export async function iniciarVitrine() {
   renderizarProdutos(dadosCardapio, modoLayout);
   atualizarBarraCarrinho();
   ouvirSaidaDaPagina();
+  mostrarPedirDeNovo(dadosCardapio);
 
   // Avaliação de 1 toque dos pedidos já entregues
   root.querySelectorAll('[data-avaliar]').forEach(box => {
@@ -392,6 +391,59 @@ function abrirModalProduto(prod) {
     }
     adicionarAoCarrinho(resultado.item);
     modal.classList.add('hidden');
+  };
+}
+
+// ---- Recompra rápida: "Pedir de novo" o último pedido feito neste aparelho ----
+const CHAVE_ULTIMO = (lojaId) => `ultimo_pedido_${lojaId}`;
+function guardarUltimoPedido(itens) {
+  try { localStorage.setItem(CHAVE_ULTIMO(AppState.lojaId), JSON.stringify({ em: Date.now(), itens: itens.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade, selecoes: i.selecoes || {} })) })); } catch (_) {}
+}
+// Remonta os itens com o cardápio e os preços de HOJE (produto apagado/esgotado fica de fora)
+function remontarUltimoPedido(dados) {
+  let salvo = null;
+  try { salvo = JSON.parse(localStorage.getItem(CHAVE_ULTIMO(AppState.lojaId)) || 'null'); } catch (_) {}
+  if (!salvo || !Array.isArray(salvo.itens)) return [];
+  const produtos = (dados.produtos || []).filter(p => !p.excluido && !(p.controlarEstoque && p.estoque <= 0));
+  const itens = [];
+  for (const it of salvo.itens) {
+    const prod = produtos.find(p => p.id === it.produtoId);
+    if (!prod) continue;
+    const selecoes = {};
+    let valido = true;
+    Object.entries(it.selecoes || {}).forEach(([gi, idxs]) => {
+      const grupo = (prod.grupos || [])[Number(gi)];
+      const opcoes = (idxs || []).map(n => grupo && grupo.opcoes && grupo.opcoes[n]);
+      if (!grupo || opcoes.some(o => !o)) valido = false;
+      else selecoes[gi] = opcoes;
+    });
+    if (!valido) continue;
+    const r = montarItem(prod, selecoes, AppState.lojaDados);
+    if (r.erro) continue;
+    itens.push({ ...r.item, quantidade: Math.min(50, Math.max(1, Number(it.quantidade) || 1)) });
+  }
+  return itens;
+}
+function mostrarPedirDeNovo(dados) {
+  const box = document.getElementById('vt-repetir');
+  if (!box) return;
+  const itens = remontarUltimoPedido(dados);
+  if (!itens.length) { box.innerHTML = ''; return; }
+  const total = itens.reduce((a, i) => a + i.unitarioCentavos * i.quantidade, 0);
+  box.innerHTML = `
+    <div class="card vt-repetir">
+      <div><strong>🔁 Pedir de novo?</strong><small>${esc(itens.map(i => `${i.quantidade}x ${i.nome}`).join(' · '))}</small></div>
+      <button class="btn-primary" type="button" id="btn-repetir" style="width:auto;">${formatarCentavos(total)} · Repetir</button>
+    </div>`;
+  document.getElementById('btn-repetir').onclick = () => {
+    if (!situacao.aberta) {
+      showToast(situacao.pausada ? 'A loja pausou os pedidos. Tente em alguns minutos.' : 'A loja está fechada agora.', 5000);
+      return;
+    }
+    carrinho = itens.map(i => ({ ...i }));
+    localStorage.setItem(`carrinho_${AppState.lojaId}`, JSON.stringify(carrinho));
+    atualizarBarraCarrinho();
+    abrirModalCheckout();
   };
 }
 
@@ -765,6 +817,7 @@ function abrirModalCheckout() {
       if (tipoEntrega === 'entrega') {
         guardarEndereco({ apelido: content.querySelector('input[name="chk-apelido"]:checked')?.value || 'Casa', endereco, destino: destino || null });
       }
+      guardarUltimoPedido(carrinho);
       carrinho = [];
       localStorage.removeItem(`carrinho_${AppState.lojaId}`);
       checkoutToken = novoCheckoutToken();
