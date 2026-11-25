@@ -1,6 +1,6 @@
 import fs from 'fs'; import path from 'path';
 const root = process.argv[2];
-const files = ['index.html','sw.js','css/styles.css','js/config.js','js/router.js','js/vitrine.js','js/balcao.js','js/geo.js','js/motoboy.js','js/cardapio.js','js/acompanhar.js','js/gestao-cardapio.js','js/frete.js','js/config-entrega.js','js/turno.js','js/kds.js','js/cadastro.js','js/equipe.js','js/horario.js','js/config-horarios.js','js/config-aparencia.js','js/plano.js','js/assinatura.js','js/master.js','js/avaliacoes.js','js/fotos.js','js/notificar.js','js/carrinhos.js','js/push-cliente.js','js/config-pix.js'];
+const files = ['index.html','sw.js','css/styles.css','js/config.js','js/router.js','js/vitrine.js','js/balcao.js','js/geo.js','js/motoboy.js','js/cardapio.js','js/acompanhar.js','js/gestao-cardapio.js','js/frete.js','js/config-entrega.js','js/turno.js','js/kds.js','js/cadastro.js','js/equipe.js','js/horario.js','js/config-horarios.js','js/config-aparencia.js','js/plano.js','js/assinatura.js','js/master.js','js/avaliacoes.js','js/fotos.js','js/notificar.js','js/carrinhos.js','js/push-cliente.js','js/config-pix.js','js/termos.js'];
 const types = { '.html':'text/html; charset=utf-8', '.js':'application/javascript; charset=utf-8', '.css':'text/css; charset=utf-8' };
 const map = {};
 for (const f of files) map['/'+f] = [types[path.extname(f)], fs.readFileSync(path.join(root,f),'utf8')];

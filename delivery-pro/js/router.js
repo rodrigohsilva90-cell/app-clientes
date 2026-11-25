@@ -73,6 +73,12 @@ async function resolverRota() {
   const pathParts = window.location.pathname.split('/').filter(Boolean);
   const root = document.getElementById('app-root');
 
+  // Termos de Uso e Política de Privacidade
+  if (pathParts.length === 1 && (pathParts[0] === 'termos' || pathParts[0] === 'privacidade')) {
+    const { renderizarDocumento } = await import('./termos.js');
+    return renderizarDocumento(root, pathParts[0]);
+  }
+
   // Rota Master SaaS
   if (pathParts[0] === 'master') {
     AppState.modoAtual = 'master';

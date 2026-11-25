@@ -13,6 +13,7 @@ import { statusAssinatura } from './plano.js';
 import { abrirAvaliacoes } from './avaliacoes.js';
 import { abrirCarrinhos } from './carrinhos.js';
 import { abrirConfigPix } from './config-pix.js';
+import { pedirAceiteTermos } from './termos.js';
 import { avisarCliente } from './notificar.js';
 import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
@@ -144,6 +145,7 @@ export async function iniciarBalcao() {
   });
 
   bannerAssinatura(assinatura).then(html => { if (html) root.insertAdjacentHTML('afterbegin', html); });
+  if (ehDono) pedirAceiteTermos();
   escutarPedidosEmTempoReal();
   iniciarCaoDeGuarda();
 }

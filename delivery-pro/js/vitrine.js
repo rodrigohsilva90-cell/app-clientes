@@ -154,6 +154,7 @@ export async function iniciarVitrine() {
     </div>
 
     <div id="lista-categorias"></div>
+    <p class="vt-rodape"><a href="/privacidade?loja=${esc(AppState.slug)}">Privacidade</a> · <a href="/termos?loja=${esc(AppState.slug)}">Termos</a> · Cardápio digital Delivery Pro</p>
 
     <!-- Barra Flutuante do Carrinho -->
     <div id="barra-carrinho" class="vt-carrinho hidden">
@@ -593,6 +594,7 @@ function abrirModalCheckout() {
 
     <div id="chk-turnstile" class="chk-turnstile"></div>
     <button class="btn-primary" id="btn-enviar-pedido">Enviar Pedido Agora</button>
+    <p class="gc-dica" style="text-align:center; margin-top:8px;">Seus dados são usados só para este pedido. <a href="/privacidade?loja=${esc(AppState.slug)}" target="_blank" rel="noopener">Política de Privacidade</a></p>
   `;
 
   modal.classList.remove('hidden');

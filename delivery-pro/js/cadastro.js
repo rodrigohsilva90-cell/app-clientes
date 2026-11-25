@@ -3,6 +3,7 @@
 // 2) o Worker confere o login e cria loja, link (slug), equipe e perfil de uma vez só
 import { auth, showToast, esc } from './config.js';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import { VERSAO_TERMOS } from './termos.js';
 
 // "Pizzaria do Zé!" -> "pizzaria-do-ze"
 export function sugerirSlug(texto) {
@@ -67,8 +68,9 @@ export function abrirCadastroLoja() {
       <label style="${rotulo}">Repita a senha</label>
       <input name="senha2" type="password" required autocomplete="new-password" style="${campo}" />
 
-      <button class="btn-primary" type="submit">Criar loja grátis</button>
-      <p class="gc-dica" style="text-align:center; margin-top:10px;">Ao criar a conta você concorda com os Termos de Uso. A plataforma é apenas a tecnologia; as vendas são da sua loja.</p>
+      <label class="gc-check cad-aceite"><input type="checkbox" name="aceite" required /> <span>Li e aceito os <a href="/termos" target="_blank" rel="noopener">Termos de Uso</a> e a <a href="/privacidade" target="_blank" rel="noopener">Política de Privacidade</a>.</span></label>
+      <button class="btn-primary" type="submit" style="margin-top:10px;">Criar loja grátis</button>
+      <p class="gc-dica" style="text-align:center; margin-top:10px;">A plataforma é apenas a tecnologia; as vendas, a entrega e a equipe são da sua loja.</p>
     </form>
   `;
   document.body.appendChild(overlay);
@@ -87,7 +89,8 @@ export function abrirCadastroLoja() {
       nomeLoja: form.nomeLoja.value.trim(),
       slug: sugerirSlug(form.slug.value),
       whatsapp: form.whatsapp.value.replace(/\D/g, ''),
-      parceiroRef: parceiroIndicacao()
+      parceiroRef: parceiroIndicacao(),
+      aceiteTermos: form.aceite.checked ? VERSAO_TERMOS : null
     };
     const email = form.email.value.trim();
     const senha = form.senha.value;
@@ -99,6 +102,7 @@ export function abrirCadastroLoja() {
     if (!/^\S+@\S+\.\S+$/.test(email)) return showToast('Informe um e-mail válido.');
     if (senha.length < 6) return showToast('A senha precisa ter pelo menos 6 caracteres.');
     if (senha !== form.senha2.value) return showToast('As senhas não são iguais.');
+    if (!form.aceite.checked) return showToast('Para criar a loja, marque que leu e aceita os Termos de Uso e a Política de Privacidade.', 5000);
 
     const btn = form.querySelector('button[type="submit"]');
     btn.disabled = true;

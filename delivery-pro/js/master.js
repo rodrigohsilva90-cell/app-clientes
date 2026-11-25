@@ -182,6 +182,14 @@ async function abrirConfig() {
       </div>
       <label>Comissão média dos apps de delivery (%) — usada no cálculo de economia</label>
       <input name="pct" inputmode="numeric" value="${Number(cfg.comissaoMarketplacePct) || 20}" />
+      <h4 class="gc-subtitulo">📄 Seus dados nos Termos e na Privacidade</h4>
+      <p class="gc-dica">Aparecem nas páginas /termos e /privacidade como responsável e contato (LGPD).</p>
+      <label>Seu nome ou razão social</label>
+      <input name="respNome" maxlength="100" value="${esc(cfg.responsavelNome || '')}" placeholder="Ex: Rodrigo Silva ou Delivery Pro Tecnologia Ltda" />
+      <div class="gc-linha">
+        <div><label>CPF ou CNPJ (opcional)</label><input name="respDoc" maxlength="20" value="${esc(cfg.responsavelDoc || '')}" /></div>
+        <div><label>E-mail de contato</label><input name="respEmail" type="email" maxlength="100" value="${esc(cfg.emailContato || '')}" /></div>
+      </div>
       <button class="btn-primary" type="submit" style="margin-top:12px;">💾 Salvar</button>
 
       <h4 class="gc-subtitulo">💳 Receber mensalidades por Pix (Mercado Pago)</h4>
@@ -201,7 +209,10 @@ async function abrirConfig() {
       whatsappSuporte: f.zap.value.replace(/\D/g, ''),
       precoEssencialCentavos: centavos(f.essencial.value),
       precoProCentavos: centavos(f.pro.value),
-      comissaoMarketplacePct: Math.min(50, Math.max(0, Number(f.pct.value) || 0))
+      comissaoMarketplacePct: Math.min(50, Math.max(0, Number(f.pct.value) || 0)),
+      responsavelNome: f.respNome.value.trim(),
+      responsavelDoc: f.respDoc.value.trim(),
+      emailContato: f.respEmail.value.trim()
     };
     if (dados.precoEssencialCentavos === null || dados.precoProCentavos === null) return showToast('Preço inválido.');
     try { await api({ acao: 'salvarConfig', config: dados }); showToast('Configurações salvas!'); overlay.remove(); }

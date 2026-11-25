@@ -64,6 +64,9 @@ export default {
       if (url.pathname === '/api/mp/webhook' && request.method === 'POST') {
         return webhookMercadoPago(request, env, url);
       }
+      if (url.pathname === '/api/termos' && request.method === 'POST') {
+        return aceitarTermos(request, env);
+      }
       if (url.pathname === '/api/mp/webhook-saas' && request.method === 'POST') {
         return webhookSaas(request, env, url);
       }
@@ -476,6 +479,28 @@ async function verificarPix(request, env) {
     if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
     console.error('verificarPix', err && err.stack || err);
     return jsonResponse({ erro: 'Não foi possível conferir agora.' }, 500);
+  }
+}
+
+// =====================================================================
+// TERMOS DE USO / PRIVACIDADE: mesma versão de js/termos.js. O aceite do
+// dono fica registrado na loja (versão, data e quem aceitou).
+// =====================================================================
+const VERSAO_TERMOS = '2026-11-25';
+async function aceitarTermos(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    if (corpo.versao !== VERSAO_TERMOS) throw new ErroPedido('Atualize a página e tente de novo.', 409);
+    const lojaId = String(corpo.lojaId || '');
+    const { fs, uid } = await usuarioDaEquipe(request, env, lojaId, ['dono']);
+    await fs.atualizar(`lojas/${lojaId}`, { termosVersao: VERSAO_TERMOS, termosAceitoEm: new Date(), termosAceitoPor: uid });
+    return jsonResponse({ ok: true });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('aceitarTermos', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível registrar agora.' }, 500);
   }
 }
 
@@ -1310,6 +1335,7 @@ async function criarLoja(request, env) {
     try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
     const nomeDono = String(corpo.nomeDono || '').trim().slice(0, 60);
     const nomeLoja = String(corpo.nomeLoja || '').trim().slice(0, 60);
+    if (corpo.aceiteTermos !== VERSAO_TERMOS) throw new ErroPedido('Para criar a loja, aceite os Termos de Uso e a Política de Privacidade.');
     const slug = String(corpo.slug || '').toLowerCase();
     const whatsapp = String(corpo.whatsapp || '').replace(/\D/g, '');
     if (nomeDono.length < 2) throw new ErroPedido('Informe seu nome.');
@@ -1338,7 +1364,8 @@ async function criarLoja(request, env) {
         dados: {
           nome: nomeLoja, slug, donoUid: uid, whatsapp,
           corPrimaria: '#ea1d2c', tempoEstimado: '30-45 min',
-          plano: 'teste', trialAte, ativo: true, origemParceiro: String(corpo.parceiroRef || '').slice(0, 40) || null
+          plano: 'teste', trialAte, ativo: true, origemParceiro: String(corpo.parceiroRef || '').slice(0, 40) || null,
+          termosVersao: VERSAO_TERMOS, termosAceitoEm: new Date(), termosAceitoPor: uid
         }
       },
       { caminho: `lojas/${lojaId}/equipe/${uid}`, dados: { papel: 'dono', nome: nomeDono, email: usuario.email || null }, novo: true },
@@ -1622,7 +1649,10 @@ async function configSaasPublica(env) {
         whatsappSuporte: c.whatsappSuporte || null,
         precoEssencialCentavos: Number(c.precoEssencialCentavos) || null,
         precoProCentavos: Number(c.precoProCentavos) || null,
-        comissaoMarketplacePct: Number(c.comissaoMarketplacePct) || 20
+        comissaoMarketplacePct: Number(c.comissaoMarketplacePct) || 20,
+        responsavelNome: c.responsavelNome || null,
+        responsavelDoc: c.responsavelDoc || null,
+        emailContato: c.emailContato || null
       };
       dados.pagamentoOnline = Boolean(mp && mp.token && env.MP_CHAVE);
     }
@@ -1733,7 +1763,10 @@ async function painelMaster(request, env) {
         whatsappSuporte: String(c.whatsappSuporte || '').replace(/\D/g, '').slice(0, 13) || null,
         precoEssencialCentavos: inteiro(c.precoEssencialCentavos),
         precoProCentavos: inteiro(c.precoProCentavos),
-        comissaoMarketplacePct: Math.min(50, Math.max(0, Number(c.comissaoMarketplacePct) || 0))
+        comissaoMarketplacePct: Math.min(50, Math.max(0, Number(c.comissaoMarketplacePct) || 0)),
+        responsavelNome: String(c.responsavelNome || '').trim().slice(0, 100) || null,
+        responsavelDoc: String(c.responsavelDoc || '').replace(/[^0-9./-]/g, '').slice(0, 20) || null,
+        emailContato: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(c.emailContato || '').trim()) ? String(c.emailContato).trim().slice(0, 100) : null
       } }]);
       configSaasCache = { dados: null, expira: 0 };
       return jsonResponse({ ok: true });
