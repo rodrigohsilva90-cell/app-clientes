@@ -138,6 +138,12 @@ async function criarPedidoSeguro(request, env) {
       fs.ler(`lojas/${lojaId}/publico/estado`)
     ]);
     if (!loja) throw new ErroPedido('Loja não encontrada.', 404);
+    const situacao = situacaoLoja(loja, estado);
+    if (!situacao.aberta) {
+      throw new ErroPedido(situacao.pausada
+        ? 'A loja pausou os pedidos por alguns minutos. Tente de novo em instantes.'
+        : (situacao.texto === 'Fechado' ? 'A loja está fechada no momento.' : `A loja está fechada agora (${situacao.texto.replace('Fechado · ', '')}).`), 409);
+    }
     const produtos = (cardapio?.produtos || []).filter(p => !p.excluido);
 
     // ---- Recalcula cada item com o cardápio oficial ----
@@ -258,6 +264,49 @@ function calcularFrete(loja, destino) {
   const adicional = f.adicionalAtivo && Number(f.adicionalCentavos) > 0 ? (f.adicionalTexto || 'Adicional') : null;
   if (adicional) freteCentavos += Number(f.adicionalCentavos);
   return { configurado: true, freteCentavos, distanciaKm, adicional };
+}
+
+// ---- Horário de funcionamento: MESMA conta de js/horario.js (se mudar lá, mude aqui) ----
+const DIAS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
+const NOMES_DIA = { dom: 'domingo', seg: 'segunda', ter: 'terça', qua: 'quarta', qui: 'quinta', sex: 'sexta', sab: 'sábado' };
+const DIA_INGLES = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+function agoraNoFuso(fuso, data) {
+  const partes = new Intl.DateTimeFormat('en-US', { timeZone: fuso, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(data);
+  const v = (t) => partes.find(p => p.type === t)?.value;
+  return { dia: DIA_INGLES[v('weekday')], min: Number(v('hour')) * 60 + Number(v('minute')) };
+}
+const paraMin = (t) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t || '');
+  return m && Number(m[1]) < 24 && Number(m[2]) < 60 ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+const paraHora = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+function situacaoLoja(loja, estado, data = new Date()) {
+  if (estado && estado.pausada) return { aberta: false, pausada: true, texto: 'Pausada no momento' };
+  const h = loja && loja.horarios;
+  if (!h) return { aberta: true, semHorario: true, texto: 'Aberto' };
+  const { dia, min } = agoraNoFuso((loja && loja.fusoHorario) || 'America/Sao_Paulo', data);
+  const hoje = h[DIAS[dia]] || [];
+  const ontem = h[DIAS[(dia + 6) % 7]] || [];
+  for (const faixa of hoje) {
+    const a = paraMin(faixa.abre), f = paraMin(faixa.fecha);
+    if (a === null || f === null) continue;
+    if (f > a ? (min >= a && min < f) : min >= a) return { aberta: true, texto: `Aberto · fecha às ${paraHora(f)}` };
+  }
+  for (const faixa of ontem) {
+    const a = paraMin(faixa.abre), f = paraMin(faixa.fecha);
+    if (a === null || f === null) continue;
+    if (f <= a && min < f) return { aberta: true, texto: `Aberto · fecha às ${paraHora(f)}` };
+  }
+  for (let d = 0; d < 8; d++) {
+    const chave = DIAS[(dia + d) % 7];
+    const aberturas = (h[chave] || []).map(x => paraMin(x.abre)).filter(x => x !== null).sort((x, y) => x - y);
+    const proxima = aberturas.find(a => d > 0 || a > min);
+    if (proxima !== undefined) {
+      const quando = d === 0 ? 'hoje' : d === 1 ? 'amanhã' : NOMES_DIA[chave];
+      return { aberta: false, texto: `Fechado · abre ${quando} às ${paraHora(proxima)}` };
+    }
+  }
+  return { aberta: false, texto: 'Fechado' };
 }
 
 function reais(centavos) {

@@ -244,3 +244,20 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .eq-funcoes label:has(input:checked) { border-color: var(--primary); background: #f0fdf4; }
 .eq-funcoes small { display: block; color: var(--text-muted); font-size: 12px; }
 .eq-ok { background: #dcfce7; color: #14532d; border-radius: 10px; padding: 12px; margin-top: 12px; font-size: 14px; }
+
+/* ===== Horários ===== */
+.vt-aberto.fechado { color: var(--danger); }
+.vt-fechado-aviso { background: #fef3c7; color: #92400e; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; font-size: 14px; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.hr-dia { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.hr-nome { width: 110px; font-weight: 700; display: flex; gap: 6px; align-items: center; cursor: pointer; padding-top: 6px; }
+.hr-faixas { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 220px; }
+.hr-faixa { display: flex; gap: 6px; align-items: center; font-size: 14px; }
+.hr-faixa input { padding: 6px; border: 1px solid var(--border); border-radius: 8px; font-size: 15px; }
+.hr-mais { background: none; border: none; color: var(--primary); font-weight: 600; cursor: pointer; text-align: left; padding: 2px 0; }
+.hr-dia.hr-fechado .hr-faixas { opacity: .35; pointer-events: none; }
+.hr-faixa input { flex: 1; min-width: 0; }
+@media (max-width: 560px) {
+  .hr-dia { flex-direction: column; gap: 6px; }
+  .hr-nome { width: auto; padding-top: 0; }
+  .hr-faixas { width: 100%; min-width: 0; }
+}

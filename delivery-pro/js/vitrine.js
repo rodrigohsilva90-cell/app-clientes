@@ -3,6 +3,7 @@ import { AppState } from './router.js';
 import { montarItem } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes } from './acompanhar.js';
 import { calcularFrete, coordsValidas } from './frete.js';
+import { situacaoLoja } from './horario.js';
 import { doc, getDoc, collection, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let carrinho = [];
@@ -11,6 +12,7 @@ let selecoesAtuais = {};
 // Chave única por tentativa de compra (vira o ID do pedido: clicar duas vezes não duplica)
 const novoCheckoutToken = () => `chk_${(crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}${Math.random()}`).replace(/[^a-zA-Z0-9]/g, '')}`;
 let checkoutToken = novoCheckoutToken();
+let situacao = { aberta: true };
 
 export async function iniciarVitrine() {
   const root = document.getElementById('app-root');
@@ -26,6 +28,14 @@ export async function iniciarVitrine() {
   // Busca documento único consolidado do cardápio
   const cardapioSnap = await getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo'));
   const dadosCardapio = cardapioSnap.exists() ? cardapioSnap.data() : { categorias: [], produtos: [] };
+
+  // Aberto/fechado agora (horário de funcionamento + pausa)
+  let estadoLoja = null;
+  try {
+    const est = await getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'estado'));
+    estadoLoja = est.exists() ? est.data() : null;
+  } catch (_) {}
+  situacao = situacaoLoja(loja, estadoLoja);
 
   const modoLayout = loja.layoutVitrine || 'gastronomia'; // 'gastronomia' | 'varejo'
   const tempoEstimado = loja.tempoEstimado || '30-45 min';
@@ -47,10 +57,15 @@ export async function iniciarVitrine() {
       <div class="vt-logo">${logo ? `<img src="${logo}" alt="" />` : `<span>${iniciais}</span>`}</div>
       <div class="vt-loja-info">
         <h1>${esc(loja.nome)}</h1>
-        <span class="vt-aberto">● Aberto</span>
+        <span class="vt-aberto${situacao.aberta ? '' : ' fechado'}">● ${esc(situacao.aberta && situacao.semHorario ? 'Aberto' : situacao.texto)}</span>
         <div class="vt-chips">${chips.map(c => `<span class="vt-chip">${c}</span>`).join('')}</div>
       </div>
     </div>
+
+    ${situacao.aberta ? '' : `
+      <div class="vt-fechado-aviso">🔒 <strong>${situacao.pausada ? 'A loja pausou os pedidos por alguns minutos.' : 'A loja está fechada agora.'}</strong>
+        ${situacao.pausada ? '' : `<span>${esc(situacao.texto.replace('Fechado · ', '').replace(/^./, c => c.toUpperCase()))}.</span>`}
+        Você pode olhar o cardápio à vontade.</div>`}
 
     ${pedidosRecentes(AppState.lojaId).map(p => `
       <a href="/${AppState.slug}/pedido/${encodeURIComponent(p.id)}" class="card" style="display:flex; justify-content:space-between; align-items:center; gap:8px; text-decoration:none; color:inherit; border:2px solid var(--primary);">
@@ -86,7 +101,13 @@ export async function iniciarVitrine() {
   renderizarProdutos(dadosCardapio, modoLayout);
   atualizarBarraCarrinho();
 
-  document.getElementById('barra-carrinho').onclick = () => abrirModalCheckout();
+  document.getElementById('barra-carrinho').onclick = () => {
+    if (!situacao.aberta) {
+      showToast(situacao.pausada ? 'A loja pausou os pedidos. Tente em alguns minutos.' : `A loja está fechada. ${situacao.texto.replace('Fechado · ', '').replace(/^./, c => c.toUpperCase())}.`, 5000);
+      return;
+    }
+    abrirModalCheckout();
+  };
 }
 
 // Menor preço possível do produto (para mostrar "A partir de")

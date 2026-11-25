@@ -37,7 +37,7 @@ export async function abrirCaixa() {
       abertoPor: auth.currentUser?.uid || null,
       fundoTrocoCentavos
     });
-    await setDoc(refEstado(), { caixaAberto: true, turnoId: turno.id, abertoEm: serverTimestamp(), fundoTrocoCentavos });
+    await setDoc(refEstado(), { caixaAberto: true, turnoId: turno.id, abertoEm: serverTimestamp(), fundoTrocoCentavos }, { merge: true });
     showToast('Caixa aberto! Bom turno.');
     return true;
   } catch (err) {
@@ -142,7 +142,7 @@ export async function fecharCaixa(estado) {
       await updateDoc(doc(db, 'lojas', AppState.lojaId, 'turnos', estado.turnoId), {
         status: 'fechado', fechadoEm: serverTimestamp(), fechadoPor: auth.currentUser?.uid || null, resumo: r
       });
-      await setDoc(refEstado(), { caixaAberto: false, turnoId: null, ultimoTurnoId: estado.turnoId, fechadoEm: serverTimestamp() });
+      await setDoc(refEstado(), { caixaAberto: false, turnoId: null, ultimoTurnoId: estado.turnoId, fechadoEm: serverTimestamp() }, { merge: true });
       overlay.remove();
       showToast('Caixa fechado. Resumo salvo.');
     } catch (err) {
@@ -151,4 +151,15 @@ export async function fecharCaixa(estado) {
       showToast('Erro ao fechar o caixa.');
     }
   };
+}
+
+// Pausa/retoma os pedidos online na hora (imprevisto, cozinha lotada...)
+export async function pausarPedidos(pausar) {
+  try {
+    await setDoc(refEstado(), { pausada: !!pausar, pausadaEm: pausar ? serverTimestamp() : null }, { merge: true });
+    showToast(pausar ? '⏸ Pedidos online pausados.' : '▶ Pedidos online liberados.');
+  } catch (err) {
+    console.error(err);
+    showToast('Não foi possível alterar. Confira as regras do Firestore.');
+  }
 }

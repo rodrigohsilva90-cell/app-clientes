@@ -3,9 +3,11 @@ import { AppState } from './router.js';
 import { montarItem } from './cardapio.js';
 import { abrirGestaoCardapio } from './gestao-cardapio.js';
 import { abrirConfigEntrega } from './config-entrega.js';
-import { escutarEstadoCaixa, abrirCaixa, fecharCaixa } from './turno.js';
+import { escutarEstadoCaixa, abrirCaixa, fecharCaixa, pausarPedidos } from './turno.js';
 import { iniciarKds } from './kds.js';
 import { abrirEquipe } from './equipe.js';
+import { situacaoLoja } from './horario.js';
+import { abrirConfigHorarios } from './config-horarios.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
@@ -38,17 +40,20 @@ export async function iniciarBalcao() {
     <div class="card painel-topo">
       <div>
         <strong>Painel Operacional — ${esc(AppState.lojaDados.nome)}</strong>
+        <div id="status-loja" class="painel-status">⏳ Verificando loja...</div>
         <div id="status-caixa" class="painel-status">⏳ Verificando caixa...</div>
         <div id="status-som" class="painel-status" style="color:var(--warning);">🔇 Campainha desligada</div>
       </div>
       <div class="painel-botoes">
         <button id="btn-caixa" class="btn-primary" style="width:auto;" disabled>Caixa</button>
         <button id="btn-som" class="btn-outline-sm">🔊 Ativar campainha</button>
+        <button id="btn-pausa" class="btn-outline-sm">⏸ Pausar pedidos</button>
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
         ${ehDono ? `
           <button id="btn-gerenciar-cardapio" class="btn-outline-sm">🍕 Gerenciar cardápio</button>
           <button id="btn-config-entrega" class="btn-outline-sm">🛵 Entrega e frete</button>
           <button id="btn-equipe" class="btn-outline-sm">👥 Equipe</button>
+          <button id="btn-horarios" class="btn-outline-sm">🕒 Horários</button>
           <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
         ` : ''}
       </div>
@@ -81,11 +86,16 @@ export async function iniciarBalcao() {
     document.getElementById('btn-gerenciar-cardapio').onclick = abrirGestaoCardapio;
     document.getElementById('btn-config-entrega').onclick = abrirConfigEntrega;
     document.getElementById('btn-equipe').onclick = abrirEquipe;
+    document.getElementById('btn-horarios').onclick = abrirConfigHorarios;
   }
+
+  document.getElementById('btn-pausa').onclick = () => pausarPedidos(!estadoCaixa.pausada);
+  document.addEventListener('loja-atualizada', atualizarStatusLoja);
 
   // Caixa por turno
   escutarEstadoCaixa((estado) => {
     estadoCaixa = estado;
+    atualizarStatusLoja();
     const status = document.getElementById('status-caixa');
     const btn = document.getElementById('btn-caixa');
     if (!status || !btn) return;
@@ -153,6 +163,7 @@ function iniciarCaoDeGuarda() {
       } catch (err) { console.error(err); }
     }
     renderizarColunas(); // atualiza os minutos nos cartões
+    atualizarStatusLoja();
   }, 15000);
 }
 
@@ -195,6 +206,27 @@ function escutarPedidosEmTempoReal() {
       ? '<div class="card">🔒 Entre com uma conta da equipe desta loja (botão "Entrar" no topo).</div>'
       : '<div class="card">Erro ao carregar pedidos. Veja o console (F12).</div>';
   });
+}
+
+// Mostra se a loja está aceitando pedidos online agora (horário + pausa)
+function atualizarStatusLoja() {
+  const el = document.getElementById('status-loja');
+  const btn = document.getElementById('btn-pausa');
+  if (!el || !btn) return;
+  const sit = situacaoLoja(AppState.lojaDados, estadoCaixa);
+  if (sit.pausada) {
+    el.innerHTML = '⏸ <strong>Pedidos online PAUSADOS</strong> — clientes não conseguem pedir';
+    el.style.color = 'var(--danger)';
+  } else if (sit.aberta) {
+    el.textContent = sit.semHorario ? '🟢 Recebendo pedidos online (sem horário configurado — sempre aberto)' : `🟢 Recebendo pedidos online · ${sit.texto.replace('Aberto · ', '')}`;
+    el.style.color = 'var(--success)';
+  } else {
+    el.textContent = `🌙 Loja fora do horário · ${sit.texto.replace('Fechado · ', '')}`;
+    el.style.color = 'var(--text-muted)';
+  }
+  btn.textContent = estadoCaixa.pausada ? '▶ Retomar pedidos' : '⏸ Pausar pedidos';
+  btn.className = estadoCaixa.pausada ? 'btn-primary' : 'btn-outline-sm';
+  btn.style.width = 'auto';
 }
 
 function renderizarColunas() {
