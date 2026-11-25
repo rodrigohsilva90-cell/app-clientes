@@ -91,7 +91,9 @@ async function resolverRota() {
 
   // Atualiza manifest dinâmico por loja
   const manifestLink = document.getElementById('pwa-manifest');
-  if (manifestLink) manifestLink.href = `/${slug}/manifest.webmanifest`;
+  // Na tela de um pedido, o app instalado (iPhone) já abre nesse pedido
+  const pedidoNaUrl = subRota === 'pedido' && /^[A-Za-z0-9_]{8,100}$/.test(pathParts[2] || '') ? pathParts[2] : null;
+  if (manifestLink) manifestLink.href = `/${slug}/manifest.webmanifest${pedidoNaUrl ? `?pedido=${pedidoNaUrl}` : ''}`;
 
   try {
     const slugSnap = await getDoc(doc(db, 'slugs', slug));

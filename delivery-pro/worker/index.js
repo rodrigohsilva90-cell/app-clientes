@@ -38,7 +38,7 @@ export default {
         name: nome,
         short_name: curto || nome.slice(0, 12),
         description: pub ? descricaoLoja(pub) : undefined,
-        start_url: `/${slug}?origem=app`,
+        start_url: /^[A-Za-z0-9_]{8,100}$/.test(url.searchParams.get('pedido') || '') ? `/${slug}/pedido/${url.searchParams.get('pedido')}` : `/${slug}?origem=app`,
         scope: `/${slug}`,
         display: 'standalone',
         background_color: '#ffffff',
@@ -57,6 +57,21 @@ export default {
       }
       if (url.pathname === '/api/pedidos' && request.method === 'POST') {
         return criarPedidoSeguro(request, env);
+      }
+      if (url.pathname === '/api/publico' && request.method === 'GET') {
+        return jsonResponse({ turnstile: env.TURNSTILE_SITEKEY || null, push: chavePublicaPush(env) });
+      }
+      if (url.pathname === '/api/carrinho' && request.method === 'POST') {
+        return registrarCarrinho(request, env);
+      }
+      if (url.pathname === '/api/carrinhos' && request.method === 'POST') {
+        return painelCarrinhos(request, env);
+      }
+      if (url.pathname === '/api/push' && request.method === 'POST') {
+        return inscreverPush(request, env);
+      }
+      if (url.pathname === '/api/notificar' && request.method === 'POST') {
+        return notificarCliente(request, env);
       }
       if (url.pathname === '/api/foto' && request.method === 'POST') {
         return receberFoto(request, env, url);
@@ -173,6 +188,24 @@ async function criarPedidoSeguro(request, env) {
         : (situacao.texto === 'Fechado' ? 'A loja está fechada no momento.' : `A loja está fechada agora (${situacao.texto.replace('Fechado · ', '')}).`), 409);
     }
     const produtos = (cardapio?.produtos || []).filter(p => !p.excluido);
+    const caminho = `lojas/${lojaId}/pedidos/${token}`;
+
+    // Mesmo pedido enviado de novo (internet oscilando): devolve o que já foi gravado
+    const jaExiste = await fs.ler(caminho);
+    if (jaExiste) return jsonResponse({ id: token, numeroPedido: jaExiste.numeroPedido, totalCentavos: jaExiste.totalCentavos, duplicado: true }, 200);
+
+    // Anti-trote: verificação invisível do Cloudflare Turnstile
+    if (env.TURNSTILE_SECRET && !(await turnstileValido(env, corpo.turnstileToken, ip))) {
+      throw new ErroPedido('Não conseguimos confirmar a verificação de segurança. Toque em enviar de novo.', 403);
+    }
+
+    // Trava: um pedido de entrega em andamento por WhatsApp
+    if (tipoEntrega === 'entrega') {
+      const doCliente = await fs.consultarIgual(`lojas/${lojaId}`, 'pedidos', 'clienteWhatsapp', whatsapp, 20);
+      const limite = Date.now() - 4 * 60 * 60 * 1000;
+      const aberto = doCliente.find(p => p.id !== token && p.tipoEntrega === 'entrega' && ['novo', 'preparo', 'entrega'].includes(p.status) && (Date.parse(p.criadoEm) || 0) > limite);
+      if (aberto) throw new ErroPedido(`Você já tem um pedido em andamento (#${aberto.numeroPedido || ''}). Aguarde ele chegar antes de fazer outro, ou fale com a loja.`, 409);
+    }
 
     // ---- Recalcula cada item com o cardápio oficial ----
     const itens = itensPedidos.map(pedido => {
@@ -230,8 +263,8 @@ async function criarPedidoSeguro(request, env) {
     };
 
     // O ID do pedido é o próprio token: clicar duas vezes não cria dois pedidos
-    const caminho = `lojas/${lojaId}/pedidos/${token}`;
     const criado = await fs.criarSeNaoExiste(caminho, pedido, ['criadoEm']);
+    if (criado) { try { await fs.apagar([`lojas/${lojaId}/carrinhos/${whatsapp}`]); } catch (_) {} }
     const final = criado ? pedido : await fs.ler(caminho);
     return jsonResponse({ id: token, numeroPedido: final?.numeroPedido, totalCentavos: final?.totalCentavos, duplicado: !criado }, criado ? 201 : 200);
   } catch (err) {
@@ -300,6 +333,256 @@ async function servirFoto(env, chave) {
       'X-Content-Type-Options': 'nosniff'
     }
   });
+}
+
+// =====================================================================
+// ANTI-TROTE: Cloudflare Turnstile (invisível na maioria das vezes)
+// =====================================================================
+async function turnstileValido(env, token, ip) {
+  if (typeof token !== 'string' || !token || token.length > 2048) return false;
+  try {
+    const form = new FormData();
+    form.append('secret', env.TURNSTILE_SECRET);
+    form.append('response', token);
+    if (ip && ip !== 'local') form.append('remoteip', ip);
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body: form });
+    const d = await r.json();
+    return d.success === true;
+  } catch (err) {
+    console.error('turnstile', err && err.message);
+    return true; // serviço fora do ar: não trava as vendas da loja
+  }
+}
+
+// Login da equipe (token Firebase) + papel na loja
+async function usuarioDaEquipe(request, env, lojaId, papeis) {
+  const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+  const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  let usuario;
+  try { usuario = await verificarTokenFirebase(token, conta.project_id); }
+  catch (_) { throw new ErroPedido('Sessão inválida. Entre de novo.', 401); }
+  if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId)) throw new ErroPedido('Loja inválida.');
+  const fs = await firestore(env);
+  const eu = await fs.ler(`lojas/${lojaId}/equipe/${usuario.sub}`);
+  if (!eu || (papeis && !papeis.includes(eu.papel))) throw new ErroPedido('Sem permissão nesta loja.', 403);
+  return { fs, uid: usuario.sub, papel: eu.papel };
+}
+
+async function lojaPeloSlug(fs, slug) {
+  slug = String(slug || '').toLowerCase();
+  if (!/^[a-z0-9-]{2,40}$/.test(slug)) throw new ErroPedido('Loja inválida.');
+  const s = await fs.ler(`slugs/${slug}`);
+  if (!s || !s.lojaId) throw new ErroPedido('Loja não encontrada.', 404);
+  return String(s.lojaId);
+}
+
+// =====================================================================
+// CARRINHO ABANDONADO: o cardápio avisa quando o cliente (com WhatsApp
+// preenchido) sai sem finalizar. Só aparece no painel depois de 20 min
+// parado; some quando ele faz o pedido ou depois de 3 dias.
+// =====================================================================
+const CARRINHO_ESPERA_MS = 20 * 60 * 1000;
+const CARRINHO_VALIDADE_MS = 3 * 24 * 60 * 60 * 1000;
+async function registrarCarrinho(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    const ip = request.headers.get('CF-Connecting-IP') || 'local';
+    if (!dentroDoLimite(`car:${ip}`)) throw new ErroPedido('Muitas tentativas.', 429);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const whatsapp = String(corpo.whatsapp || '').replace(/\D/g, '');
+    const nome = String(corpo.nome || '').trim().slice(0, 80);
+    if (whatsapp.length < 10 || whatsapp.length > 13) throw new ErroPedido('WhatsApp inválido.');
+    const itensPedidos = Array.isArray(corpo.itens) ? corpo.itens.slice(0, 30) : [];
+    if (!itensPedidos.length) throw new ErroPedido('Carrinho vazio.');
+    const fs = await firestore(env);
+    const lojaId = await lojaPeloSlug(fs, corpo.slug);
+    const [loja, cardapio] = await Promise.all([fs.ler(`lojas/${lojaId}`), fs.ler(`lojas/${lojaId}/publico/cardapio_completo`)]);
+    const produtos = (cardapio?.produtos || []).filter(p => !p.excluido);
+    const itens = [];
+    let totalCentavos = 0;
+    for (const it of itensPedidos) {
+      const prod = produtos.find(p => p.id === it.produtoId);
+      const quantidade = Math.min(50, Math.max(1, Number(it.quantidade) || 1));
+      if (!prod) continue;
+      try {
+        const { unitarioCentavos, detalhes } = calcularItemOficial(prod, it.selecoes || {}, loja);
+        itens.push({ nome: prod.nome, quantidade, detalhes });
+        totalCentavos += unitarioCentavos * quantidade;
+      } catch (_) {}
+    }
+    if (!itens.length) throw new ErroPedido('Carrinho vazio.');
+    const agora = Date.now();
+    await fs.gravarJuntos([{ caminho: `lojas/${lojaId}/carrinhos/${whatsapp}`, dados: {
+      nome: nome || null, whatsapp, itens, totalCentavos,
+      atualizadoEm: new Date(agora), visivelApos: new Date(agora + CARRINHO_ESPERA_MS)
+    } }]);
+    return jsonResponse({ ok: true });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('registrarCarrinho', err && err.stack || err);
+    return jsonResponse({ erro: 'Falhou.' }, 500);
+  }
+}
+
+async function painelCarrinhos(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const { fs } = await usuarioDaEquipe(request, env, lojaId, ['dono', 'balcao']);
+    if (corpo.acao === 'remover') {
+      const wa = String(corpo.whatsapp || '').replace(/\D/g, '');
+      if (wa.length < 10) throw new ErroPedido('WhatsApp inválido.');
+      await fs.apagar([`lojas/${lojaId}/carrinhos/${wa}`]);
+      return jsonResponse({ ok: true });
+    }
+    const agora = Date.now();
+    const todos = await fs.listar(`lojas/${lojaId}/carrinhos`);
+    const vencidos = todos.filter(c => (Date.parse(c.atualizadoEm) || 0) < agora - CARRINHO_VALIDADE_MS);
+    if (vencidos.length) { try { await fs.apagar(vencidos.slice(0, 100).map(c => `lojas/${lojaId}/carrinhos/${c.id}`)); } catch (_) {} }
+    const carrinhos = todos
+      .filter(c => !vencidos.includes(c) && (Date.parse(c.visivelApos) || 0) <= agora)
+      .sort((a, b) => String(b.atualizadoEm).localeCompare(String(a.atualizadoEm)))
+      .map(c => ({ whatsapp: c.whatsapp || c.id, nome: c.nome, itens: c.itens || [], totalCentavos: c.totalCentavos || 0, atualizadoEm: c.atualizadoEm }));
+    return jsonResponse({ carrinhos });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('painelCarrinhos', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível carregar.' }, 500);
+  }
+}
+
+// =====================================================================
+// NOTIFICAÇÕES NO CELULAR DO CLIENTE (Web Push, padrão aberto e grátis)
+// Secret: VAPID_PRIVATE_JWK. A inscrição do aparelho fica em
+// lojas/{id}/pushPedidos/{pedidoId} (só o Worker lê).
+// =====================================================================
+const encPush = new TextEncoder();
+const b64uEnc = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const b64uDec = (t) => { const x = String(t).replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(x + '='.repeat((4 - (x.length % 4)) % 4)), c => c.charCodeAt(0)); };
+const juntarBytes = (...partes) => { const out = new Uint8Array(partes.reduce((n, p) => n + p.length, 0)); let o = 0; for (const p of partes) { out.set(p, o); o += p.length; } return out; };
+let vapidCache = { raw: null, key: null, pub: null };
+function chavePublicaPush(env) {
+  if (!env.VAPID_PRIVATE_JWK) return null;
+  try { const j = JSON.parse(env.VAPID_PRIVATE_JWK); return b64uEnc(juntarBytes(new Uint8Array([4]), b64uDec(j.x), b64uDec(j.y))); } catch (_) { return null; }
+}
+async function chavesVapid(env) {
+  if (vapidCache.raw !== env.VAPID_PRIVATE_JWK) {
+    const jwk = JSON.parse(env.VAPID_PRIVATE_JWK);
+    const key = await crypto.subtle.importKey('jwk', jwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+    vapidCache = { raw: env.VAPID_PRIVATE_JWK, key, pub: juntarBytes(new Uint8Array([4]), b64uDec(jwk.x), b64uDec(jwk.y)) };
+  }
+  return vapidCache;
+}
+async function hkdfPush(salt, ikm, info, bytes) {
+  const k = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info }, k, bytes * 8));
+}
+// RFC 8291 (aes128gcm)
+async function cifrarPush(p256dh, authSecret, texto) {
+  const uaPub = b64uDec(p256dh);
+  const auth = b64uDec(authSecret);
+  const eph = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const asPub = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey));
+  const uaKey = await crypto.subtle.importKey('raw', uaPub, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: uaKey }, eph.privateKey, 256));
+  const ikm = await hkdfPush(auth, shared, juntarBytes(encPush.encode('WebPush: info\0'), uaPub, asPub), 32);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const cek = await hkdfPush(salt, ikm, encPush.encode('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = await hkdfPush(salt, ikm, encPush.encode('Content-Encoding: nonce\0'), 12);
+  const aes = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
+  const cifrado = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aes, juntarBytes(encPush.encode(texto), new Uint8Array([2]))));
+  return juntarBytes(salt, new Uint8Array([0, 0, 16, 0]), new Uint8Array([asPub.length]), asPub, cifrado);
+}
+function enderecoPushOk(u) {
+  try {
+    const x = new URL(u);
+    if (x.protocol !== 'https:') return false;
+    const h = x.hostname;
+    return h === 'fcm.googleapis.com' || h === 'updates.push.services.mozilla.com' || h === 'web.push.apple.com'
+      || h.endsWith('.push.apple.com') || h.endsWith('.notify.windows.com') || h.endsWith('.push.services.mozilla.com');
+  } catch (_) { return false; }
+}
+async function enviarPush(env, ins, msg, origem) {
+  if (!ins || !enderecoPushOk(ins.endpoint) || !ins.p256dh || !ins.auth) return 400;
+  const { key, pub } = await chavesVapid(env);
+  const agora = Math.floor(Date.now() / 1000);
+  const semAss = b64uEnc(encPush.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' }))) + '.' + b64uEnc(encPush.encode(JSON.stringify({ aud: new URL(ins.endpoint).origin, exp: agora + 12 * 3600, sub: origem })));
+  const ass = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, encPush.encode(semAss));
+  const r = await fetch(ins.endpoint, {
+    method: 'POST',
+    headers: { Authorization: `vapid t=${semAss}.${b64uEnc(ass)}, k=${b64uEnc(pub)}`, TTL: '3600', Urgency: 'high', 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream' },
+    body: await cifrarPush(ins.p256dh, ins.auth, JSON.stringify(msg))
+  });
+  return r.status;
+}
+
+async function inscreverPush(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT || !env.VAPID_PRIVATE_JWK) throw new ErroPedido('Notificações indisponíveis.', 503);
+    const ip = request.headers.get('CF-Connecting-IP') || 'local';
+    if (!dentroDoLimite(`push:${ip}`)) throw new ErroPedido('Muitas tentativas.', 429);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const pedidoId = String(corpo.pedidoId || '');
+    if (!/^[A-Za-z0-9_]{8,100}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+    const ins = corpo.inscricao || {};
+    const dados = { endpoint: String(ins.endpoint || ''), p256dh: String((ins.keys && ins.keys.p256dh) || ''), auth: String((ins.keys && ins.keys.auth) || '') };
+    if (!enderecoPushOk(dados.endpoint) || dados.endpoint.length > 1000 || !dados.p256dh || dados.p256dh.length > 200 || !dados.auth || dados.auth.length > 100) throw new ErroPedido('Inscrição inválida.');
+    const fs = await firestore(env);
+    const lojaId = await lojaPeloSlug(fs, corpo.slug);
+    const pedido = await fs.ler(`lojas/${lojaId}/pedidos/${pedidoId}`);
+    if (!pedido) throw new ErroPedido('Pedido não encontrado.', 404);
+    if (['concluido', 'cancelado', 'ocorrencia'].includes(pedido.status)) throw new ErroPedido('Este pedido já terminou.', 409);
+    await fs.gravarJuntos([{ caminho: `lojas/${lojaId}/pushPedidos/${pedidoId}`, dados: { ...dados, slug: String(corpo.slug).toLowerCase(), ultimoAviso: pedido.status, criadoEm: new Date() } }]);
+    return jsonResponse({ ok: true });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('inscreverPush', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível ativar agora.' }, 500);
+  }
+}
+
+// A equipe chama depois de mudar o status; o Worker decide a mensagem e não repete aviso
+async function notificarCliente(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT || !env.VAPID_PRIVATE_JWK) return jsonResponse({ ok: false, motivo: 'sem_push' });
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const pedidoId = String(corpo.pedidoId || '');
+    if (!/^[A-Za-z0-9_-]{8,100}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+    const { fs } = await usuarioDaEquipe(request, env, lojaId, null);
+    const caminhoPush = `lojas/${lojaId}/pushPedidos/${pedidoId}`;
+    const [ins, pedido, loja] = await Promise.all([fs.ler(caminhoPush), fs.ler(`lojas/${lojaId}/pedidos/${pedidoId}`), fs.ler(`lojas/${lojaId}`)]);
+    if (!ins || !pedido) return jsonResponse({ ok: false, motivo: 'sem_inscricao' });
+    const chegou = pedido.status === 'entrega' && pedido.motoboyCoords && pedido.motoboyCoords.chegou === true;
+    const etapa = chegou ? 'chegou' : pedido.status;
+    if (etapa === ins.ultimoAviso) return jsonResponse({ ok: true, repetido: true });
+    const n = pedido.numeroPedido ? ` #${pedido.numeroPedido}` : '';
+    const varejo = loja && loja.layoutVitrine === 'varejo';
+    const textos = {
+      preparo: [`Pedido${n} aceito!`, varejo ? 'A loja já está separando seus produtos.' : 'A loja já está preparando seu pedido.'],
+      entrega: [`Pedido${n} saiu para entrega 🛵`, 'Toque para ver a moto no mapa.'],
+      chegou: ['O entregador está chegando! 🏁', 'Fique de olho no portão ou no interfone.'],
+      concluido: [pedido.tipoEntrega === 'retirada' ? `Pedido${n} retirado ✅` : `Pedido${n} entregue ✅`, 'Obrigado! Toque para avaliar com 1 toque.'],
+      cancelado: [`Pedido${n} cancelado`, pedido.motivoCancelamento ? `Motivo: ${pedido.motivoCancelamento}` : 'Fale com a loja se precisar.'],
+      ocorrencia: [`Pedido${n}: houve um problema`, 'A loja vai entrar em contato com você.']
+    };
+    if (!textos[etapa]) return jsonResponse({ ok: true, ignorado: true });
+    const origem = new URL(request.url).origin;
+    const slug = /^[a-z0-9-]{2,40}$/.test(ins.slug || '') ? ins.slug : '';
+    const status = await enviarPush(env, ins, { title: `${(loja && loja.nome) || 'Seu pedido'}: ${textos[etapa][0]}`, body: textos[etapa][1], url: `/${slug}/pedido/${pedidoId}`, tag: `pedido-${pedidoId}`, icon: `/${slug}/icone.svg` }, origem);
+    if (status === 404 || status === 410 || ['concluido', 'cancelado', 'ocorrencia'].includes(etapa)) await fs.apagar([caminhoPush]);
+    else await fs.atualizar(caminhoPush, { ultimoAviso: etapa });
+    return jsonResponse({ ok: status >= 200 && status < 300, status });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('notificarCliente', err && err.stack || err);
+    return jsonResponse({ erro: 'Falhou.' }, 500);
+  }
 }
 
 // Oferta do dia: MESMA conta de js/cardapio.js (se mudar lá, mude aqui)
@@ -634,6 +917,16 @@ async function firestore(env) {
       if (resp.status === 409 || /ALREADY_EXISTS|FAILED_PRECONDITION/.test(texto)) return false;
       throw new Error(`Firestore commit: ${resp.status} ${texto}`);
     },
+    // Documentos de uma subcoleção com campo == valor (índice simples, automático)
+    async consultarIgual(pai, colecao, campo, valor, limite = 20) {
+      const resp = await fetch(`${url}/${pai}:runQuery`, {
+        method: 'POST',
+        headers: await cabecalhos(),
+        body: JSON.stringify({ structuredQuery: { from: [{ collectionId: colecao }], where: { fieldFilter: { field: { fieldPath: campo }, op: 'EQUAL', value: paraValor(valor) } }, limit: limite } })
+      });
+      if (!resp.ok) throw new Error(`Firestore query ${colecao}: ${resp.status} ${await resp.text()}`);
+      return (await resp.json()).filter(r => r.document).map(r => ({ id: r.document.name.split('/').pop(), ...deCampos(r.document.fields || {}) }));
+    },
     // Cria o documento só se ele ainda não existir. Retorna false se já existia.
     async criarSeNaoExiste(caminho, dados, camposHoraServidor = []) {
       const resp = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
@@ -691,7 +984,7 @@ function deCampos(campos) {
 // token; aqui conferimos a assinatura do token (Web Crypto) e criamos
 // loja + link + equipe + perfil numa gravação única.
 // =====================================================================
-const SLUGS_RESERVADOS = new Set(['api', 'master', 'admin', 'painel', 'motoboy', 'pedido', 'js', 'css', 'sw', 'www', 'app', 'login', 'entrar', 'cadastro', 'suporte', 'ajuda', 'termos', 'privacidade', 'manifest', 'fotos']);
+const SLUGS_RESERVADOS = new Set(['api', 'master', 'admin', 'painel', 'motoboy', 'pedido', 'js', 'css', 'sw', 'www', 'app', 'login', 'entrar', 'cadastro', 'suporte', 'ajuda', 'termos', 'privacidade', 'manifest', 'fotos', 'publico']);
 
 async function criarLoja(request, env) {
   try {
@@ -958,7 +1251,7 @@ function personalizarCasca(html, pub, slug, url) {
     .replace(/<meta name="theme-color"[^>]*>/, `<meta name="theme-color" content="${escAttr(pub.cor)}" id="meta-theme-color" />`)
     .replace(/<meta property="og:title"[^>]*>/, `<meta property="og:title" content="${escAttr(titulo)}" />`)
     .replace(/<meta property="og:description"[^>]*>/, `<meta property="og:description" content="${escAttr(desc)}" />\n  <meta name="description" content="${escAttr(desc)}" />`)
-    .replace(/<link rel="manifest"[^>]*>/, `<link rel="manifest" href="/${slug}/manifest.webmanifest" id="pwa-manifest" />`)
+    .replace(/<link rel="manifest"[^>]*>/, `<link rel="manifest" href="/${slug}/manifest.webmanifest${/^\/[^/]+\/pedido\/[A-Za-z0-9_]{8,100}$/.test(url.pathname) ? `?pedido=${url.pathname.split('/')[3]}` : ''}" id="pwa-manifest" />`)
     .replace(/<link rel="icon"[^>]*>/, `<link rel="icon" href="/${slug}/icone.svg" type="image/svg+xml" id="pwa-icone" />${pub.logoUrl ? `\n  <link rel="apple-touch-icon" href="${escAttr(pub.logoUrl)}" />` : ''}`)
     .replace('</head>', `  <meta property="og:url" content="${escAttr(url.origin + '/' + slug)}" />
   <meta property="og:site_name" content="${escAttr(pub.nome)}" />

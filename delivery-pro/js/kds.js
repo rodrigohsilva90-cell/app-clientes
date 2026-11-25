@@ -1,6 +1,7 @@
 // Tela da cozinha (KDS): só os itens, em letra grande, sem valores nem dados do cliente.
 import { db, showToast, esc } from './config.js';
 import { AppState } from './router.js';
+import { avisarCliente } from './notificar.js';
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audio = null;
@@ -75,6 +76,7 @@ export function iniciarKds() {
   const atualizar = async (id, dados) => {
     try {
       await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', id), { ...dados, atualizadoEm: serverTimestamp() });
+      if (dados.status) avisarCliente(id);
     } catch (err) {
       console.error(err);
       showToast('Erro ao atualizar o pedido.');

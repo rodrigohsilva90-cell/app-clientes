@@ -11,6 +11,8 @@ import { abrirConfigHorarios } from './config-horarios.js';
 import { abrirConfigAparencia } from './config-aparencia.js';
 import { statusAssinatura } from './plano.js';
 import { abrirAvaliacoes } from './avaliacoes.js';
+import { abrirCarrinhos } from './carrinhos.js';
+import { avisarCliente } from './notificar.js';
 import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
@@ -56,6 +58,7 @@ export async function iniciarBalcao() {
         <button id="btn-som" class="btn-outline-sm">🔊 Ativar campainha</button>
         <button id="btn-pausa" class="btn-outline-sm">⏸ Pausar pedidos</button>
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
+        <button id="btn-carrinhos" class="btn-outline-sm">🛒 Carrinhos abandonados</button>
         ${ehDono ? `
           <button id="btn-gerenciar-cardapio" class="btn-outline-sm">🍕 Gerenciar cardápio</button>
           <button id="btn-config-entrega" class="btn-outline-sm">🛵 Entrega e frete</button>
@@ -94,6 +97,7 @@ export async function iniciarBalcao() {
 
   document.getElementById('btn-som').onclick = ativarSomEWakeLock;
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
+  document.getElementById('btn-carrinhos').onclick = abrirCarrinhos;
   if (ehDono) {
     document.getElementById('btn-cardapio-exemplo').onclick = criarCardapioExemplo;
     document.getElementById('btn-gerenciar-cardapio').onclick = abrirGestaoCardapio;
@@ -175,6 +179,7 @@ function iniciarCaoDeGuarda() {
           canceladoEm: serverTimestamp(),
           atualizadoEm: serverTimestamp()
         });
+        avisarCliente(p.id);
         showToast(`Pedido #${p.numeroPedido || ''} cancelado: ficou ${MIN_CANCELAR} min sem aceite.`, 6000);
       } catch (err) { console.error(err); }
     }
@@ -342,6 +347,7 @@ function criarCardPedidoBalcao(p) {
       canceladoEm: serverTimestamp(),
       atualizadoEm: serverTimestamp()
     });
+    avisarCliente(p.id);
     showToast(`Pedido #${p.numeroPedido || ''} recusado.`);
   });
 
@@ -355,6 +361,7 @@ function criarCardPedidoBalcao(p) {
         atualizadoEm: serverTimestamp(),
         ...(novoStatus === 'concluido' ? { entregueEm: serverTimestamp() } : {})
       });
+      avisarCliente(p.id);
       showToast(`Pedido #${esc(p.numeroPedido)} movido para ${novoStatus.toUpperCase()}`);
     };
   }
@@ -745,6 +752,7 @@ async function despacharParaEntregador(p) {
           saiuParaEntregaEm: serverTimestamp(),
           atualizadoEm: serverTimestamp()
         });
+        avisarCliente(p.id);
         const link = linkAvisoWhats(p);
         if (!link) { overlay.remove(); showToast(`Pedido #${p.numeroPedido || ''} enviado para ${escolhido.nome}`); return; }
         overlay.querySelector('.card').innerHTML = `

@@ -3,6 +3,7 @@
 import { db, formatarCentavos, esc } from './config.js';
 import { AppState } from './router.js';
 import { criarMapaRastreamento, criarMarcadorMoto } from './geo.js';
+import { cartaoNotificacao } from './push-cliente.js';
 import { doc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const CHAVE_LOCAL = (lojaId) => `meus_pedidos_${lojaId}`;
@@ -75,6 +76,7 @@ export function iniciarAcompanhamento(pedidoId) {
       <strong>🛵 Entregador a caminho</strong>
       <div id="acomp-mapa" style="height:260px; border-radius:8px; margin-top:10px; z-index:1;"></div>
     </div>
+    <div class="card hidden" id="acomp-push"></div>
     <div class="card hidden" id="acomp-avaliar"></div>
     <div class="card hidden" id="acomp-itens"></div>
   `;
@@ -96,6 +98,9 @@ export function iniciarAcompanhamento(pedidoId) {
       renderItens(p);
       renderMapa(p);
       renderAvaliacao(p);
+      const boxPush = document.getElementById('acomp-push');
+      if (FINAIS.includes(p.status)) boxPush?.classList.add('hidden');
+      else if (boxPush && !boxPush.dataset.feito) { boxPush.dataset.feito = '1'; cartaoNotificacao(boxPush, p.id); }
       if (FINAIS.includes(p.status)) {
         if (p.status === 'concluido' && !p.avaliado) marcarParaAvaliar(AppState.lojaId, p.id);
         else removerPedidoLocal(AppState.lojaId, p.id);

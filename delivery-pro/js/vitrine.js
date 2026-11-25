@@ -5,6 +5,7 @@ import { salvarPedidoLocal, pedidosRecentes, enviarAvaliacao } from './acompanha
 import { calcularFrete, coordsValidas, adicionaisAgora } from './frete.js';
 import { situacaoLoja } from './horario.js';
 import { statusAssinatura } from './plano.js';
+import { configPublica } from './push-cliente.js';
 import { doc, getDoc, collection, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let carrinho = [];
@@ -14,6 +15,69 @@ let selecoesAtuais = {};
 const novoCheckoutToken = () => `chk_${(crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}${Math.random()}`).replace(/[^a-zA-Z0-9]/g, '')}`;
 let checkoutToken = novoCheckoutToken();
 let situacao = { aberta: true };
+
+// ---- Anti-trote: Cloudflare Turnstile (normalmente invisível) ----
+let turnstileId = null;
+let turnstileToken = null;
+function carregarScript(src) {
+  return new Promise((ok, erro) => {
+    if (document.querySelector(`script[src="${src}"]`)) { if (window.turnstile) ok(); else document.querySelector(`script[src="${src}"]`).addEventListener('load', ok); return; }
+    const sc = document.createElement('script');
+    sc.src = src; sc.async = true; sc.onload = ok; sc.onerror = erro;
+    document.head.appendChild(sc);
+  });
+}
+async function prepararTurnstile(container) {
+  turnstileToken = null;
+  const cfg = await configPublica();
+  if (!cfg.turnstile || !container) return;
+  try {
+    await carregarScript('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit');
+    if (turnstileId !== null) { try { window.turnstile.remove(turnstileId); } catch (_) {} }
+    turnstileId = window.turnstile.render(container, {
+      sitekey: cfg.turnstile,
+      appearance: 'interaction-only',
+      size: 'flexible',
+      language: 'pt-br',
+      callback: (t) => { turnstileToken = t; },
+      'expired-callback': () => { turnstileToken = null; },
+      'error-callback': () => { turnstileToken = null; }
+    });
+  } catch (err) { console.error('turnstile', err); }
+}
+async function esperarTurnstile() {
+  const cfg = await configPublica();
+  if (!cfg.turnstile || turnstileId === null) return null;
+  for (let i = 0; i < 40 && !turnstileToken; i++) await new Promise(r => setTimeout(r, 300));
+  return turnstileToken;
+}
+function renovarTurnstile() {
+  turnstileToken = null;
+  if (turnstileId !== null && window.turnstile) { try { window.turnstile.reset(turnstileId); } catch (_) {} }
+}
+
+// ---- Carrinho abandonado: avisa a loja só se o cliente informou o WhatsApp ----
+let ultimoAvisoCarrinho = 0;
+function avisarCarrinhoAbandonado(forcar) {
+  try {
+    if (!carrinho.length || !AppState.slug) return;
+    const d = lerDadosCliente();
+    const whatsapp = String(d.whatsapp || '').replace(/\D/g, '');
+    if (whatsapp.length < 10) return;
+    if (!forcar && Date.now() - ultimoAvisoCarrinho < 60000) return;
+    ultimoAvisoCarrinho = Date.now();
+    const corpo = JSON.stringify({ slug: AppState.slug, nome: d.nome || '', whatsapp, itens: carrinho.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade, selecoes: i.selecoes || {} })) });
+    if (navigator.sendBeacon) navigator.sendBeacon('/api/carrinho', new Blob([corpo], { type: 'application/json' }));
+    else fetch('/api/carrinho', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: corpo, keepalive: true }).catch(() => {});
+  } catch (_) {}
+}
+let ouvindoSaida = false;
+function ouvirSaidaDaPagina() {
+  if (ouvindoSaida) return;
+  ouvindoSaida = true;
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') avisarCarrinhoAbandonado(true); });
+  window.addEventListener('pagehide', () => avisarCarrinhoAbandonado(true));
+}
 
 export async function iniciarVitrine() {
   const root = document.getElementById('app-root');
@@ -112,6 +176,7 @@ export async function iniciarVitrine() {
 
   renderizarProdutos(dadosCardapio, modoLayout);
   atualizarBarraCarrinho();
+  ouvirSaidaDaPagina();
 
   // Avaliação de 1 toque dos pedidos já entregues
   root.querySelectorAll('[data-avaliar]').forEach(box => {
@@ -426,6 +491,7 @@ function abrirModalCheckout() {
 
     <label style="${rotulo}">WhatsApp (com DDD)</label>
     <input id="chk-whats" type="tel" placeholder="11999999999" value="${esc(salvo.whatsapp || '')}" style="${campo}" />
+    <p class="gc-dica" style="margin:-6px 0 10px;">Usado só para falar sobre este pedido (inclusive se ele não for concluído).</p>
 
     <label style="${rotulo}">Como quer receber?</label>
     <div class="chk-tipo">
@@ -473,11 +539,14 @@ function abrirModalCheckout() {
       <p id="chk-aviso-frete" class="chk-aviso hidden"></p>
     </div>
 
+    <div id="chk-turnstile" class="chk-turnstile"></div>
     <button class="btn-primary" id="btn-enviar-pedido">Enviar Pedido Agora</button>
   `;
 
   modal.classList.remove('hidden');
-  const fecharCheckout = () => { modal.classList.add('hidden'); if (mapa) { mapa.remove(); mapa = null; } };
+  prepararTurnstile(document.getElementById('chk-turnstile'));
+  const fecharCheckout = () => { guardarCampos(); avisarCarrinhoAbandonado(false); modal.classList.add('hidden'); if (mapa) { mapa.remove(); mapa = null; } };
+  document.getElementById('chk-whats').addEventListener('change', () => { guardarCampos(); avisarCarrinhoAbandonado(true); });
   document.getElementById('fechar-checkout').onclick = fecharCheckout;
 
   content.querySelectorAll('button[data-rem]').forEach(btn => {
@@ -656,6 +725,14 @@ function abrirModalCheckout() {
     btn.disabled = true;
     btn.textContent = 'Enviando pedido...';
 
+    const tokenSeguranca = await esperarTurnstile();
+    if ((await configPublica()).turnstile && !tokenSeguranca) {
+      showToast('Aguarde a verificação de segurança (logo acima do botão) e toque de novo.', 5000);
+      btn.disabled = false;
+      btn.textContent = 'Enviar Pedido Agora';
+      return;
+    }
+
     try {
       // O Worker recalcula preços e frete com os dados oficiais e grava o pedido
       const resp = await fetch('/api/pedidos', {
@@ -664,6 +741,7 @@ function abrirModalCheckout() {
         body: JSON.stringify({
           slug: AppState.slug,
           checkoutToken,
+          turnstileToken: tokenSeguranca,
           clienteNome: nome,
           clienteWhatsapp: whatsapp,
           tipoEntrega,
@@ -676,6 +754,7 @@ function abrirModalCheckout() {
         })
       });
       const resultado = await resp.json().catch(() => ({}));
+      renovarTurnstile();
       if (!resp.ok) {
         showToast(resultado.erro || 'Erro ao enviar pedido. Tente novamente.', 6000);
         btn.disabled = false;
@@ -695,6 +774,7 @@ function abrirModalCheckout() {
       window.location.href = `/${AppState.slug}/pedido/${resultado.id}`;
     } catch (err) {
       console.error(err);
+      renovarTurnstile();
       showToast('Erro ao enviar pedido. Tente novamente.');
       btn.disabled = false;
       btn.textContent = 'Enviar Pedido Agora';

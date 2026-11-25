@@ -1,4 +1,4 @@
-const CACHE_NAME = 'delivery-pro-v20';
+const CACHE_NAME = 'delivery-pro-v21';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -25,7 +25,10 @@ const STATIC_ASSETS = [
   '/js/assinatura.js',
   '/js/master.js',
   '/js/avaliacoes.js',
-  '/js/fotos.js'
+  '/js/fotos.js',
+  '/js/notificar.js',
+  '/js/carrinhos.js',
+  '/js/push-cliente.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -64,4 +67,30 @@ self.addEventListener('fetch', (event) => {
       })
       .catch(() => caches.match(event.request))
   );
+});
+
+// Notificações do pedido (Web Push): mostra o aviso e abre o acompanhamento ao tocar
+self.addEventListener('push', (event) => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; } catch (_) { d = { title: 'Seu pedido', body: event.data ? event.data.text() : '' }; }
+  event.waitUntil(self.registration.showNotification(d.title || 'Seu pedido', {
+    body: d.body || '',
+    icon: d.icon || '/icone.svg',
+    badge: d.icon || '/icone.svg',
+    tag: d.tag || 'pedido',
+    renotify: true,
+    data: { url: d.url || '/' }
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const alvo = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin).href;
+  event.waitUntil((async () => {
+    const abertas = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of abertas) {
+      if (c.url === alvo && 'focus' in c) return c.focus();
+    }
+    return self.clients.openWindow(alvo);
+  })());
 });

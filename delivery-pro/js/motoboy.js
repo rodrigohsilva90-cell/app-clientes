@@ -1,5 +1,6 @@
 import { auth, db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
+import { avisarCliente } from './notificar.js';
 import { validarCercaEntrega, criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros } from './geo.js';
 import {
   collection, query, where, onSnapshot, doc, runTransaction, updateDoc, serverTimestamp
@@ -98,7 +99,7 @@ async function iniciarTelemetriaGPS(motoboyUid) {
               motoboyCoords: chegou ? { chegou: true } : coords,
               gpsAtualizadoEm: serverTimestamp()
             });
-            if (chegou) pedidoEmRotaAtual.avisouChegada = true;
+            if (chegou) { pedidoEmRotaAtual.avisouChegada = true; avisarCliente(pedidoEmRotaAtual.id); }
           } catch (_) {}
         }
       }
@@ -174,6 +175,7 @@ async function assumirEntregaAtomica(pedidoId, motoboyUid) {
         motoboyCoords: ultimaPosicao || null
       });
     });
+    avisarCliente(pedidoId);
     showToast('Entrega assumida! Boa viagem 🛵');
   } catch (err) {
     showToast(err.message || 'Não foi possível assumir a entrega.');
@@ -295,6 +297,7 @@ async function tentarFinalizarEntrega(pedido, tipoAcao) {
       ...payload,
       entregueEm: serverTimestamp()
     });
+    avisarCliente(pedido.id);
     showToast(tipoAcao === 'concluido' ? 'Entrega concluída com sucesso!' : 'Ocorrência registrada no balcão.');
   } catch (err) {
     salvarAcaoOffline({ lojaId: AppState.lojaId, pedidoId: pedido.id, payload });
