@@ -43,6 +43,9 @@ export default {
       if (url.pathname === '/api/pedidos' && request.method === 'POST') {
         return criarPedidoSeguro(request, env);
       }
+      if (url.pathname === '/api/lojas' && request.method === 'POST') {
+        return criarLoja(request, env);
+      }
       return jsonResponse({ error: 'Rota de API não encontrada' }, 404);
     }
 
@@ -303,6 +306,24 @@ async function firestore(env) {
       if (!resp.ok) throw new Error(`Firestore GET ${caminho}: ${resp.status} ${await resp.text()}`);
       return deCampos((await resp.json()).fields || {});
     },
+    // Várias gravações juntas (tudo ou nada). Cada item: { caminho, dados, novo: true|false, horaServidor: [campos] }
+    async gravarJuntos(itens) {
+      const resp = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
+        method: 'POST',
+        headers: await cabecalhos(),
+        body: JSON.stringify({
+          writes: itens.map(it => ({
+            update: { name: `${base}/${it.caminho}`, fields: paraCampos(it.dados) },
+            ...(it.novo ? { currentDocument: { exists: false } } : {}),
+            updateTransforms: (it.horaServidor || []).map(c => ({ fieldPath: c, setToServerValue: 'REQUEST_TIME' }))
+          }))
+        })
+      });
+      if (resp.ok) return true;
+      const texto = await resp.text();
+      if (resp.status === 409 || /ALREADY_EXISTS|FAILED_PRECONDITION/.test(texto)) return false;
+      throw new Error(`Firestore commit: ${resp.status} ${texto}`);
+    },
     // Cria o documento só se ele ainda não existir. Retorna false se já existia.
     async criarSeNaoExiste(caminho, dados, camposHoraServidor = []) {
       const resp = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
@@ -326,6 +347,7 @@ async function firestore(env) {
 
 function paraValor(v) {
   if (v === null || v === undefined) return { nullValue: null };
+  if (v instanceof Date) return { timestampValue: v.toISOString() };
   if (typeof v === 'boolean') return { booleanValue: v };
   if (typeof v === 'number') return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
   if (typeof v === 'string') return { stringValue: v };
@@ -352,4 +374,113 @@ function deCampos(campos) {
   const out = {};
   for (const [k, v] of Object.entries(campos)) out[k] = deValor(v);
   return out;
+}
+
+// =====================================================================
+// CADASTRO DE LOJA (teste grátis): o dono cria o login no app e manda o
+// token; aqui conferimos a assinatura do token (Web Crypto) e criamos
+// loja + link + equipe + perfil numa gravação única.
+// =====================================================================
+const SLUGS_RESERVADOS = new Set(['api', 'master', 'admin', 'painel', 'motoboy', 'pedido', 'js', 'css', 'sw', 'www', 'app', 'login', 'entrar', 'cadastro', 'suporte', 'ajuda', 'termos', 'privacidade', 'manifest']);
+
+async function criarLoja(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Cadastro temporariamente indisponível.', 503);
+    const ip = request.headers.get('CF-Connecting-IP') || 'local';
+    if (!dentroDoLimite('cad:' + ip)) throw new ErroPedido('Muitas tentativas. Aguarde alguns minutos.', 429);
+
+    const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    let usuario;
+    try { usuario = await verificarTokenFirebase(token, conta.project_id); }
+    catch (_) { throw new ErroPedido('Sessão inválida. Entre de novo e tente outra vez.', 401); }
+
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const nomeDono = String(corpo.nomeDono || '').trim().slice(0, 60);
+    const nomeLoja = String(corpo.nomeLoja || '').trim().slice(0, 60);
+    const slug = String(corpo.slug || '').toLowerCase();
+    const whatsapp = String(corpo.whatsapp || '').replace(/\D/g, '');
+    if (nomeDono.length < 2) throw new ErroPedido('Informe seu nome.');
+    if (nomeLoja.length < 2) throw new ErroPedido('Informe o nome da loja.');
+    if (!/^[a-z0-9](?:[a-z0-9-]{1,28})[a-z0-9]$/.test(slug)) {
+      const e = new ErroPedido('Endereço inválido: use de 3 a 30 letras minúsculas, números ou traço.'); e.campo = 'slug'; throw e;
+    }
+    if (SLUGS_RESERVADOS.has(slug)) { const e = new ErroPedido('Esse endereço é reservado. Escolha outro.'); e.campo = 'slug'; throw e; }
+    if (whatsapp.length < 10 || whatsapp.length > 13) throw new ErroPedido('Informe o WhatsApp com DDD.');
+
+    const fs = await firestore(env);
+    const uid = usuario.sub;
+
+    // Já tem loja? Não cria outra: devolve a existente
+    const perfil = await fs.ler(`usuarios/${uid}`);
+    if (perfil && perfil.slug) return jsonResponse({ slug: perfil.slug, jaExistia: true });
+
+    if (await fs.ler(`slugs/${slug}`)) { const e = new ErroPedido('Esse endereço já está em uso. Escolha outro.', 409); e.campo = 'slug'; throw e; }
+
+    const lojaId = 'l_' + [...crypto.getRandomValues(new Uint8Array(10))].map(b => b.toString(16).padStart(2, '0')).join('');
+    const trialAte = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const ok = await fs.gravarJuntos([
+      { caminho: `slugs/${slug}`, dados: { lojaId, ativo: true }, novo: true },
+      {
+        caminho: `lojas/${lojaId}`, novo: true, horaServidor: ['criadoEm'],
+        dados: {
+          nome: nomeLoja, slug, donoUid: uid, whatsapp,
+          corPrimaria: '#ea1d2c', tempoEstimado: '30-45 min',
+          plano: 'teste', trialAte, ativo: true, origemParceiro: String(corpo.parceiroRef || '').slice(0, 40) || null
+        }
+      },
+      { caminho: `lojas/${lojaId}/equipe/${uid}`, dados: { papel: 'dono', nome: nomeDono, email: usuario.email || null }, novo: true },
+      {
+        caminho: `usuarios/${uid}`, horaServidor: ['criadoEm'],
+        dados: { nome: nomeDono, email: usuario.email || null, lojaId, slug, roles: ['balcao', 'cliente'] }
+      }
+    ]);
+    if (!ok) { const e = new ErroPedido('Esse endereço acabou de ser usado. Escolha outro.', 409); e.campo = 'slug'; throw e; }
+    return jsonResponse({ slug, lojaId, trialAte: trialAte.toISOString() }, 201);
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message, campo: err.campo || null }, err.status);
+    console.error('criarLoja', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível criar a loja agora. Tente novamente.' }, 500);
+  }
+}
+
+// ---- Validação do token de login do Firebase (JWT RS256) com Web Crypto ----
+let chavesGoogleCache = { chaves: null, expira: 0 };
+
+function base64urlParaBytes(texto) {
+  const b64 = texto.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((texto.length + 3) % 4);
+  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+async function chavesPublicasFirebase() {
+  if (chavesGoogleCache.chaves && chavesGoogleCache.expira > Date.now()) return chavesGoogleCache.chaves;
+  const resp = await fetch('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com');
+  if (!resp.ok) throw new Error('Não foi possível obter as chaves do Firebase');
+  const idade = Number((resp.headers.get('Cache-Control') || '').match(/max-age=(\d+)/)?.[1] || 3600);
+  const { keys } = await resp.json();
+  chavesGoogleCache = { chaves: keys, expira: Date.now() + idade * 1000 };
+  return keys;
+}
+
+async function verificarTokenFirebase(token, projectId) {
+  const partes = String(token || '').split('.');
+  if (partes.length !== 3) throw new Error('token malformado');
+  const [h, p, s] = partes;
+  const texto = (b) => new TextDecoder().decode(base64urlParaBytes(b));
+  const cabecalho = JSON.parse(texto(h));
+  if (cabecalho.alg !== 'RS256' || !cabecalho.kid) throw new Error('algoritmo inválido');
+  const jwk = (await chavesPublicasFirebase()).find(k => k.kid === cabecalho.kid);
+  if (!jwk) throw new Error('chave desconhecida');
+  const chave = await crypto.subtle.importKey('jwk', { kty: jwk.kty, n: jwk.n, e: jwk.e, alg: 'RS256', ext: true },
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+  const valido = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', chave, base64urlParaBytes(s), new TextEncoder().encode(`${h}.${p}`));
+  if (!valido) throw new Error('assinatura inválida');
+  const dados = JSON.parse(texto(p));
+  const agora = Math.floor(Date.now() / 1000);
+  if (dados.aud !== projectId) throw new Error('aud');
+  if (dados.iss !== `https://securetoken.google.com/${projectId}`) throw new Error('iss');
+  if (!dados.sub || typeof dados.sub !== 'string') throw new Error('sub');
+  if (!(dados.exp > agora) || dados.iat > agora + 300) throw new Error('tempo');
+  return dados;
 }

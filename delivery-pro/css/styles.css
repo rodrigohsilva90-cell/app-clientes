@@ -227,3 +227,12 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .kds-itens { list-style: none; font-size: 20px; display: flex; flex-direction: column; gap: 6px; }
 .kds-det { font-size: 15px; color: var(--text-muted); margin-left: 34px; }
 .kds-pronto { background: var(--success); }
+
+/* ===== Página inicial e cadastro ===== */
+.landing { text-align: center; padding: 48px 20px; }
+.landing h1 { font-size: 30px; line-height: 1.2; }
+.landing-sub { margin: 12px auto 24px; color: var(--text-muted); max-width: 560px; }
+.landing-acoes { display: flex; flex-direction: column; gap: 10px; max-width: 320px; margin: 0 auto; }
+.cad-slug { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; margin: 4px 0 4px; overflow: hidden; background: var(--bg); }
+.cad-slug span { padding: 10px 0 10px 10px; font-size: 13px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
+.cad-slug input { flex: 1; min-width: 0; border: none; padding: 10px 10px 10px 2px; font-size: 15px; background: var(--surface); }

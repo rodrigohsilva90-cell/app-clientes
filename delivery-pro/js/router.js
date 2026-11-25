@@ -5,6 +5,7 @@ import { iniciarVitrine } from './vitrine.js';
 import { iniciarBalcao } from './balcao.js';
 import { iniciarMotoboy } from './motoboy.js';
 import { iniciarAcompanhamento } from './acompanhar.js';
+import { abrirCadastroLoja } from './cadastro.js';
 
 // 1. Registro do Service Worker com aviso de atualização
 if ('serviceWorker' in navigator) {
@@ -130,18 +131,37 @@ async function resolverRota() {
   }
 }
 
-function renderizarLandingSaaS(root) {
+async function renderizarLandingSaaS(root) {
   root.innerHTML = `
-    <div class="card" style="text-align:center; padding: 40px 20px;">
+    <div class="card landing">
       <h1>Seu Delivery Próprio com Mapa ao Vivo</h1>
-      <p style="margin: 12px 0 24px; color: var(--text-muted);">
-        Zero comissão por pedido. Cardápio personalizado, Pix automático e rastreamento em tempo real.
+      <p class="landing-sub">
+        Zero comissão por pedido. Cardápio personalizado, frete por distância e rastreamento do motoboy em tempo real.
       </p>
-      <button class="btn-primary" style="max-width: 300px;" onclick="alert('Fluxo de cadastro Trial 7 dias')">
-        Testar Grátis por 7 Dias
-      </button>
+      <div id="landing-acoes" class="landing-acoes">
+        <button class="btn-primary" id="btn-teste-gratis">🚀 Testar grátis por 7 dias</button>
+        <button class="btn-outline-sm" id="btn-landing-entrar">Já tenho conta — Entrar</button>
+      </div>
     </div>
   `;
+  document.getElementById('btn-teste-gratis').onclick = abrirCadastroLoja;
+  document.getElementById('btn-landing-entrar').onclick = abrirModalLogin;
+
+  // Já logado e com loja: atalho para o painel
+  if (auth.currentUser) {
+    try {
+      const perfil = await getDoc(doc(db, 'usuarios', auth.currentUser.uid));
+      const slug = perfil.exists() ? perfil.data().slug : null;
+      if (slug) {
+        document.getElementById('landing-acoes').innerHTML = `
+          <a class="btn-primary" style="text-decoration:none; display:block;" href="/${encodeURIComponent(slug)}/painel">📋 Abrir o painel da minha loja</a>
+          <a class="btn-outline-sm" style="text-decoration:none; display:block; text-align:center;" href="/${encodeURIComponent(slug)}">👀 Ver meu cardápio</a>
+          <button class="btn-outline-sm" id="btn-landing-sair">Sair</button>
+        `;
+        document.getElementById('btn-landing-sair').onclick = () => signOut(auth).then(() => window.location.reload());
+      }
+    } catch (_) {}
+  }
 }
 
 function renderizarPlaceholder(titulo, descricao) {
@@ -206,17 +226,29 @@ function abrirModalLogin() {
       <input name="senha" type="password" placeholder="Senha" required autocomplete="current-password" style="width:100%; padding:10px; margin-bottom:12px; border:1px solid var(--border); border-radius:8px;" />
       <button class="btn-primary" type="submit">Entrar</button>
       <button class="btn-outline-sm" type="button" data-fechar style="width:100%; margin-top:8px;">Cancelar</button>
+      <p style="text-align:center; font-size:14px; margin-top:12px;">Ainda não tem loja? <a href="#" data-criar style="color:var(--primary); font-weight:700;">Criar conta grátis</a></p>
     </form>
   `;
   document.body.appendChild(modal);
   modal.querySelector('[data-fechar]').onclick = () => modal.remove();
+  modal.querySelector('[data-criar]').onclick = (e) => { e.preventDefault(); modal.remove(); abrirCadastroLoja(); };
   modal.querySelector('form').onsubmit = async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
     btn.textContent = 'Entrando...';
     try {
-      await signInWithEmailAndPassword(auth, e.target.email.value.trim(), e.target.senha.value);
+      const cred = await signInWithEmailAndPassword(auth, e.target.email.value.trim(), e.target.senha.value);
+      // Na página inicial, o dono vai direto para o painel da loja dele
+      if (window.location.pathname === '/') {
+        try {
+          const perfil = await getDoc(doc(db, 'usuarios', cred.user.uid));
+          if (perfil.exists() && perfil.data().slug) {
+            window.location.href = `/${perfil.data().slug}/painel`;
+            return;
+          }
+        } catch (_) {}
+      }
       window.location.reload();
     } catch (err) {
       showToast('E-mail ou senha incorretos.');
