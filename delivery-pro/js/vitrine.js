@@ -2,7 +2,7 @@ import { db, formatarCentavos, showToast, esc, WORKER_API_URL } from './config.j
 import { AppState } from './router.js';
 import { montarItem, ofertaDoDia } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes, enviarAvaliacao } from './acompanhar.js';
-import { calcularFrete, coordsValidas } from './frete.js';
+import { calcularFrete, coordsValidas, adicionaisAgora } from './frete.js';
 import { situacaoLoja } from './horario.js';
 import { statusAssinatura } from './plano.js';
 import { doc, getDoc, collection, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
@@ -51,7 +51,7 @@ export async function iniciarVitrine() {
   const iniciais = esc((loja.nome || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase());
   const chips = [
     loja.taxaEntregaTexto ? `🛵 ${esc(loja.taxaEntregaTexto)}`
-      : (loja.frete && coordsValidas(loja.localizacao) ? `🛵 a partir de ${formatarCentavos((loja.frete.baseCentavos || 0) + (loja.frete.adicionalAtivo ? (loja.frete.adicionalCentavos || 0) : 0))}` : ''),
+      : (loja.frete && coordsValidas(loja.localizacao) ? `🛵 a partir de ${formatarCentavos((loja.frete.baseCentavos || 0) + adicionaisAgora(loja).centavos)}` : ''),
     `⏱️ ${esc(tempoEstimado)}`,
     loja.pedidoMinimoCentavos ? `💲 Mín. ${formatarCentavos(loja.pedidoMinimoCentavos)}` : ''
   ].filter(Boolean);
@@ -566,6 +566,16 @@ function abrirModalCheckout() {
       } else if (freteAtual.fora) {
         valor.textContent = 'indisponível';
         aviso.innerHTML = `📍 Seu endereço fica a ${freteAtual.distanciaKm} km, fora da área de entrega. <button class="btn-outline-sm" type="button" id="chk-virar-retirada">Retirar na loja</button>`;
+        aviso.classList.remove('hidden');
+        document.getElementById('chk-virar-retirada').onclick = () => {
+          content.querySelector('input[name="chk-tipo"][value="retirada"]').checked = true;
+          atualizarTotais();
+        };
+        btn.disabled = true;
+      } else if (freteAtual.bloqueado) {
+        const a = freteAtual.area;
+        valor.textContent = 'indisponível';
+        aviso.innerHTML = `🌙 Não entregamos em <strong>${esc(a.nome)}</strong> ${a.sempre ? 'no momento' : `das ${esc(a.inicio)} às ${esc(a.fim)}`}. Você pode buscar o pedido na loja. <button class="btn-outline-sm" type="button" id="chk-virar-retirada">🏪 Retirar na loja</button>`;
         aviso.classList.remove('hidden');
         document.getElementById('chk-virar-retirada').onclick = () => {
           content.querySelector('input[name="chk-tipo"][value="retirada"]').checked = true;

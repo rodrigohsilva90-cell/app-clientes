@@ -198,6 +198,7 @@ async function criarPedidoSeguro(request, env) {
       if (frete.configurado) {
         if (frete.precisaLocal) throw new ErroPedido('Marque sua localização no mapa para calcularmos a entrega.');
         if (frete.fora) throw new ErroPedido(`Seu endereço (${frete.distanciaKm} km) fica fora da área de entrega. Escolha retirar na loja.`);
+        if (frete.bloqueado) throw new ErroPedido(`Não entregamos em ${frete.area.nome} ${frete.area.sempre ? 'no momento' : `das ${frete.area.inicio} às ${frete.area.fim}`}. Escolha retirar na loja.`, 409);
         freteCentavos = frete.freteCentavos;
         distanciaKm = frete.distanciaKm;
       }
@@ -394,7 +395,38 @@ function distanciaRetaKm(a, b) {
 function coordsValidas(c) {
   return !!c && Number.isFinite(c.lat) && Number.isFinite(c.lng) && Math.abs(c.lat) <= 90 && Math.abs(c.lng) <= 180;
 }
-function calcularFrete(loja, destino) {
+const paraMinFrete = (t) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t || '');
+  return m && Number(m[1]) < 24 && Number(m[2]) < 60 ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+function dentroDoHorario(inicio, fim, loja, data = new Date()) {
+  const a = paraMinFrete(inicio), b = paraMinFrete(fim);
+  if (a === null || b === null || a === b) return false;
+  const { min } = agoraNoFuso((loja && loja.fusoHorario) || 'America/Sao_Paulo', data);
+  return b > a ? (min >= a && min < b) : (min >= a || min < b);
+}
+function pontoNaArea(p, pontos) {
+  if (!Array.isArray(pontos) || pontos.length < 3) return false;
+  let dentro = false;
+  for (let i = 0, j = pontos.length - 1; i < pontos.length; j = i++) {
+    const a = pontos[i], b = pontos[j];
+    if (((a.lat > p.lat) !== (b.lat > p.lat)) && (p.lng < ((b.lng - a.lng) * (p.lat - a.lat)) / (b.lat - a.lat) + a.lng)) dentro = !dentro;
+  }
+  return dentro;
+}
+function areaBloqueada(loja, destino, data = new Date()) {
+  const areas = (loja && loja.frete && Array.isArray(loja.frete.areas)) ? loja.frete.areas : [];
+  return areas.find(a => pontoNaArea(destino, a.pontos) && (a.sempre || dentroDoHorario(a.inicio, a.fim, loja, data))) || null;
+}
+function adicionaisAgora(loja, data = new Date()) {
+  const f = (loja && loja.frete) || {};
+  let centavos = 0;
+  const textos = [];
+  if (f.adicionalAtivo && Number(f.adicionalCentavos) > 0) { centavos += Number(f.adicionalCentavos); textos.push(f.adicionalTexto || 'Adicional'); }
+  if (f.noturnoAtivo && Number(f.noturnoCentavos) > 0 && dentroDoHorario(f.noturnoInicio, f.noturnoFim, loja, data)) { centavos += Number(f.noturnoCentavos); textos.push('Adicional noturno'); }
+  return { centavos, texto: textos.length ? textos.join(' + ') : null };
+}
+function calcularFrete(loja, destino, data = new Date()) {
   const f = loja && loja.frete;
   const origem = loja && loja.localizacao;
   if (!f || !coordsValidas(origem)) return { configurado: false, freteCentavos: 0 };
@@ -402,11 +434,13 @@ function calcularFrete(loja, destino) {
   const km = distanciaRetaKm(origem, destino) * FATOR_RUAS;
   const distanciaKm = Math.round(km * 10) / 10;
   if (Number(f.raioMaxKm) > 0 && km > Number(f.raioMaxKm)) return { configurado: true, fora: true, distanciaKm };
+  const area = areaBloqueada(loja, destino, data);
+  if (area) return { configurado: true, bloqueado: true, distanciaKm, area: { nome: area.nome || 'esta região', sempre: !!area.sempre, inicio: area.inicio, fim: area.fim } };
   const excedente = Math.max(0, km - (Number(f.kmInclusos) || 0));
   let freteCentavos = (Number(f.baseCentavos) || 0) + Math.ceil((excedente * (Number(f.porKmCentavos) || 0)) / 50) * 50;
-  const adicional = f.adicionalAtivo && Number(f.adicionalCentavos) > 0 ? (f.adicionalTexto || 'Adicional') : null;
-  if (adicional) freteCentavos += Number(f.adicionalCentavos);
-  return { configurado: true, freteCentavos, distanciaKm, adicional };
+  const extra = adicionaisAgora(loja, data);
+  freteCentavos += extra.centavos;
+  return { configurado: true, freteCentavos, distanciaKm, adicional: extra.texto };
 }
 
 // ---- Horário de funcionamento: MESMA conta de js/horario.js (se mudar lá, mude aqui) ----

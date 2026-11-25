@@ -22,6 +22,10 @@ export function abrirConfigEntrega() {
   const f = loja.frete || {};
   let local = coordsValidas(loja.localizacao) ? { ...loja.localizacao } : null;
   let pontoTeste = null;
+  // Áreas sem entrega (polígonos desenhados no mapa)
+  let areas = (Array.isArray(f.areas) ? f.areas : []).map(a => ({ nome: a.nome || 'Área', pontos: (a.pontos || []).map(p => ({ lat: p.lat, lng: p.lng })), sempre: !!a.sempre, inicio: a.inicio || '20:00', fim: a.fim || '06:00' }));
+  let desenhando = null; // pontos da área sendo desenhada
+  const horaOk = (t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t || '');
 
   const overlay = document.createElement('div');
   overlay.className = 'gc-overlay';
@@ -62,7 +66,29 @@ export function abrirConfigEntrega() {
             <div><label>Motivo mostrado ao cliente</label><input id="ce-adic-texto" maxlength="30" value="${esc(f.adicionalTexto || 'Adicional chuva')}" /></div>
           </div>
 
-          <strong style="display:block; margin-top:14px;">4. Texto no topo do cardápio (opcional)</strong>
+          <strong style="display:block; margin-top:14px;">4. Adicional noturno (automático)</strong>
+          <label class="gc-check"><input type="checkbox" id="ce-not-ativo" ${f.noturnoAtivo ? 'checked' : ''} /> Cobrar sozinho nesse horário</label>
+          <div class="gc-linha">
+            <div><label>Valor (R$)</label><input id="ce-not-valor" inputmode="decimal" value="${centavosTexto(f.noturnoCentavos)}" /></div>
+            <div><label>Das</label><input id="ce-not-ini" type="time" value="${esc(f.noturnoInicio || '22:00')}" /></div>
+            <div><label>Até</label><input id="ce-not-fim" type="time" value="${esc(f.noturnoFim || '06:00')}" /></div>
+          </div>
+          <p class="gc-dica">O cliente vê "Adicional noturno" no frete só dentro desse horário. Pode somar com o adicional de chuva.</p>
+
+          <strong style="display:block; margin-top:14px;">5. Áreas sem entrega</strong>
+          <p class="gc-dica">Desenhe no mapa os bairros ou ruas onde vocês não entregam (sempre ou só à noite). Quem estiver dentro recebe a opção de <strong>retirar na loja</strong>.</p>
+          <div id="ce-areas"></div>
+          <button class="btn-outline-sm gc-largo" id="ce-nova-area" type="button">✏ Desenhar área no mapa</button>
+          <div id="ce-desenho" class="ce-desenho hidden">
+            <span id="ce-desenho-txt">Toque no mapa para marcar os cantos da área (pelo menos 3).</span>
+            <div style="display:flex; gap:6px; margin-top:6px;">
+              <button class="btn-primary" id="ce-area-ok" type="button" style="width:auto;">✔ Concluir área</button>
+              <button class="btn-outline-sm" id="ce-area-desfazer" type="button">↶ Desfazer ponto</button>
+              <button class="btn-outline-sm" id="ce-area-cancelar" type="button">Cancelar</button>
+            </div>
+          </div>
+
+          <strong style="display:block; margin-top:14px;">6. Texto no topo do cardápio (opcional)</strong>
           <input id="ce-texto-taxa" maxlength="30" placeholder="Ex: R$ 5 a R$ 15 (vazio = automático)" value="${esc(loja.taxaEntregaTexto || '')}" />
         </div>
       </div>
@@ -80,7 +106,16 @@ export function abrirConfigEntrega() {
     raioMaxKm: numero($('#ce-raio').value),
     adicionalAtivo: $('#ce-adic-ativo').checked,
     adicionalCentavos: reaisParaCentavos($('#ce-adic-valor').value),
-    adicionalTexto: $('#ce-adic-texto').value.trim().slice(0, 30)
+    adicionalTexto: $('#ce-adic-texto').value.trim().slice(0, 30),
+    noturnoAtivo: $('#ce-not-ativo').checked,
+    noturnoCentavos: reaisParaCentavos($('#ce-not-valor').value),
+    noturnoInicio: $('#ce-not-ini').value,
+    noturnoFim: $('#ce-not-fim').value,
+    areas: areas.map(a => ({
+      nome: (a.nome || 'Área').trim().slice(0, 40) || 'Área',
+      pontos: a.pontos.slice(0, 60).map(p => ({ lat: Math.round(p.lat * 1e6) / 1e6, lng: Math.round(p.lng * 1e6) / 1e6 })),
+      sempre: !!a.sempre, inicio: a.inicio, fim: a.fim
+    }))
   });
 
   // ---- Mapa ----
@@ -90,6 +125,7 @@ export function abrirConfigEntrega() {
   const centro = local || { lat: -23.55, lng: -46.63 };
   const mapa = typeof L !== 'undefined' ? L.map($('#ce-mapa')).setView([centro.lat, centro.lng], local ? 15 : 11) : null;
   let pino = null, circulo = null, pinoTeste = null;
+  let camadaAreas = null, linhaDesenho = null;
   if (mapa) {
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapa);
     setTimeout(() => mapa.invalidateSize(), 150);
@@ -110,18 +146,105 @@ export function abrirConfigEntrega() {
     atualizarTeste();
   }
 
+  // Desenha as áreas sem entrega (vermelho) e a área que está sendo desenhada (tracejado)
+  function desenharAreas() {
+    if (!mapa) return;
+    if (camadaAreas) camadaAreas.remove();
+    camadaAreas = L.layerGroup(areas.map(a => L.polygon(a.pontos.map(p => [p.lat, p.lng]), { color: '#dc2626', weight: 2, fillOpacity: 0.18 })
+      .bindTooltip(`⛔ ${a.nome}${a.sempre ? '' : ` (${a.inicio}–${a.fim})`}`))).addTo(mapa);
+    if (linhaDesenho) { linhaDesenho.remove(); linhaDesenho = null; }
+    if (desenhando && desenhando.length) {
+      linhaDesenho = L.layerGroup([
+        L.polygon(desenhando.map(p => [p.lat, p.lng]), { color: '#dc2626', dashArray: '6 6', weight: 2, fillOpacity: 0.08 }),
+        ...desenhando.map(p => L.circleMarker([p.lat, p.lng], { radius: 5, color: '#dc2626', fillOpacity: 1 }))
+      ]).addTo(mapa);
+    }
+  }
+
+  function listarAreas() {
+    const box = $('#ce-areas');
+    box.innerHTML = areas.length ? areas.map((a, i) => `
+      <div class="ce-area">
+        <div class="gc-linha">
+          <div style="flex:2;"><label>Nome</label><input data-area="${i}" data-campo="nome" maxlength="40" value="${esc(a.nome)}" /></div>
+          <div><label>Quando</label>
+            <select data-area="${i}" data-campo="sempre">
+              <option value="noite" ${a.sempre ? '' : 'selected'}>Num horário</option>
+              <option value="sempre" ${a.sempre ? 'selected' : ''}>Sempre</option>
+            </select>
+          </div>
+        </div>
+        ${a.sempre ? '' : `
+          <div class="gc-linha">
+            <div><label>Das</label><input type="time" data-area="${i}" data-campo="inicio" value="${esc(a.inicio)}" /></div>
+            <div><label>Até</label><input type="time" data-area="${i}" data-campo="fim" value="${esc(a.fim)}" /></div>
+          </div>`}
+        <button class="btn-outline-sm gc-perigo" type="button" data-remover-area="${i}">🗑 Remover área</button>
+      </div>`).join('') : '<p class="gc-dica" style="margin:0 0 6px;">Nenhuma área bloqueada.</p>';
+  }
+  $('#ce-areas').addEventListener('input', (e) => {
+    const i = e.target.dataset.area;
+    if (i === undefined) return;
+    const a = areas[Number(i)];
+    const campo = e.target.dataset.campo;
+    if (campo === 'sempre') { a.sempre = e.target.value === 'sempre'; listarAreas(); }
+    else a[campo] = e.target.value;
+    desenharAreas();
+    atualizarTeste();
+  });
+  $('#ce-areas').addEventListener('change', (e) => { if (e.target.dataset.campo === 'sempre') e.target.dispatchEvent(new Event('input', { bubbles: true })); });
+  $('#ce-areas').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-remover-area]');
+    if (!b || !confirm(`Remover a área "${areas[Number(b.dataset.removerArea)].nome}"?`)) return;
+    areas.splice(Number(b.dataset.removerArea), 1);
+    listarAreas(); desenharAreas(); atualizarTeste();
+  });
+
+  const modoDesenho = (ligado) => {
+    desenhando = ligado ? [] : null;
+    $('#ce-desenho').classList.toggle('hidden', !ligado);
+    $('#ce-nova-area').classList.toggle('hidden', ligado);
+    $('#ce-desenho-txt').textContent = 'Toque no mapa para marcar os cantos da área (pelo menos 3).';
+    desenharAreas();
+    if (ligado) { $('#ce-mapa').scrollIntoView({ behavior: 'smooth', block: 'center' }); showToast('Toque no mapa, canto por canto, em volta da área.'); }
+  };
+  $('#ce-nova-area').onclick = () => {
+    if (!mapa) { showToast('Mapa indisponível.'); return; }
+    if (areas.length >= 20) { showToast('Limite de 20 áreas.'); return; }
+    modoDesenho(true);
+  };
+  $('#ce-area-cancelar').onclick = () => modoDesenho(false);
+  $('#ce-area-desfazer').onclick = () => { if (desenhando && desenhando.length) { desenhando.pop(); desenharAreas(); } };
+  $('#ce-area-ok').onclick = () => {
+    if (!desenhando || desenhando.length < 3) { showToast('Marque pelo menos 3 cantos no mapa.'); return; }
+    areas.push({ nome: `Área ${areas.length + 1}`, pontos: desenhando, sempre: false, inicio: '20:00', fim: '06:00' });
+    modoDesenho(false);
+    listarAreas();
+    desenharAreas();
+    atualizarTeste();
+    showToast('Área criada! Dê um nome, escolha o horário e toque em 💾 Salvar.');
+  };
+
   function atualizarTeste() {
     const caixa = $('#ce-teste');
     if (!pontoTeste || !local) return;
-    const r = calcularFrete({ localizacao: local, frete: lerFrete() }, pontoTeste);
+    const r = calcularFrete({ localizacao: local, frete: lerFrete(), fusoHorario: loja.fusoHorario }, pontoTeste);
     caixa.innerHTML = r.fora
       ? `📍 Ponto de teste a <strong>${r.distanciaKm} km</strong>: <strong style="color:var(--danger);">fora da área de entrega</strong>.`
+      : r.bloqueado
+      ? `📍 Ponto de teste a <strong>${r.distanciaKm} km</strong>: <strong style="color:var(--danger);">⛔ dentro de "${esc(r.area.nome)}" — sem entrega agora</strong> (cliente pode retirar na loja).`
       : `📍 Ponto de teste a <strong>${r.distanciaKm} km</strong>: frete de <strong>${formatarCentavos(r.freteCentavos)}</strong>${r.adicional ? ` (inclui ${esc(r.adicional)})` : ''}.`;
   }
 
   if (mapa) {
     mapa.on('click', (e) => {
       const p = { lat: e.latlng.lat, lng: e.latlng.lng };
+      if (desenhando) {
+        desenhando.push(p);
+        $('#ce-desenho-txt').textContent = `${desenhando.length} canto(s) marcado(s).${desenhando.length >= 3 ? ' Toque em ✔ Concluir área quando terminar.' : ''}`;
+        desenharAreas();
+        return;
+      }
       if ($('#ce-simular').checked && local) {
         pontoTeste = p;
         if (!pinoTeste) pinoTeste = L.circleMarker([p.lat, p.lng], { radius: 8, color: '#dc2626' }).addTo(mapa);
@@ -154,6 +277,11 @@ export function abrirConfigEntrega() {
     if (!local) { showToast('Marque no mapa onde fica a loja.'); return; }
     if ([frete.baseCentavos, frete.porKmCentavos, frete.adicionalCentavos].includes(null)) { showToast('Confira os valores em R$ (use o formato 5,00).'); return; }
     if (frete.kmInclusos === null || frete.raioMaxKm === null || frete.raioMaxKm <= 0) { showToast('Confira os campos de km (o raio de entrega precisa ser maior que zero).'); return; }
+    if (frete.noturnoCentavos === null) { showToast('Confira o valor do adicional noturno (formato 3,00).'); return; }
+    if (frete.noturnoAtivo && (!horaOk(frete.noturnoInicio) || !horaOk(frete.noturnoFim) || frete.noturnoInicio === frete.noturnoFim)) { showToast('Confira o horário do adicional noturno.'); return; }
+    const areaRuim = frete.areas.find(a => !a.sempre && (!horaOk(a.inicio) || !horaOk(a.fim) || a.inicio === a.fim));
+    if (areaRuim) { showToast(`Confira o horário da área "${areaRuim.nome}".`); return; }
+    if (desenhando) { showToast('Termine (✔ Concluir área) ou cancele o desenho antes de salvar.'); return; }
     const btn = $('#ce-salvar');
     btn.disabled = true;
     try {
@@ -174,4 +302,7 @@ export function abrirConfigEntrega() {
   };
 
   desenhar();
+  listarAreas();
+  desenharAreas();
+  if (mapa && areas.length && !local) mapa.fitBounds(L.polygon(areas[0].pontos.map(p => [p.lat, p.lng])).getBounds());
 }

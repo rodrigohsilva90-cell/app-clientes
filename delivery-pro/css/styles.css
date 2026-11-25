@@ -346,3 +346,5 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .foto-campo { display: flex; gap: 8px; align-items: center; }
 .foto-campo button { flex-shrink: 0; white-space: nowrap; }
 .foto-campo input { flex: 1; min-width: 0; }
+.ce-area { border: 1px solid #fecaca; background: #fef2f2; border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+.ce-desenho { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; padding: 10px; font-size: 14px; margin-top: 6px; }
