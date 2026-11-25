@@ -136,10 +136,67 @@ function etapasDo(p) {
   ];
 }
 
+// ---- Pix automático: QR Code + copia e cola enquanto o pedido aguarda o pagamento ----
+let relogioPix = null;
+function renderPix(p, box, numero) {
+  const expira = p.pix && (p.pix.expiraEm?.toMillis ? p.pix.expiraEm.toMillis() : Date.parse(p.pix.expiraEm));
+  if (!p.pix || !p.pix.qrCode) {
+    box.innerHTML = `<h2>Pedido #${numero}</h2><p style="margin-top:8px;">⏳ Gerando o Pix...</p>`;
+    return;
+  }
+  if (expira && Date.now() > expira) {
+    box.innerHTML = `<h2>Pedido #${numero}</h2><div class="pix-expirado">⌛ O tempo para pagar este Pix acabou e o pedido não foi enviado para a loja. <a href="/${esc(AppState.slug)}">Fazer o pedido de novo</a></div>`;
+    return;
+  }
+  if (box.dataset.pixDesenhado === p.pix.mpId) return; // já está na tela (não piscar)
+  box.dataset.pixDesenhado = p.pix.mpId;
+  box.innerHTML = `
+    <h2>Pedido #${numero}</h2>
+    <div class="pix-box">
+      <strong>Pague com Pix para enviar o pedido à loja</strong>
+      <span class="pix-valor">${formatarCentavos(p.totalCentavos)}</span>
+      ${p.pix.qrBase64 ? `<img class="pix-qr" alt="QR Code Pix" src="data:image/png;base64,${esc(p.pix.qrBase64)}" />` : ''}
+      <p class="gc-dica">No celular: toque em <strong>Copiar código</strong>, abra o app do seu banco → Pix → <strong>Pix Copia e Cola</strong>.</p>
+      <button class="btn-primary" type="button" id="pix-copiar">📋 Copiar código Pix</button>
+      <textarea id="pix-codigo" class="pix-codigo" readonly rows="3">${esc(p.pix.qrCode)}</textarea>
+      <p class="pix-tempo" id="pix-tempo"></p>
+      <button class="btn-outline-sm" type="button" id="pix-ja-paguei" style="width:100%;">Já paguei</button>
+      <p class="gc-dica">Assim que o banco confirmar, esta tela muda sozinha e a loja recebe o pedido.</p>
+    </div>`;
+  box.querySelector('#pix-copiar').onclick = async () => {
+    const campo = box.querySelector('#pix-codigo');
+    try { await navigator.clipboard.writeText(p.pix.qrCode); }
+    catch (_) { campo.select(); document.execCommand('copy'); }
+    box.querySelector('#pix-copiar').textContent = '✅ Código copiado! Cole no app do banco';
+  };
+  box.querySelector('#pix-ja-paguei').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = 'Conferindo com o banco...';
+    try {
+      const r = await fetch('/api/mp/verificar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: AppState.slug, pedidoId: p.id }) });
+      const d = await r.json().catch(() => ({}));
+      btn.textContent = d.pago || d.status === 'novo' ? '✅ Pagamento confirmado!' : 'Ainda não confirmado. Aguarde alguns segundos e toque de novo.';
+    } catch (_) { btn.textContent = 'Sem conexão. Tente de novo.'; }
+    setTimeout(() => { btn.disabled = false; }, 4000);
+  };
+  if (relogioPix) clearInterval(relogioPix);
+  const atualizar = () => {
+    const el = document.getElementById('pix-tempo');
+    if (!el) { clearInterval(relogioPix); return; }
+    const resta = Math.max(0, (expira || 0) - Date.now());
+    el.textContent = resta ? `⏱ Pague em até ${Math.floor(resta / 60000)}:${String(Math.floor(resta / 1000) % 60).padStart(2, '0')}` : '⌛ Tempo esgotado';
+  };
+  atualizar();
+  relogioPix = setInterval(atualizar, 1000);
+}
+
 function renderStatus(p) {
   const box = document.getElementById('acomp-status');
   if (!box) return;
   const numero = esc(p.numeroPedido || p.id.slice(0, 6).toUpperCase());
+  if (p.status === 'aguardando_pagamento') return renderPix(p, box, numero);
+  delete box.dataset.pixDesenhado;
+  if (relogioPix) { clearInterval(relogioPix); relogioPix = null; }
 
   if (p.status === 'ocorrencia' || p.status === 'cancelado') {
     box.innerHTML = `

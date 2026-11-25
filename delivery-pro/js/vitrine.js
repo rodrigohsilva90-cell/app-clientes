@@ -574,7 +574,7 @@ function abrirModalCheckout() {
 
     <label style="${rotulo}">Forma de Pagamento</label>
     <select id="chk-pagamento" style="${campo}">
-      <option value="pix">Pix Online (Aprovação Instantânea)</option>
+      <option value="pix">${loja.pixOnline ? 'Pix — pague agora pelo QR Code (aprovação automática)' : 'Pix (a loja combina com você)'}</option>
       <option value="cartao_entrega">Cartão na Entrega (Maquininha)</option>
       <option value="dinheiro">Dinheiro na Entrega</option>
     </select>
@@ -822,7 +822,7 @@ function abrirModalCheckout() {
       localStorage.removeItem(`carrinho_${AppState.lojaId}`);
       checkoutToken = novoCheckoutToken();
       salvarPedidoLocal(AppState.lojaId, { id: resultado.id, numero: resultado.numeroPedido });
-      showToast('Pedido enviado com sucesso!');
+      showToast(resultado.aguardandoPix ? 'Quase lá! Pague o Pix para enviar o pedido à loja.' : 'Pedido enviado com sucesso!', 5000);
       // Vai direto para a tela de acompanhamento (o link fica salvo no aparelho)
       window.location.href = `/${AppState.slug}/pedido/${resultado.id}`;
     } catch (err) {

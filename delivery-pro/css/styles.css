@@ -368,3 +368,13 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .vt-repetir { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; border: 2px solid var(--primary); }
 .vt-repetir div { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .vt-repetir small { color: var(--text-muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pix-box { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; margin-top: 10px; }
+.pix-valor { font-size: 28px; font-weight: 800; color: var(--primary); }
+.pix-qr { width: 220px; height: 220px; image-rendering: pixelated; border: 1px solid var(--border); border-radius: 12px; padding: 8px; background: #fff; }
+.pix-codigo { width: 100%; font-size: 12px; font-family: monospace; border: 1px solid var(--border); border-radius: 8px; padding: 8px; resize: none; color: var(--text-muted); }
+.pix-tempo { font-weight: 700; color: #9a3412; }
+.pix-expirado { background: #fef3c7; color: #92400e; padding: 12px; border-radius: 8px; margin-top: 10px; }
+.pix-ok { background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.pix-ok span { font-size: 14px; color: var(--text-muted); }
+.pix-passos { margin: 8px 0 0 18px; font-size: 14px; display: flex; flex-direction: column; gap: 8px; }
+.pago-ok { color: var(--success); }

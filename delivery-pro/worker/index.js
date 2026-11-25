@@ -61,6 +61,15 @@ export default {
       if (url.pathname === '/api/publico' && request.method === 'GET') {
         return jsonResponse({ turnstile: env.TURNSTILE_SITEKEY || null, push: chavePublicaPush(env) });
       }
+      if (url.pathname === '/api/mp/webhook' && request.method === 'POST') {
+        return webhookMercadoPago(request, env, url);
+      }
+      if (url.pathname === '/api/mp/verificar' && request.method === 'POST') {
+        return verificarPix(request, env);
+      }
+      if (url.pathname === '/api/mp/config' && request.method === 'POST') {
+        return configMercadoPago(request, env);
+      }
       if (url.pathname === '/api/carrinho' && request.method === 'POST') {
         return registrarCarrinho(request, env);
       }
@@ -192,7 +201,7 @@ async function criarPedidoSeguro(request, env) {
 
     // Mesmo pedido enviado de novo (internet oscilando): devolve o que já foi gravado
     const jaExiste = await fs.ler(caminho);
-    if (jaExiste) return jsonResponse({ id: token, numeroPedido: jaExiste.numeroPedido, totalCentavos: jaExiste.totalCentavos, duplicado: true }, 200);
+    if (jaExiste) return jsonResponse({ id: token, numeroPedido: jaExiste.numeroPedido, totalCentavos: jaExiste.totalCentavos, duplicado: true, aguardandoPix: jaExiste.status === 'aguardando_pagamento' }, 200);
 
     // Anti-trote: verificação invisível do Cloudflare Turnstile
     if (env.TURNSTILE_SECRET && !(await turnstileValido(env, corpo.turnstileToken, ip))) {
@@ -237,6 +246,8 @@ async function criarPedidoSeguro(request, env) {
       }
     }
     const totalCentavos = subtotalCentavos + freteCentavos;
+    // Pix automático (Mercado Pago da própria loja): o pedido só vai para a cozinha depois de pago
+    const pixOnline = formaPagamento === 'pix' && loja.pixOnline === true && Boolean(env.MP_CHAVE);
     if (formaPagamento === 'dinheiro' && trocoParaCentavos && trocoParaCentavos < totalCentavos) {
       throw new ErroPedido(`O troco precisa ser para um valor maior que o total (${reais(totalCentavos)}).`);
     }
@@ -256,7 +267,7 @@ async function criarPedidoSeguro(request, env) {
       totalCentavos,
       formaPagamento,
       trocoParaCentavos: formaPagamento === 'dinheiro' ? trocoParaCentavos : 0,
-      status: 'novo',
+      status: pixOnline ? 'aguardando_pagamento' : 'novo',
       origem,
       canal: 'vitrine',
       turnoId: estado && estado.caixaAberto && estado.turnoId ? String(estado.turnoId) : null
@@ -264,9 +275,19 @@ async function criarPedidoSeguro(request, env) {
 
     // O ID do pedido é o próprio token: clicar duas vezes não cria dois pedidos
     const criado = await fs.criarSeNaoExiste(caminho, pedido, ['criadoEm']);
+    if (criado && pixOnline) {
+      try {
+        const pix = await criarCobrancaPix(env, fs, lojaId, token, pedido, loja, new URL(request.url).origin);
+        await fs.atualizar(caminho, { pix });
+      } catch (err) {
+        console.error('pix', err && err.message);
+        try { await fs.apagar([caminho]); } catch (_) {}
+        throw new ErroPedido('O Pix automático está indisponível agora. Escolha outra forma de pagamento ou tente de novo em instantes.', 502);
+      }
+    }
     if (criado) { try { await fs.apagar([`lojas/${lojaId}/carrinhos/${whatsapp}`]); } catch (_) {} }
     const final = criado ? pedido : await fs.ler(caminho);
-    return jsonResponse({ id: token, numeroPedido: final?.numeroPedido, totalCentavos: final?.totalCentavos, duplicado: !criado }, criado ? 201 : 200);
+    return jsonResponse({ id: token, numeroPedido: final?.numeroPedido, totalCentavos: final?.totalCentavos, duplicado: !criado, aguardandoPix: pixOnline }, criado ? 201 : 200);
   } catch (err) {
     if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
     console.error('criarPedidoSeguro', err && err.stack || err);
@@ -333,6 +354,164 @@ async function servirFoto(env, chave) {
       'X-Content-Type-Options': 'nosniff'
     }
   });
+}
+
+// =====================================================================
+// PIX AUTOMÁTICO — MERCADO PAGO (cada loja usa a SUA conta: o dinheiro cai
+// direto para o lojista). O Access Token fica criptografado (AES-GCM, chave
+// no secret MP_CHAVE) em lojas/{id}/segredos/mercadopago, que o navegador
+// nunca lê. O pedido nasce "aguardando_pagamento" e só vira "novo" (toca
+// no balcão) quando o Mercado Pago confirma o pagamento.
+// =====================================================================
+const MP_API = 'https://api.mercadopago.com';
+const PIX_VALIDADE_MS = 30 * 60 * 1000;
+async function chaveCripto(env) {
+  return crypto.subtle.importKey('raw', b64uDec(env.MP_CHAVE), 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+async function cifrarTexto(env, texto) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const c = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await chaveCripto(env), new TextEncoder().encode(texto));
+  return { iv: b64uEnc(iv), dado: b64uEnc(c) };
+}
+async function decifrarTexto(env, obj) {
+  const t = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64uDec(obj.iv) }, await chaveCripto(env), b64uDec(obj.dado));
+  return new TextDecoder().decode(t);
+}
+async function tokenDaLoja(env, fs, lojaId) {
+  const seg = await fs.ler(`lojas/${lojaId}/segredos/mercadopago`);
+  if (!seg || !seg.token) throw new Error('loja sem Mercado Pago');
+  return decifrarTexto(env, seg.token);
+}
+async function chamarMP(token, caminho, opcoes = {}) {
+  const r = await fetch(MP_API + caminho, { ...opcoes, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(opcoes.headers || {}) } });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`MP ${caminho} ${r.status}: ${(d && (d.message || d.error)) || ''}`);
+  return d;
+}
+
+async function criarCobrancaPix(env, fs, lojaId, pedidoId, pedido, loja, origem) {
+  const token = await tokenDaLoja(env, fs, lojaId);
+  const expira = new Date(Date.now() + PIX_VALIDADE_MS);
+  const wa = String(pedido.clienteWhatsapp || '').replace(/\D/g, '');
+  const pag = await chamarMP(token, '/v1/payments', {
+    method: 'POST',
+    headers: { 'X-Idempotency-Key': pedidoId },
+    body: JSON.stringify({
+      transaction_amount: Math.round(pedido.totalCentavos) / 100,
+      description: `Pedido #${pedido.numeroPedido} - ${String((loja && loja.nome) || 'Delivery').slice(0, 60)}`,
+      payment_method_id: 'pix',
+      payer: { email: `cliente${wa || 'pedido'}@pagamento.delivery-pro.app`, first_name: String(pedido.clienteNome || 'Cliente').split(/\s+/)[0].slice(0, 40) },
+      external_reference: `${lojaId}:${pedidoId}`,
+      notification_url: `${origem}/api/mp/webhook?loja=${encodeURIComponent(lojaId)}`,
+      date_of_expiration: expira.toISOString().replace('Z', '-00:00')
+    })
+  });
+  const dados = pag.point_of_interaction && pag.point_of_interaction.transaction_data;
+  if (!dados || !dados.qr_code) throw new Error('MP sem QR Code');
+  return { mpId: String(pag.id), qrCode: dados.qr_code, qrBase64: dados.qr_code_base64 || null, expiraEm: expira, status: pag.status || 'pending' };
+}
+
+// Confere o pagamento DIRETO no Mercado Pago (não confia no que chega de fora) e atualiza o pedido
+async function sincronizarPagamento(env, fs, lojaId, mpId) {
+  const token = await tokenDaLoja(env, fs, lojaId);
+  const pag = await chamarMP(token, `/v1/payments/${encodeURIComponent(mpId)}`);
+  const [refLoja, pedidoId] = String(pag.external_reference || '').split(':');
+  if (refLoja !== lojaId || !/^[A-Za-z0-9_]{8,100}$/.test(pedidoId || '')) return { ignorado: true };
+  const caminho = `lojas/${lojaId}/pedidos/${pedidoId}`;
+  const pedido = await fs.ler(caminho);
+  if (!pedido || pedido.status !== 'aguardando_pagamento') return { pedidoId, status: pedido && pedido.status };
+  const valorOk = Math.round(Number(pag.transaction_amount) * 100) === Math.round(Number(pedido.totalCentavos));
+  if (pag.status === 'approved' && valorOk) {
+    await fs.atualizar(caminho, { status: 'novo', pagoEm: new Date(), pagamentoStatus: 'aprovado', pagamentoMpId: String(mpId) });
+    return { pedidoId, status: 'novo', pago: true };
+  }
+  if (['cancelled', 'rejected', 'expired'].includes(pag.status)) {
+    await fs.atualizar(caminho, { status: 'cancelado', motivoCancelamento: 'Pix não foi pago a tempo', canceladoEm: new Date() });
+    return { pedidoId, status: 'cancelado' };
+  }
+  return { pedidoId, status: 'aguardando_pagamento', mp: pag.status };
+}
+
+async function webhookMercadoPago(request, env, url) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT || !env.MP_CHAVE) return new Response('ok');
+    const lojaId = String(url.searchParams.get('loja') || '');
+    let corpo = {};
+    try { corpo = await request.json(); } catch (_) {}
+    const tipo = corpo.type || corpo.topic || url.searchParams.get('type') || url.searchParams.get('topic');
+    const mpId = String((corpo.data && corpo.data.id) || url.searchParams.get('data.id') || url.searchParams.get('id') || '');
+    if (tipo !== 'payment' || !/^\d{3,30}$/.test(mpId) || !/^[A-Za-z0-9_-]{2,60}$/.test(lojaId)) return new Response('ok');
+    const fs = await firestore(env);
+    await sincronizarPagamento(env, fs, lojaId, mpId);
+    return new Response('ok');
+  } catch (err) {
+    console.error('webhookMP', err && err.stack || err);
+    return new Response('erro', { status: 500 }); // o Mercado Pago tenta de novo depois
+  }
+}
+
+// Botão "Já paguei" na tela do cliente (caso o aviso do Mercado Pago demore)
+async function verificarPix(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT || !env.MP_CHAVE) throw new ErroPedido('Indisponível.', 503);
+    const ip = request.headers.get('CF-Connecting-IP') || 'local';
+    if (!dentroDoLimite(`pix:${ip}`)) throw new ErroPedido('Aguarde um pouco e tente de novo.', 429);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const pedidoId = String(corpo.pedidoId || '');
+    if (!/^[A-Za-z0-9_]{8,100}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+    const fs = await firestore(env);
+    const lojaId = await lojaPeloSlug(fs, corpo.slug);
+    const pedido = await fs.ler(`lojas/${lojaId}/pedidos/${pedidoId}`);
+    if (!pedido) throw new ErroPedido('Pedido não encontrado.', 404);
+    if (pedido.status !== 'aguardando_pagamento' || !pedido.pix || !pedido.pix.mpId) return jsonResponse({ status: pedido.status });
+    return jsonResponse(await sincronizarPagamento(env, fs, lojaId, pedido.pix.mpId));
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('verificarPix', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível conferir agora.' }, 500);
+  }
+}
+
+// Painel do dono: conectar / ver / desligar o Mercado Pago da loja
+async function configMercadoPago(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT || !env.MP_CHAVE) throw new ErroPedido('Pix automático indisponível no momento.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const { fs } = await usuarioDaEquipe(request, env, lojaId, ['dono']);
+    const caminhoSeg = `lojas/${lojaId}/segredos/mercadopago`;
+    if (corpo.acao === 'status') {
+      const seg = await fs.ler(caminhoSeg);
+      return jsonResponse({ conectado: Boolean(seg && seg.token), conta: (seg && seg.conta) || null, atualizadoEm: (seg && seg.atualizadoEm) || null });
+    }
+    if (corpo.acao === 'desligar') {
+      await fs.apagar([caminhoSeg]);
+      await fs.atualizar(`lojas/${lojaId}`, { pixOnline: false });
+      cacheLojas.clear();
+      return jsonResponse({ ok: true });
+    }
+    if (corpo.acao === 'salvar') {
+      const token = String(corpo.token || '').trim();
+      if (!/^APP_USR-[A-Za-z0-9-]{20,200}$/.test(token)) {
+        throw new ErroPedido(/^TEST-/.test(token) ? 'Esse é o token de TESTE. Use o "Access Token" de PRODUÇÃO (começa com APP_USR-).' : 'Token inválido. Copie o "Access Token" de produção (começa com APP_USR-).');
+      }
+      let eu;
+      try { eu = await chamarMP(token, '/users/me'); }
+      catch (_) { throw new ErroPedido('O Mercado Pago não aceitou esse token. Confira se copiou o Access Token de produção inteiro.'); }
+      const conta = String(eu.nickname || eu.email || eu.id || 'conta Mercado Pago').slice(0, 80);
+      await fs.gravarJuntos([{ caminho: caminhoSeg, dados: { token: await cifrarTexto(env, token), conta, mpUserId: String(eu.id || ''), atualizadoEm: new Date() } }]);
+      await fs.atualizar(`lojas/${lojaId}`, { pixOnline: true });
+      cacheLojas.clear();
+      return jsonResponse({ ok: true, conta });
+    }
+    throw new ErroPedido('Ação inválida.');
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('configMP', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível salvar agora.' }, 500);
+  }
 }
 
 // =====================================================================

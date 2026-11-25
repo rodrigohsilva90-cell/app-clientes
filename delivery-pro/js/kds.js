@@ -21,7 +21,7 @@ function bipe() {
   osc.stop(audio.currentTime + 0.5);
 }
 
-const minutosDesde = (p) => (p.criadoEm?.toMillis ? Math.floor((Date.now() - p.criadoEm.toMillis()) / 60000) : 0);
+const minutosDesde = (p) => { const t = p.pagoEm?.toMillis ? p.pagoEm.toMillis() : p.criadoEm?.toMillis ? p.criadoEm.toMillis() : null; return t ? Math.floor((Date.now() - t) / 60000) : 0; };
 
 export function iniciarKds() {
   const root = document.getElementById('app-root');

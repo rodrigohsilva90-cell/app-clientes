@@ -1,4 +1,4 @@
-const CACHE_NAME = 'delivery-pro-v22';
+const CACHE_NAME = 'delivery-pro-v23';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -28,7 +28,8 @@ const STATIC_ASSETS = [
   '/js/fotos.js',
   '/js/notificar.js',
   '/js/carrinhos.js',
-  '/js/push-cliente.js'
+  '/js/push-cliente.js',
+  '/js/config-pix.js'
 ];
 
 self.addEventListener('install', (event) => {

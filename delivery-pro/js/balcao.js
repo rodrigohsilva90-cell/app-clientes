@@ -12,6 +12,7 @@ import { abrirConfigAparencia } from './config-aparencia.js';
 import { statusAssinatura } from './plano.js';
 import { abrirAvaliacoes } from './avaliacoes.js';
 import { abrirCarrinhos } from './carrinhos.js';
+import { abrirConfigPix } from './config-pix.js';
 import { avisarCliente } from './notificar.js';
 import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
@@ -27,7 +28,9 @@ let papel = null;
 
 const MIN_ALERTA = 5;     // pedido novo sem aceite: alerta e campainha repetindo
 const MIN_CANCELAR = 15;  // pedido novo sem aceite: cancelado automaticamente
-const minutosDesde = (p) => (p.criadoEm?.toMillis ? (Date.now() - p.criadoEm.toMillis()) / 60000 : 0);
+// Pedido pago por Pix só chega ao balcão depois de pago: o relógio conta a partir do pagamento
+const inicioDoPedido = (p) => (p.pagoEm?.toMillis ? p.pagoEm.toMillis() : p.criadoEm?.toMillis ? p.criadoEm.toMillis() : null);
+const minutosDesde = (p) => (inicioDoPedido(p) ? (Date.now() - inicioDoPedido(p)) / 60000 : 0);
 
 export async function iniciarBalcao() {
   const root = document.getElementById('app-root');
@@ -66,6 +69,7 @@ export async function iniciarBalcao() {
           <button id="btn-horarios" class="btn-outline-sm">🕒 Horários</button>
           <button id="btn-aparencia" class="btn-outline-sm">🎨 Aparência</button>
           <button id="btn-avaliacoes" class="btn-outline-sm">⭐ Avaliações</button>
+          <button id="btn-pix" class="btn-outline-sm">💳 Pix automático</button>
           <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
         ` : ''}
       </div>
@@ -106,6 +110,7 @@ export async function iniciarBalcao() {
     document.getElementById('btn-horarios').onclick = abrirConfigHorarios;
     document.getElementById('btn-aparencia').onclick = abrirConfigAparencia;
     document.getElementById('btn-avaliacoes').onclick = abrirAvaliacoes;
+    document.getElementById('btn-pix').onclick = abrirConfigPix;
   }
 
   document.getElementById('btn-pausa').onclick = () => pausarPedidos(!estadoCaixa.pausada);
@@ -325,7 +330,7 @@ function criarCardPedidoBalcao(p) {
     </div>
     ${p.freteCentavos ? `<div style="display:flex; justify-content:space-between; font-size:13px; color:var(--text-muted);"><span>🛵 Entrega${p.distanciaKm ? ` (${esc(p.distanciaKm)} km)` : ''}</span><span>${formatarCentavos(p.freteCentavos)}</span></div>` : ''}
     <div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:8px;">
-      <span>${esc((p.formaPagamento || '').toUpperCase())}${p.tipoEntrega === 'retirada' ? ' · 🏪 RETIRADA' : ''}</span>
+      <span>${esc((p.formaPagamento || '').toUpperCase())}${p.pagamentoStatus === 'aprovado' ? ' <strong class="pago-ok">✅ PAGO</strong>' : ''}${p.tipoEntrega === 'retirada' ? ' · 🏪 RETIRADA' : ''}</span>
       <strong>${formatarCentavos(p.totalCentavos)}</strong>
     </div>
     ${trocoTxt}
