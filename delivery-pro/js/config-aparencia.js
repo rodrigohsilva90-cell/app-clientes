@@ -29,6 +29,14 @@ export function abrirConfigAparencia() {
       <div class="ap-previa" id="ap-previa"></div>
       <p class="gc-dica">Assim o link aparece quando alguém compartilha no WhatsApp (o WhatsApp pode levar algumas horas para atualizar uma prévia antiga).</p>
 
+      <label style="${rotulo}">Tipo de cardápio</label>
+      <div class="ap-layouts">
+        <label class="ap-layout"><input type="radio" name="layout" value="gastronomia" ${l.layoutVitrine !== 'varejo' ? 'checked' : ''} />
+          <strong>🍕 Gastronomia</strong><small>Lista com foto grande. Ideal para pizzaria, lanchonete, restaurante.</small></label>
+        <label class="ap-layout"><input type="radio" name="layout" value="varejo" ${l.layoutVitrine === 'varejo' ? 'checked' : ''} />
+          <strong>🛒 Varejo</strong><small>Grade em 2 colunas com "+ Adicionar". Ideal para adega, farmácia, mercadinho, pet shop.</small></label>
+      </div>
+
       <label style="${rotulo}">Nome da loja</label>
       <input name="nome" maxlength="60" value="${esc(l.nome || '')}" style="${campo}" />
 
@@ -86,7 +94,8 @@ export function abrirConfigAparencia() {
       tempoEstimado: form.tempo.value.trim().slice(0, 20) || '30-45 min',
       pedidoMinimoCentavos: reaisParaCentavos(form.minimo.value),
       logoUrl: form.logo.value.trim() || null,
-      bannerUrl: form.banner.value.trim() || null
+      bannerUrl: form.banner.value.trim() || null,
+      layoutVitrine: form.layout.value === 'varejo' ? 'varejo' : 'gastronomia'
     };
     if (dados.nome.length < 2) return showToast('Informe o nome da loja.');
     if (dados.pedidoMinimoCentavos === null) return showToast('Pedido mínimo inválido. Use o formato 20,00.');

@@ -7,7 +7,7 @@ export const DIAS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
 export const NOMES_DIA = { dom: 'domingo', seg: 'segunda', ter: 'terça', qua: 'quarta', qui: 'quinta', sex: 'sexta', sab: 'sábado' };
 const DIA_INGLES = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-function agoraNoFuso(fuso, data) {
+export function agoraNoFuso(fuso, data) {
   const partes = new Intl.DateTimeFormat('en-US', { timeZone: fuso, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(data);
   const v = (t) => partes.find(p => p.type === t)?.value;
   return { dia: DIA_INGLES[v('weekday')], min: Number(v('hour')) * 60 + Number(v('minute')) };

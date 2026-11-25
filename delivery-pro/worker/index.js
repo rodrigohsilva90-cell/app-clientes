@@ -53,6 +53,9 @@ export default {
       if (url.pathname === '/api/pedidos' && request.method === 'POST') {
         return criarPedidoSeguro(request, env);
       }
+      if (url.pathname === '/api/avaliar' && request.method === 'POST') {
+        return avaliarPedido(request, env);
+      }
       if (url.pathname === '/api/lojas' && request.method === 'POST') {
         return criarLoja(request, env);
       }
@@ -170,7 +173,7 @@ async function criarPedidoSeguro(request, env) {
       if (prod.controlarEstoque && Number(prod.estoque) <= 0) throw new ErroPedido(`"${prod.nome}" está esgotado.`);
       const quantidade = Number(pedido.quantidade);
       if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 50) throw new ErroPedido(`Quantidade inválida em "${prod.nome}".`);
-      const { unitarioCentavos, detalhes } = calcularItemOficial(prod, pedido.selecoes || {});
+      const { unitarioCentavos, detalhes } = calcularItemOficial(prod, pedido.selecoes || {}, loja);
       return { produtoId: prod.id, nome: prod.nome, quantidade, unitarioCentavos, detalhes };
     });
 
@@ -229,10 +232,64 @@ async function criarPedidoSeguro(request, env) {
   }
 }
 
+// Oferta do dia: MESMA conta de js/cardapio.js (se mudar lá, mude aqui)
+function ofertaDoDia(prod, loja, data = new Date()) {
+  const o = prod && prod.oferta;
+  const de = Number(prod && prod.precoCentavos) || 0;
+  if (!o || !Array.isArray(o.dias) || !o.dias.length) return null;
+  const por = Number(o.precoCentavos);
+  if (!Number.isInteger(por) || por < 0 || por >= de) return null;
+  const { dia } = agoraNoFuso((loja && loja.fusoHorario) || 'America/Sao_Paulo', data);
+  return o.dias.includes(DIAS[dia]) ? { deCentavos: de, porCentavos: por } : null;
+}
+
+// =====================================================================
+// AVALIAÇÃO DE 1 TOQUE: só pedido concluído e ainda não avaliado.
+// Cruza o pino do cliente com o GPS da baixa do motoboy: se ficaram
+// longe, marca alertaPinoMetros para o lojista conferir o endereço.
+// =====================================================================
+const LIMITE_PINO_M = 150;
+async function avaliarPedido(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível no momento.', 503);
+    const ip = request.headers.get('CF-Connecting-IP') || 'local';
+    if (!dentroDoLimite(`av:${ip}`)) throw new ErroPedido('Muitas tentativas. Aguarde alguns minutos.', 429);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const slug = String(corpo.slug || '').toLowerCase();
+    const pedidoId = String(corpo.pedidoId || '');
+    const nota = Number(corpo.nota);
+    if (!/^[a-z0-9-]{2,40}$/.test(slug) || !/^[A-Za-z0-9_]{8,100}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+    if (!Number.isInteger(nota) || nota < 1 || nota > 5) throw new ErroPedido('Nota inválida.');
+    const fs = await firestore(env);
+    const slugDoc = await fs.ler(`slugs/${slug}`);
+    if (!slugDoc || !slugDoc.lojaId) throw new ErroPedido('Loja não encontrada.', 404);
+    const caminho = `lojas/${slugDoc.lojaId}/pedidos/${pedidoId}`;
+    const pedido = await fs.ler(caminho);
+    if (!pedido) throw new ErroPedido('Pedido não encontrado.', 404);
+    if (pedido.status !== 'concluido') throw new ErroPedido('Só dá para avaliar depois da entrega.', 409);
+    if (pedido.avaliado) throw new ErroPedido('Este pedido já foi avaliado.', 409);
+    const dados = { avaliado: true, avaliacaoNota: nota, avaliadoEm: new Date() };
+    const destino = pedido.destinoCoords;
+    const baixa = pedido.coordsBaixa;
+    if (pedido.tipoEntrega === 'entrega' && coordsValidas(destino) && coordsValidas(baixa)) {
+      const metros = Math.round(distanciaRetaKm(destino, baixa) * 1000);
+      if (metros > LIMITE_PINO_M) dados.alertaPinoMetros = metros;
+    }
+    await fs.atualizar(caminho, dados);
+    return jsonResponse({ ok: true });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('avaliarPedido', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível enviar agora.' }, 500);
+  }
+}
+
 // Mesmas regras de preço da vitrine (js/cardapio.js), usando os índices das opções escolhidas
-function calcularItemOficial(prod, selecoes) {
-  let total = Number(prod.precoCentavos) || 0;
-  const detalhes = [];
+function calcularItemOficial(prod, selecoes, loja) {
+  const oferta = ofertaDoDia(prod, loja);
+  let total = oferta ? oferta.porCentavos : Number(prod.precoCentavos) || 0;
+  const detalhes = oferta ? ['Oferta do dia'] : [];
   (prod.grupos || []).forEach((grp, gi) => {
     const opcoes = grp.opcoes || [];
     const idxs = Array.isArray(selecoes[gi]) ? selecoes[gi] : [];

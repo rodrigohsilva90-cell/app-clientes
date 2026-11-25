@@ -27,6 +27,28 @@ export function pedidosRecentes(lojaId) {
   }
 }
 
+// Pedido entregue e ainda sem nota: fica na lista para o cliente avaliar pelo cardápio
+function marcarParaAvaliar(lojaId, pedidoId) {
+  try {
+    const lista = pedidosRecentes(lojaId).map(p => (p.id === pedidoId ? { ...p, avaliar: true } : p));
+    localStorage.setItem(CHAVE_LOCAL(lojaId), JSON.stringify(lista));
+  } catch (_) {}
+}
+
+// Avaliação de 1 toque (o servidor só aceita pedido concluído e ainda não avaliado)
+export async function enviarAvaliacao(pedidoId, nota) {
+  try {
+    const r = await fetch('/api/avaliar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug: AppState.slug, pedidoId, nota })
+    });
+    const ok = r.ok || r.status === 409;
+    if (ok) removerPedidoLocal(AppState.lojaId, pedidoId);
+    return ok;
+  } catch (_) { return false; }
+}
+
 function removerPedidoLocal(lojaId, pedidoId) {
   try {
     const lista = pedidosRecentes(lojaId).filter(p => p.id !== pedidoId);
@@ -52,6 +74,7 @@ export function iniciarAcompanhamento(pedidoId) {
       <strong>🛵 Entregador a caminho</strong>
       <div id="acomp-mapa" style="height:260px; border-radius:8px; margin-top:10px; z-index:1;"></div>
     </div>
+    <div class="card hidden" id="acomp-avaliar"></div>
     <div class="card hidden" id="acomp-itens"></div>
   `;
 
@@ -71,8 +94,10 @@ export function iniciarAcompanhamento(pedidoId) {
       renderStatus(p);
       renderItens(p);
       renderMapa(p);
+      renderAvaliacao(p);
       if (FINAIS.includes(p.status)) {
-        removerPedidoLocal(AppState.lojaId, p.id);
+        if (p.status === 'concluido' && !p.avaliado) marcarParaAvaliar(AppState.lojaId, p.id);
+        else removerPedidoLocal(AppState.lojaId, p.id);
         if (pararEscuta) { pararEscuta(); pararEscuta = null; } // encerra o tempo real após a entrega
       }
     },
@@ -136,6 +161,26 @@ function renderStatus(p) {
       `;
     }).join('')}
   `;
+}
+
+function renderAvaliacao(p) {
+  const box = document.getElementById('acomp-avaliar');
+  if (!box) return;
+  if (p.status !== 'concluido') { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  if (p.avaliado) { box.innerHTML = `<p>💚 Obrigado pela avaliação${p.avaliacaoNota ? ` (${'★'.repeat(p.avaliacaoNota)})` : ''}!</p>`; return; }
+  box.innerHTML = `
+    <strong>Como foi o seu pedido?</strong>
+    <p class="gc-dica">Toque nas estrelas — leva 1 segundo.</p>
+    <div class="av-estrelas grande">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-nota="${n}" aria-label="${n} estrela(s)">☆</button>`).join('')}</div>`;
+  box.querySelectorAll('[data-nota]').forEach(b => {
+    b.onclick = async () => {
+      const nota = Number(b.dataset.nota);
+      box.querySelectorAll('[data-nota]').forEach(x => { x.disabled = true; x.textContent = Number(x.dataset.nota) <= nota ? '★' : '☆'; });
+      const ok = await enviarAvaliacao(p.id, nota);
+      box.innerHTML = ok ? `<p>💚 Obrigado pela avaliação (${'★'.repeat(nota)})!</p>` : '<p>Não foi possível enviar agora. Tente de novo pelo cardápio.</p>';
+    };
+  });
 }
 
 function renderItens(p) {

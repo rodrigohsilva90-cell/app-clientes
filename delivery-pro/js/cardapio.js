@@ -1,10 +1,23 @@
 // Regras de preço do cardápio, usadas pela vitrine (cliente) e pelo pedido de balcão.
-// Valores sempre em centavos inteiros.
+// Valores sempre em centavos inteiros. A MESMA conta existe no Worker (calcularItemOficial / ofertaDoDia).
+import { agoraNoFuso, DIAS } from './horario.js';
+
+// Oferta do dia: prod.oferta = { precoCentavos, dias: ['seg','sex',...] } (dia da semana no fuso da loja)
+export function ofertaDoDia(prod, loja, data = new Date()) {
+  const o = prod && prod.oferta;
+  const de = Number(prod && prod.precoCentavos) || 0;
+  if (!o || !Array.isArray(o.dias) || !o.dias.length) return null;
+  const por = Number(o.precoCentavos);
+  if (!Number.isInteger(por) || por < 0 || por >= de) return null;
+  const { dia } = agoraNoFuso((loja && loja.fusoHorario) || 'America/Sao_Paulo', data);
+  return o.dias.includes(DIAS[dia]) ? { deCentavos: de, porCentavos: por } : null;
+}
 
 // prod: produto do cardápio | selecoes: { indiceDoGrupo: [opcoesEscolhidas] }
 // Devolve { item } pronto para a sacola, ou { erro } com a mensagem para o usuário.
-export function montarItem(prod, selecoes) {
-  let totalCentavos = Number(prod.precoCentavos) || 0;
+export function montarItem(prod, selecoes, loja) {
+  const oferta = ofertaDoDia(prod, loja);
+  let totalCentavos = oferta ? oferta.porCentavos : Number(prod.precoCentavos) || 0;
   const detalhes = [];
   const indices = {}; // { indiceDoGrupo: [indicesDasOpcoes] } -> enviado ao servidor para recalcular o preço
   const grupos = prod.grupos || [];
@@ -30,6 +43,6 @@ export function montarItem(prod, selecoes) {
   }
 
   return {
-    item: { produtoId: prod.id, nome: prod.nome, quantidade: 1, unitarioCentavos: totalCentavos, detalhes, selecoes: indices }
+    item: { produtoId: prod.id, nome: prod.nome, quantidade: 1, unitarioCentavos: totalCentavos, detalhes: oferta ? ['Oferta do dia', ...detalhes] : detalhes, selecoes: indices }
   };
 }

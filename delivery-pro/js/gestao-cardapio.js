@@ -10,6 +10,8 @@ const REGRAS = [
   { valor: 'MEDIA', nome: 'Média dos preços' }
 ];
 
+const DIAS_OFERTA = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['sex', 'Sex'], ['sab', 'Sáb'], ['dom', 'Dom']];
+
 const novoId = (prefixo) => `${prefixo}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const copia = (obj) => JSON.parse(JSON.stringify(obj));
 const urlSegura = (u) => (typeof u === 'string' && /^https:\/\//i.test(u.trim()) ? u.trim() : '');
@@ -100,7 +102,7 @@ export async function abrirGestaoCardapio() {
           </div>
           ${b.itens.map(p => `
             <div class="gc-item${p.id === selecionadoId ? ' ativo' : ''}" data-acao="abrir" data-id="${esc(p.id)}">
-              <span class="gc-item-nome">${esc(p.nome || '(sem nome)')}${p.controlarEstoque && p.estoque <= 0 ? ' <em>· esgotado</em>' : ''}</span>
+              <span class="gc-item-nome">${esc(p.nome || '(sem nome)')}${p.oferta && p.oferta.precoCentavos ? ' 🔥' : ''}${p.controlarEstoque && p.estoque <= 0 ? ' <em>· esgotado</em>' : ''}</span>
               <span class="gc-acoes">
                 <button title="Subir" data-acao="prod-subir" data-id="${esc(p.id)}">↑</button>
                 <button title="Descer" data-acao="prod-descer" data-id="${esc(p.id)}">↓</button>
@@ -216,6 +218,22 @@ export async function abrirGestaoCardapio() {
 
         <label class="gc-check"><input type="checkbox" data-campo="esgotado" ${esgotado ? 'checked' : ''} /> Esgotado (pausar venda deste produto)</label>
 
+        <h4 class="gc-subtitulo">🔥 Oferta do dia <small>(preço promocional nos dias marcados)</small></h4>
+        <div class="gc-linha">
+          <div>
+            <label>De (preço normal)</label>
+            <input value="${centavosParaTexto(p.precoCentavos)}" disabled />
+          </div>
+          <div>
+            <label>Por (preço da oferta)</label>
+            <input data-campo="ofertaPreco" inputmode="decimal" value="${p.oferta && p.oferta.precoCentavos ? centavosParaTexto(p.oferta.precoCentavos) : ''}" placeholder="vazio = sem oferta" />
+          </div>
+        </div>
+        <div class="gc-dias">
+          ${DIAS_OFERTA.map(([d, nome]) => `<label class="gc-dia"><input type="checkbox" data-dia="${d}" ${p.oferta && (p.oferta.dias || []).includes(d) ? 'checked' : ''} /> ${nome}</label>`).join('')}
+        </div>
+        <p class="gc-dica">Nos dias marcados o cliente vê "de ${formatarCentavos(p.precoCentavos || 0)} por ..." e paga o preço da oferta. Nos outros dias vale o preço normal.</p>
+
         <h4 class="gc-subtitulo">Grupos de opções <small>(sabores, bordas, adicionais)</small></h4>
         <div id="gc-grupos">
           ${p.grupos.map((g, gi) => `
@@ -273,6 +291,10 @@ export async function abrirGestaoCardapio() {
     if (campo === 'nome' || campo === 'descricao') p[campo] = el.value;
     else if (campo === 'imagemUrl') p.imagemUrl = el.value.trim();
     else if (campo === 'preco') p.precoCentavos = reaisParaCentavos(el.value);
+    else if (campo === 'ofertaPreco') {
+      p.oferta = p.oferta || { dias: [] };
+      p.oferta.precoCentavos = el.value.trim() ? reaisParaCentavos(el.value) : 0;
+    }
     else if (el.dataset.gcampo) {
       const g = p.grupos[Number(el.dataset.g)];
       g[el.dataset.gcampo] = el.dataset.gcampo === 'titulo' ? el.value : Number(el.value);
@@ -290,6 +312,12 @@ export async function abrirGestaoCardapio() {
     const p = rascunho.produtos.find(x => x.id === selecionadoId);
     if (!p) return;
     const el = e.target;
+    if (el.dataset.dia) {
+      p.oferta = p.oferta || { precoCentavos: 0, dias: [] };
+      p.oferta.dias = DIAS_OFERTA.map(([d]) => d).filter(d => d === el.dataset.dia ? el.checked : (p.oferta.dias || []).includes(d));
+      marcarAlterado();
+      return;
+    }
     if (el.dataset.campo === 'categoriaId') p.categoriaId = el.value;
     else if (el.dataset.campo === 'esgotado') {
       if (el.checked) { p.controlarEstoque = true; p.estoque = 0; }
@@ -348,6 +376,13 @@ export async function abrirGestaoCardapio() {
       if (!rascunho.categorias.some(c => c.id === p.categoriaId)) { abrir(); return `"${nome}" está sem categoria.`; }
       if (p.precoCentavos === null) { abrir(); return `Preço inválido em "${nome}". Use o formato 25,90.`; }
       if (!p.grupos?.length && !(p.precoCentavos > 0)) { abrir(); return `"${nome}" está com preço zero. Informe o preço ou adicione opções.`; }
+      if (p.oferta && (p.oferta.precoCentavos || (p.oferta.dias || []).length)) {
+        const por = p.oferta.precoCentavos;
+        if (por === null) { abrir(); return `Preço da oferta inválido em "${nome}". Use o formato 19,90.`; }
+        if (!por) { abrir(); return `Informe o preço da oferta de "${nome}" (ou desmarque os dias).`; }
+        if (por >= (p.precoCentavos || 0)) { abrir(); return `A oferta de "${nome}" precisa ser mais barata que o preço normal.`; }
+        if (!(p.oferta.dias || []).length) { abrir(); return `Marque em quais dias vale a oferta de "${nome}".`; }
+      }
       for (const g of p.grupos || []) {
         const titulo = (g.titulo || '').trim();
         const opcoes = g.opcoes || [];
@@ -376,6 +411,7 @@ export async function abrirGestaoCardapio() {
     const foto = urlSegura(p.imagemUrl);
     if (foto) out.imagemUrl = foto;
     if (p.controlarEstoque) { out.controlarEstoque = true; out.estoque = Number(p.estoque) || 0; }
+    if (p.oferta && p.oferta.precoCentavos > 0 && (p.oferta.dias || []).length) out.oferta = { precoCentavos: p.oferta.precoCentavos, dias: [...p.oferta.dias] };
     if (p.grupos?.length) {
       out.grupos = p.grupos.map(g => ({
         titulo: g.titulo.trim(),

@@ -1,6 +1,6 @@
 import { db, auth, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
-import { montarItem } from './cardapio.js';
+import { montarItem, ofertaDoDia } from './cardapio.js';
 import { abrirGestaoCardapio } from './gestao-cardapio.js';
 import { abrirConfigEntrega } from './config-entrega.js';
 import { escutarEstadoCaixa, abrirCaixa, fecharCaixa, pausarPedidos } from './turno.js';
@@ -10,6 +10,7 @@ import { situacaoLoja } from './horario.js';
 import { abrirConfigHorarios } from './config-horarios.js';
 import { abrirConfigAparencia } from './config-aparencia.js';
 import { statusAssinatura } from './plano.js';
+import { abrirAvaliacoes } from './avaliacoes.js';
 import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
@@ -60,6 +61,7 @@ export async function iniciarBalcao() {
           <button id="btn-equipe" class="btn-outline-sm">👥 Equipe</button>
           <button id="btn-horarios" class="btn-outline-sm">🕒 Horários</button>
           <button id="btn-aparencia" class="btn-outline-sm">🎨 Aparência</button>
+          <button id="btn-avaliacoes" class="btn-outline-sm">⭐ Avaliações</button>
           <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
         ` : ''}
       </div>
@@ -94,6 +96,7 @@ export async function iniciarBalcao() {
     document.getElementById('btn-equipe').onclick = abrirEquipe;
     document.getElementById('btn-horarios').onclick = abrirConfigHorarios;
     document.getElementById('btn-aparencia').onclick = abrirConfigAparencia;
+    document.getElementById('btn-avaliacoes').onclick = abrirAvaliacoes;
   }
 
   document.getElementById('btn-pausa').onclick = () => pausarPedidos(!estadoCaixa.pausada);
@@ -294,10 +297,12 @@ function criarCardPedidoBalcao(p) {
     ${p.status === 'novo' && minutos >= MIN_ALERTA ? `<div class="pedido-aviso">⚠️ Aguardando aceite há ${minutos} min — cancela sozinho com ${MIN_CANCELAR} min</div>` : ''}
     ${p.status === 'preparo' && p.pronto ? '<div class="pedido-pronto">✅ Cozinha: pronto</div>' : ''}
     ${p.status === 'entrega' ? `<div style="font-size:13px; margin-bottom:8px;">🛵 Com: <strong>${esc(p.motoboyNome || (p.motoboyId ? 'entregador (app)' : 'sem entregador'))}</strong></div>` : ''}
+    ${p.status === 'entrega' && linkAvisoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin-bottom:8px;" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>` : ''}
     ${botaoAcao}
   `;
 
   div.querySelector('[data-print]')?.addEventListener('click', () => imprimirComandaTermica(p));
+  div.querySelector('[data-avisar]')?.addEventListener('click', () => marcarAvisado(p));
   div.querySelector('[data-recusar]')?.addEventListener('click', async () => {
     const motivo = prompt('Motivo da recusa (o cliente verá que o pedido foi cancelado):', 'Loja sem condições de atender agora');
     if (motivo === null) return;
@@ -324,6 +329,19 @@ function criarCardPedidoBalcao(p) {
   }
 
   return div;
+}
+
+// Aviso de "saiu para entrega" pelo WhatsApp do próprio atendente (grátis), com o link de acompanhamento
+function linkAvisoWhats(p) {
+  const numero = String(p.clienteWhatsapp || '').replace(/\D/g, '');
+  if (numero.length < 10) return null;
+  const primeiroNome = String(p.clienteNome || '').trim().split(/\s+/)[0] || '';
+  const link = `${window.location.origin}/${AppState.slug}/pedido/${encodeURIComponent(p.id)}`;
+  const texto = `Olá${primeiroNome ? `, ${primeiroNome}` : ''}! Seu pedido #${p.numeroPedido || ''} da ${AppState.lojaDados.nome} saiu para entrega 🛵\nAcompanhe a moto ao vivo: ${link}`;
+  return `https://wa.me/${numero.startsWith('55') ? numero : '55' + numero}?text=${encodeURIComponent(texto)}`;
+}
+function marcarAvisado(p) {
+  updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), { avisoWhatsEm: serverTimestamp() }).catch(() => {});
 }
 
 function imprimirComandaTermica(p) {
@@ -489,7 +507,7 @@ async function abrirPedidoManualRapido() {
           return `
             <button class="btn-outline-sm" data-prod="${esc(p.id)}" ${esgotado ? 'disabled' : ''} style="text-align:left; padding:10px; min-height:64px; ${esgotado ? 'opacity:0.5;' : ''}">
               <div>${esc(p.nome)}</div>
-              <div style="color:var(--primary); font-size:13px;">${p.grupos?.length ? 'Escolher opções' : formatarCentavos(p.precoCentavos)}</div>
+              <div style="color:var(--primary); font-size:13px;">${p.grupos?.length ? 'Escolher opções' : (ofertaDoDia(p, AppState.lojaDados) ? `🔥 ${formatarCentavos(ofertaDoDia(p, AppState.lojaDados).porCentavos)}` : formatarCentavos(p.precoCentavos))}</div>
               ${esgotado ? '<div style="font-size:12px;">Esgotado</div>' : ''}
             </button>
           `;
@@ -502,7 +520,7 @@ async function abrirPedidoManualRapido() {
         const prod = produtos.find(p => p.id === btn.dataset.prod);
         if (!prod) return;
         if (!prod.grupos || !prod.grupos.length) {
-          const r = montarItem(prod, {});
+          const r = montarItem(prod, {}, AppState.lojaDados);
           adicionar(r.item);
           showToast(`${prod.nome} adicionado`);
         } else {
@@ -551,7 +569,7 @@ async function abrirPedidoManualRapido() {
       };
     });
     $('[data-add-opcoes]').onclick = () => {
-      const r = montarItem(prod, selecoes);
+      const r = montarItem(prod, selecoes, AppState.lojaDados);
       if (r.erro) { showToast(r.erro); return; }
       adicionar(r.item);
       showToast(`${prod.nome} adicionado`);
@@ -696,8 +714,15 @@ async function despacharParaEntregador(p) {
           saiuParaEntregaEm: serverTimestamp(),
           atualizadoEm: serverTimestamp()
         });
-        overlay.remove();
-        showToast(`Pedido #${p.numeroPedido || ''} enviado para ${escolhido.nome}`);
+        const link = linkAvisoWhats(p);
+        if (!link) { overlay.remove(); showToast(`Pedido #${p.numeroPedido || ''} enviado para ${escolhido.nome}`); return; }
+        overlay.querySelector('.card').innerHTML = `
+          <h3>✅ Pedido #${esc(p.numeroPedido || '')} com ${esc(escolhido.nome)}</h3>
+          <p class="gc-dica" style="margin:8px 0 14px;">Avise o cliente que o pedido saiu — vai com o link para ele ver a moto no mapa.</p>
+          <a class="btn-primary btn-whats" data-avisar="1" href="${esc(link)}" target="_blank" rel="noopener">📲 Avisar cliente no WhatsApp</a>
+          <button class="btn-outline-sm" data-fechar style="width:100%; margin-top:8px;">Agora não</button>`;
+        overlay.querySelector('[data-avisar]').onclick = () => { marcarAvisado(p); setTimeout(() => overlay.remove(), 300); };
+        overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
       } catch (err) {
         console.error(err);
         btn.disabled = false;

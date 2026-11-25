@@ -1,7 +1,7 @@
 import { db, formatarCentavos, showToast, esc, WORKER_API_URL } from './config.js';
 import { AppState } from './router.js';
-import { montarItem } from './cardapio.js';
-import { salvarPedidoLocal, pedidosRecentes } from './acompanhar.js';
+import { montarItem, ofertaDoDia } from './cardapio.js';
+import { salvarPedidoLocal, pedidosRecentes, enviarAvaliacao } from './acompanhar.js';
 import { calcularFrete, coordsValidas } from './frete.js';
 import { situacaoLoja } from './horario.js';
 import { statusAssinatura } from './plano.js';
@@ -72,7 +72,14 @@ export async function iniciarVitrine() {
         ${situacao.pausada ? '' : `<span>${esc(situacao.texto.replace('Fechado · ', '').replace(/^./, c => c.toUpperCase()))}.</span>`}
         Você pode olhar o cardápio à vontade.</div>`}
 
-    ${pedidosRecentes(AppState.lojaId).map(p => `
+    ${pedidosRecentes(AppState.lojaId).filter(p => p.avaliar).map(p => `
+      <div class="card vt-avaliar" data-avaliar="${esc(p.id)}">
+        <span>⭐ Como foi o pedido <strong>#${String(p.numero || '').replace(/[^0-9]/g, '')}</strong>? Toque para avaliar:</span>
+        <div class="av-estrelas">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-nota="${n}" aria-label="${n} estrela(s)">☆</button>`).join('')}</div>
+      </div>
+    `).join('')}
+
+    ${pedidosRecentes(AppState.lojaId).filter(p => !p.avaliar).map(p => `
       <a href="/${AppState.slug}/pedido/${encodeURIComponent(p.id)}" class="card" style="display:flex; justify-content:space-between; align-items:center; gap:8px; text-decoration:none; color:inherit; border:2px solid var(--primary);">
         <span>📦 Seu pedido <strong>#${String(p.numero || '').replace(/[^0-9]/g, '')}</strong> está em andamento</span>
         <strong style="color:var(--primary); white-space:nowrap;">Acompanhar →</strong>
@@ -106,6 +113,18 @@ export async function iniciarVitrine() {
   renderizarProdutos(dadosCardapio, modoLayout);
   atualizarBarraCarrinho();
 
+  // Avaliação de 1 toque dos pedidos já entregues
+  root.querySelectorAll('[data-avaliar]').forEach(box => {
+    box.querySelectorAll('[data-nota]').forEach(b => {
+      b.onclick = async () => {
+        box.querySelectorAll('[data-nota]').forEach(x => { x.disabled = true; x.textContent = Number(x.dataset.nota) <= Number(b.dataset.nota) ? '★' : '☆'; });
+        const ok = await enviarAvaliacao(box.dataset.avaliar, Number(b.dataset.nota));
+        box.innerHTML = ok ? '<span>💚 Obrigado pela avaliação!</span>' : '<span>Não foi possível enviar agora.</span>';
+        setTimeout(() => box.remove(), 2500);
+      };
+    });
+  });
+
   document.getElementById('barra-carrinho').onclick = () => {
     if (!situacao.aberta) {
       showToast(situacao.pausada ? 'A loja pausou os pedidos. Tente em alguns minutos.' : `A loja está fechada. ${situacao.texto.replace('Fechado · ', '').replace(/^./, c => c.toUpperCase())}.`, 5000);
@@ -117,7 +136,8 @@ export async function iniciarVitrine() {
 
 // Menor preço possível do produto (para mostrar "A partir de")
 function precoMinimo(prod) {
-  let total = Number(prod.precoCentavos) || 0;
+  const oferta = ofertaDoDia(prod, AppState.lojaDados);
+  let total = oferta ? oferta.porCentavos : Number(prod.precoCentavos) || 0;
   for (const grp of prod.grupos || []) {
     const minimo = grp.minimo || 0;
     const precos = (grp.opcoes || []).map(o => Number(o.precoCentavos) || 0).sort((a, b) => a - b);
@@ -142,7 +162,9 @@ function renderizarProdutos(dados, modoLayout) {
   }
 
   const idsCategorias = new Set(categorias.map(c => c.id));
+  const emOferta = ativos.filter(p => ofertaDoDia(p, AppState.lojaDados) && !(p.controlarEstoque && p.estoque <= 0));
   const secoes = [
+    ...(emOferta.length ? [{ id: '_ofertas', nome: '🔥 Ofertas de hoje', itens: emOferta }] : []),
     ...categorias.map(c => ({ id: c.id, nome: c.nome, itens: ativos.filter(p => p.categoriaId === c.id) })),
     { id: '_outros', nome: 'Outros', itens: ativos.filter(p => !idsCategorias.has(p.categoriaId)) }
   ].filter(s => s.itens.length);
@@ -154,21 +176,23 @@ function renderizarProdutos(dados, modoLayout) {
   container.innerHTML = secoes.map(s => `
     <section class="vt-secao" id="sec-${esc(s.id)}">
       <h2 class="vt-secao-titulo">${esc(s.nome)}</h2>
-      <div class="vt-grade">
+      <div class="vt-grade${modoLayout === 'varejo' ? ' varejo' : ''}">
         ${s.itens.map(prod => {
           const esgotado = prod.controlarEstoque && (prod.estoque <= 0);
           const temOpcoes = prod.grupos && prod.grupos.length;
           const foto = urlSegura(prod.imagemUrl);
-          const preco = temOpcoes ? precoMinimo(prod) : Number(prod.precoCentavos) || 0;
+          const oferta = ofertaDoDia(prod, AppState.lojaDados);
+          const preco = temOpcoes ? precoMinimo(prod) : (oferta ? oferta.porCentavos : Number(prod.precoCentavos) || 0);
           return `
             <button class="vt-produto${esgotado ? ' esgotado' : ''}" data-prod-id="${esc(prod.id)}" data-busca="${esc(`${prod.nome} ${prod.descricao || ''}`.toLowerCase())}" ${esgotado ? 'disabled' : ''}>
               <div class="vt-foto">${foto ? `<img src="${foto}" alt="" loading="lazy" />` : '<span>🍽️</span>'}</div>
               <div class="vt-produto-info">
                 <strong>${esc(prod.nome)}</strong>
                 ${prod.descricao ? `<p>${esc(prod.descricao)}</p>` : ''}
-                <span class="vt-preco">${esgotado ? 'Esgotado' : `${temOpcoes ? '<small>A partir de</small> ' : ''}${formatarCentavos(preco)}`}</span>
+                ${oferta && !esgotado ? `<span class="vt-oferta">🔥 Oferta do dia</span>` : ''}
+                <span class="vt-preco">${esgotado ? 'Esgotado' : `${temOpcoes && !oferta ? '<small>A partir de</small> ' : ''}${oferta ? `<s>${formatarCentavos(oferta.deCentavos)}</s> ` : ''}${formatarCentavos(preco)}`}</span>
               </div>
-              ${esgotado ? '' : '<span class="vt-mais">+</span>'}
+              ${esgotado ? '' : (modoLayout === 'varejo' ? `<span class="vt-add">${temOpcoes ? 'Escolher' : '+ Adicionar'}</span>` : '<span class="vt-mais">+</span>')}
             </button>
           `;
         }).join('')}
@@ -182,13 +206,7 @@ function renderizarProdutos(dados, modoLayout) {
       const prod = ativos.find(p => p.id === btn.dataset.prodId);
       if (!prod) return;
       if (!prod.grupos || prod.grupos.length === 0) {
-        adicionarAoCarrinho({
-          produtoId: prod.id,
-          nome: prod.nome,
-          quantidade: 1,
-          unitarioCentavos: prod.precoCentavos,
-          detalhes: []
-        });
+        adicionarAoCarrinho(montarItem(prod, {}, AppState.lojaDados).item);
       } else {
         abrirModalProduto(prod);
       }
@@ -302,7 +320,7 @@ function abrirModalProduto(prod) {
   });
 
   document.getElementById('confirmar-item-modal').onclick = () => {
-    const resultado = montarItem(prod, selecoesAtuais);
+    const resultado = montarItem(prod, selecoesAtuais, AppState.lojaDados);
     if (resultado.erro) {
       showToast(resultado.erro);
       return;
@@ -313,7 +331,10 @@ function abrirModalProduto(prod) {
 }
 
 function adicionarAoCarrinho(item) {
-  carrinho.push(item);
+  // Mesmo produto com as mesmas escolhas: soma a quantidade em vez de criar outra linha
+  const igual = carrinho.find(i => i.produtoId === item.produtoId && JSON.stringify(i.selecoes || {}) === JSON.stringify(item.selecoes || {}) && i.unitarioCentavos === item.unitarioCentavos);
+  if (igual && igual.quantidade < 50) igual.quantidade += 1;
+  else carrinho.push(item);
   localStorage.setItem(`carrinho_${AppState.lojaId}`, JSON.stringify(carrinho));
   atualizarBarraCarrinho();
   showToast(`${item.nome} adicionado!`);
@@ -327,7 +348,8 @@ function atualizarBarraCarrinho() {
     return;
   }
   const totalCentavos = carrinho.reduce((acc, i) => acc + i.unitarioCentavos * i.quantidade, 0);
-  document.getElementById('carrinho-resumo').textContent = `${carrinho.length} item(ns)`;
+  const qtd = carrinho.reduce((acc, i) => acc + i.quantidade, 0);
+  document.getElementById('carrinho-resumo').textContent = `${qtd} ${qtd === 1 ? 'item' : 'itens'}`;
   document.getElementById('carrinho-total').textContent = `${formatarCentavos(totalCentavos)} — Finalizar`;
   barra.classList.remove('hidden');
 }
@@ -341,6 +363,25 @@ function salvarDadosCliente(d) {
   try { localStorage.setItem(CHAVE_CLIENTE, JSON.stringify({ ...lerDadosCliente(), ...d })); } catch (_) {}
 }
 
+// Endereços salvos neste aparelho (Casa, Trabalho, Outro) com o pino do mapa
+const CHAVE_ENDERECOS = 'enderecos_v1';
+const APELIDOS = ['Casa', 'Trabalho', 'Outro'];
+function lerEnderecos() {
+  try {
+    const lista = JSON.parse(localStorage.getItem(CHAVE_ENDERECOS) || 'null');
+    if (Array.isArray(lista)) return lista.filter(e => e && APELIDOS.includes(e.apelido) && typeof e.endereco === 'string');
+  } catch (_) {}
+  const antigo = lerDadosCliente(); // aproveita o endereço único das versões anteriores
+  return antigo.endereco ? [{ apelido: 'Casa', endereco: antigo.endereco, destino: coordsValidas(antigo.destino) ? antigo.destino : null }] : [];
+}
+function guardarEndereco(e) {
+  try {
+    const lista = lerEnderecos().filter(x => x.apelido !== e.apelido);
+    lista.unshift(e);
+    localStorage.setItem(CHAVE_ENDERECOS, JSON.stringify(lista.slice(0, APELIDOS.length)));
+  } catch (_) {}
+}
+
 function abrirModalCheckout() {
   const modal = document.getElementById('modal-checkout');
   const content = document.getElementById('modal-checkout-conteudo');
@@ -349,6 +390,12 @@ function abrirModalCheckout() {
   const salvo = lerDadosCliente();
   const temFrete = calcularFrete(loja, null).configurado;
   let destino = coordsValidas(salvo.destino) ? salvo.destino : null;
+  const enderecos = lerEnderecos();
+  if (!salvo.endereco && enderecos[0]) { // primeira vez nesta versão: já começa no endereço salvo
+    salvo.endereco = enderecos[0].endereco;
+    if (!destino && coordsValidas(enderecos[0].destino)) destino = enderecos[0].destino;
+  }
+  let apelido = salvo.apelido && APELIDOS.includes(salvo.apelido) ? salvo.apelido : (enderecos[0] ? enderecos[0].apelido : 'Casa');
   let mapa = null;
   let pino = null;
   const campo = 'width:100%; padding:10px; margin:4px 0 10px; border:1px solid var(--border); border-radius:8px;';
@@ -387,6 +434,12 @@ function abrirModalCheckout() {
     </div>
 
     <div id="box-entrega">
+      ${enderecos.length ? `
+        <label style="${rotulo}">Seus endereços</label>
+        <div class="chk-enderecos">
+          ${enderecos.map(e => `<button type="button" class="chk-end" data-end="${esc(e.apelido)}"><strong>${e.apelido === 'Casa' ? '🏠' : e.apelido === 'Trabalho' ? '💼' : '📍'} ${esc(e.apelido)}</strong><small>${esc(e.endereco)}</small></button>`).join('')}
+          <button type="button" class="chk-end" data-end="_novo"><strong>＋ Novo</strong><small>outro endereço</small></button>
+        </div>` : ''}
       <label style="${rotulo}">Endereço completo e referência</label>
       <input id="chk-endereco" type="text" placeholder="Rua das Flores, 123 - Centro (portão azul)" value="${esc(salvo.endereco || '')}" style="${campo}" />
       ${temFrete ? `
@@ -395,6 +448,10 @@ function abrirModalCheckout() {
         <div id="chk-mapa" class="chk-mapa"></div>
         <p class="gc-dica">Toque no mapa ou arraste o pino até a sua porta. Isso calcula a entrega e guia o motoboy.</p>
       ` : ''}
+      <label style="${rotulo}">Salvar este endereço como</label>
+      <div class="chk-tipo" id="chk-apelidos">
+        ${APELIDOS.map(a => `<label><input type="radio" name="chk-apelido" value="${a}" ${a === apelido ? 'checked' : ''} /> ${a}</label>`).join('')}
+      </div>
     </div>
 
     <label style="${rotulo}">Forma de Pagamento</label>
@@ -447,9 +504,40 @@ function abrirModalCheckout() {
       whatsapp: document.getElementById('chk-whats').value.trim(),
       endereco: document.getElementById('chk-endereco').value.trim(),
       tipo: tipoAtual(),
+      apelido: content.querySelector('input[name="chk-apelido"]:checked')?.value || 'Casa',
       destino
     });
   }
+
+  // Escolher um endereço salvo preenche o texto e o pino; "Novo" limpa os dois
+  function marcarEnderecoAtivo() {
+    const texto = document.getElementById('chk-endereco').value.trim();
+    content.querySelectorAll('[data-end]').forEach(b => {
+      const e = enderecos.find(x => x.apelido === b.dataset.end);
+      b.classList.toggle('ativo', e ? e.endereco === texto : !enderecos.some(x => x.endereco === texto));
+    });
+  }
+  content.querySelectorAll('[data-end]').forEach(b => {
+    b.onclick = () => {
+      const e = enderecos.find(x => x.apelido === b.dataset.end);
+      document.getElementById('chk-endereco').value = e ? e.endereco : '';
+      const radio = content.querySelector(`input[name="chk-apelido"][value="${e ? e.apelido : (APELIDOS.find(a => !enderecos.some(x => x.apelido === a)) || 'Outro')}"]`);
+      if (radio) radio.checked = true;
+      if (pino) { pino.remove(); pino = null; }
+      destino = null;
+      if (e && coordsValidas(e.destino)) {
+        marcar(e.destino);
+        if (mapa) mapa.setView([e.destino.lat, e.destino.lng], 16);
+      } else {
+        salvarDadosCliente({ destino: null });
+        atualizarTotais();
+        if (!e) document.getElementById('chk-endereco').focus();
+      }
+      marcarEnderecoAtivo();
+    };
+  });
+  document.getElementById('chk-endereco').addEventListener('input', marcarEnderecoAtivo);
+  marcarEnderecoAtivo();
 
   // Recalcula entrega e total (o Worker refaz a mesma conta ao receber o pedido)
   let freteAtual = { freteCentavos: 0 };
@@ -585,6 +673,9 @@ function abrirModalCheckout() {
         return;
       }
 
+      if (tipoEntrega === 'entrega') {
+        guardarEndereco({ apelido: content.querySelector('input[name="chk-apelido"]:checked')?.value || 'Casa', endereco, destino: destino || null });
+      }
       carrinho = [];
       localStorage.removeItem(`carrinho_${AppState.lojaId}`);
       checkoutToken = novoCheckoutToken();
