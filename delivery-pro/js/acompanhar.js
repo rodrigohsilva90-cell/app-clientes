@@ -151,6 +151,7 @@ function renderItens(p) {
         <span>${formatarCentavos(i.unitarioCentavos * i.quantidade)}</span>
       </div>
     `).join('')}
+    ${p.freteCentavos ? `<div style="display:flex; justify-content:space-between; font-size:14px; margin-top:8px;"><span>Entrega</span><span>${formatarCentavos(p.freteCentavos)}</span></div>` : ''}
     <div style="display:flex; justify-content:space-between; margin-top:10px;">
       <span>Total (${esc((p.formaPagamento || '').toUpperCase())})</span>
       <strong>${formatarCentavos(p.totalCentavos)}</strong>

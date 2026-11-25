@@ -2,6 +2,7 @@ import { db, formatarCentavos, showToast, esc, WORKER_API_URL } from './config.j
 import { AppState } from './router.js';
 import { montarItem } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes } from './acompanhar.js';
+import { calcularFrete, coordsValidas } from './frete.js';
 import { doc, getDoc, collection, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let carrinho = [];
@@ -34,7 +35,8 @@ export async function iniciarVitrine() {
   const logo = urlSegura(loja.logoUrl);
   const iniciais = esc((loja.nome || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase());
   const chips = [
-    loja.taxaEntregaTexto ? `🛵 ${esc(loja.taxaEntregaTexto)}` : '',
+    loja.taxaEntregaTexto ? `🛵 ${esc(loja.taxaEntregaTexto)}`
+      : (loja.frete && coordsValidas(loja.localizacao) ? `🛵 a partir de ${formatarCentavos((loja.frete.baseCentavos || 0) + (loja.frete.adicionalAtivo ? (loja.frete.adicionalCentavos || 0) : 0))}` : ''),
     `⏱️ ${esc(tempoEstimado)}`,
     loja.pedidoMinimoCentavos ? `💲 Mín. ${formatarCentavos(loja.pedidoMinimoCentavos)}` : ''
   ].filter(Boolean);
@@ -304,10 +306,27 @@ function atualizarBarraCarrinho() {
   barra.classList.remove('hidden');
 }
 
+// Dados do cliente e último local marcado ficam só neste aparelho (para não digitar de novo)
+const CHAVE_CLIENTE = 'dados_cliente_v1';
+function lerDadosCliente() {
+  try { return JSON.parse(localStorage.getItem(CHAVE_CLIENTE) || '{}'); } catch (_) { return {}; }
+}
+function salvarDadosCliente(d) {
+  try { localStorage.setItem(CHAVE_CLIENTE, JSON.stringify({ ...lerDadosCliente(), ...d })); } catch (_) {}
+}
+
 function abrirModalCheckout() {
   const modal = document.getElementById('modal-checkout');
   const content = document.getElementById('modal-checkout-conteudo');
+  const loja = AppState.lojaDados || {};
   const subtotalCentavos = carrinho.reduce((acc, i) => acc + i.unitarioCentavos * i.quantidade, 0);
+  const salvo = lerDadosCliente();
+  const temFrete = calcularFrete(loja, null).configurado;
+  let destino = coordsValidas(salvo.destino) ? salvo.destino : null;
+  let mapa = null;
+  let pino = null;
+  const campo = 'width:100%; padding:10px; margin:4px 0 10px; border:1px solid var(--border); border-radius:8px;';
+  const rotulo = 'display:block; font-size:13px; font-weight:600;';
 
   content.innerHTML = `
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
@@ -318,10 +337,10 @@ function abrirModalCheckout() {
       ${carrinho.map((item, idx) => `
         <div style="display:flex; justify-content:space-between; font-size:14px; padding:6px 0; border-bottom:1px solid var(--border);">
           <div>
-            <strong>${item.quantidade}x ${item.nome}</strong>
-            <div style="font-size:12px; color:var(--text-muted);">${item.detalhes.join(' | ')}</div>
+            <strong>${esc(item.quantidade)}x ${esc(item.nome)}</strong>
+            <div style="font-size:12px; color:var(--text-muted);">${esc((item.detalhes || []).join(' | '))}</div>
           </div>
-          <div>
+          <div style="white-space:nowrap;">
             <span>${formatarCentavos(item.unitarioCentavos * item.quantidade)}</span>
             <button class="btn-outline-sm" style="padding:2px 6px; margin-left:6px;" data-rem="${idx}">🗑️</button>
           </div>
@@ -329,43 +348,62 @@ function abrirModalCheckout() {
       `).join('')}
     </div>
 
-    <label style="display:block; font-size:13px; font-weight:600;">Seu Nome</label>
-    <input id="chk-nome" type="text" placeholder="Ex: João Silva" style="width:100%; padding:10px; margin:4px 0 10px; border:1px solid var(--border); border-radius:8px;" />
+    <label style="${rotulo}">Seu Nome</label>
+    <input id="chk-nome" type="text" placeholder="Ex: João Silva" value="${esc(salvo.nome || '')}" style="${campo}" />
 
-    <label style="display:block; font-size:13px; font-weight:600;">WhatsApp (com DDD)</label>
-    <input id="chk-whats" type="tel" placeholder="11999999999" style="width:100%; padding:10px; margin:4px 0 10px; border:1px solid var(--border); border-radius:8px;" />
+    <label style="${rotulo}">WhatsApp (com DDD)</label>
+    <input id="chk-whats" type="tel" placeholder="11999999999" value="${esc(salvo.whatsapp || '')}" style="${campo}" />
 
-    <label style="display:block; font-size:13px; font-weight:600;">Endereço Completo e Referência</label>
-    <input id="chk-endereco" type="text" placeholder="Rua das Flores, 123 - Centro" style="width:100%; padding:10px; margin:4px 0 10px; border:1px solid var(--border); border-radius:8px;" />
+    <label style="${rotulo}">Como quer receber?</label>
+    <div class="chk-tipo">
+      <label><input type="radio" name="chk-tipo" value="entrega" ${salvo.tipo !== 'retirada' ? 'checked' : ''} /> 🛵 Entrega</label>
+      <label><input type="radio" name="chk-tipo" value="retirada" ${salvo.tipo === 'retirada' ? 'checked' : ''} /> 🏪 Retirar na loja</label>
+    </div>
 
-    <label style="display:block; font-size:13px; font-weight:600;">Forma de Pagamento</label>
-    <select id="chk-pagamento" style="width:100%; padding:10px; margin:4px 0 10px; border:1px solid var(--border); border-radius:8px;">
+    <div id="box-entrega">
+      <label style="${rotulo}">Endereço completo e referência</label>
+      <input id="chk-endereco" type="text" placeholder="Rua das Flores, 123 - Centro (portão azul)" value="${esc(salvo.endereco || '')}" style="${campo}" />
+      ${temFrete ? `
+        <label style="${rotulo}">Marque sua localização no mapa</label>
+        <button class="btn-outline-sm" id="chk-gps" type="button" style="margin:4px 0 6px;">📍 Usar minha localização</button>
+        <div id="chk-mapa" class="chk-mapa"></div>
+        <p class="gc-dica">Toque no mapa ou arraste o pino até a sua porta. Isso calcula a entrega e guia o motoboy.</p>
+      ` : ''}
+    </div>
+
+    <label style="${rotulo}">Forma de Pagamento</label>
+    <select id="chk-pagamento" style="${campo}">
       <option value="pix">Pix Online (Aprovação Instantânea)</option>
       <option value="cartao_entrega">Cartão na Entrega (Maquininha)</option>
       <option value="dinheiro">Dinheiro na Entrega</option>
     </select>
 
     <div id="box-troco" class="hidden" style="margin-bottom:10px;">
-      <label style="display:block; font-size:13px; font-weight:600;">Troco para quanto? (R$)</label>
-      <input id="chk-troco" type="number" placeholder="Ex: 100" style="width:100%; padding:10px; margin-top:4px; border:1px solid var(--border); border-radius:8px;" />
+      <label style="${rotulo}">Troco para quanto? (R$)</label>
+      <input id="chk-troco" type="number" placeholder="Ex: 100" style="${campo}" />
     </div>
 
-    <div style="display:flex; justify-content:space-between; font-size:16px; margin:12px 0;">
-      <span>Total do Pedido:</span>
-      <strong>${formatarCentavos(subtotalCentavos)}</strong>
+    <div class="chk-resumo">
+      <div><span>Subtotal</span><span>${formatarCentavos(subtotalCentavos)}</span></div>
+      <div id="chk-linha-frete"><span>Entrega</span><span id="chk-frete">—</span></div>
+      <div class="chk-total"><span>Total</span><strong id="chk-total">${formatarCentavos(subtotalCentavos)}</strong></div>
+      <p id="chk-aviso-frete" class="chk-aviso hidden"></p>
     </div>
 
     <button class="btn-primary" id="btn-enviar-pedido">Enviar Pedido Agora</button>
   `;
 
   modal.classList.remove('hidden');
-  document.getElementById('fechar-checkout').onclick = () => modal.classList.add('hidden');
+  const fecharCheckout = () => { modal.classList.add('hidden'); if (mapa) { mapa.remove(); mapa = null; } };
+  document.getElementById('fechar-checkout').onclick = fecharCheckout;
 
   content.querySelectorAll('button[data-rem]').forEach(btn => {
     btn.onclick = () => {
+      guardarCampos();
       carrinho.splice(Number(btn.dataset.rem), 1);
       localStorage.setItem(`carrinho_${AppState.lojaId}`, JSON.stringify(carrinho));
       atualizarBarraCarrinho();
+      if (mapa) { mapa.remove(); mapa = null; }
       if (!carrinho.length) modal.classList.add('hidden');
       else abrirModalCheckout();
     };
@@ -375,25 +413,127 @@ function abrirModalCheckout() {
   selPag.onchange = () => {
     document.getElementById('box-troco').classList.toggle('hidden', selPag.value !== 'dinheiro');
   };
+  const tipoAtual = () => content.querySelector('input[name="chk-tipo"]:checked').value;
+
+  function guardarCampos() {
+    salvarDadosCliente({
+      nome: document.getElementById('chk-nome').value.trim(),
+      whatsapp: document.getElementById('chk-whats').value.trim(),
+      endereco: document.getElementById('chk-endereco').value.trim(),
+      tipo: tipoAtual(),
+      destino
+    });
+  }
+
+  // Recalcula entrega e total (o Worker refaz a mesma conta ao receber o pedido)
+  let freteAtual = { freteCentavos: 0 };
+  function atualizarTotais() {
+    const retirada = tipoAtual() === 'retirada';
+    document.getElementById('box-entrega').classList.toggle('hidden', retirada);
+    const linhaFrete = document.getElementById('chk-linha-frete');
+    const aviso = document.getElementById('chk-aviso-frete');
+    const btn = document.getElementById('btn-enviar-pedido');
+    aviso.classList.add('hidden');
+    btn.disabled = false;
+
+    if (retirada) {
+      freteAtual = { freteCentavos: 0 };
+      linhaFrete.classList.add('hidden');
+    } else {
+      freteAtual = calcularFrete(loja, destino);
+      linhaFrete.classList.remove('hidden');
+      const valor = document.getElementById('chk-frete');
+      if (!freteAtual.configurado) {
+        valor.textContent = 'a combinar';
+        freteAtual = { freteCentavos: 0 };
+      } else if (freteAtual.precisaLocal) {
+        valor.textContent = 'marque no mapa';
+        btn.disabled = true;
+      } else if (freteAtual.fora) {
+        valor.textContent = 'indisponível';
+        aviso.innerHTML = `📍 Seu endereço fica a ${freteAtual.distanciaKm} km, fora da área de entrega. <button class="btn-outline-sm" type="button" id="chk-virar-retirada">Retirar na loja</button>`;
+        aviso.classList.remove('hidden');
+        document.getElementById('chk-virar-retirada').onclick = () => {
+          content.querySelector('input[name="chk-tipo"][value="retirada"]').checked = true;
+          atualizarTotais();
+        };
+        btn.disabled = true;
+      } else {
+        valor.textContent = `${formatarCentavos(freteAtual.freteCentavos)} (${freteAtual.distanciaKm} km${freteAtual.adicional ? ` · ${freteAtual.adicional}` : ''})`;
+      }
+    }
+    document.getElementById('chk-total').textContent = formatarCentavos(subtotalCentavos + (freteAtual.freteCentavos || 0));
+    if (!retirada && temFrete) setTimeout(() => iniciarMapa(), 50);
+  }
+
+  function marcar(p) {
+    destino = { lat: p.lat, lng: p.lng };
+    if (mapa) {
+      if (!pino) {
+        pino = L.marker([p.lat, p.lng], { draggable: true }).addTo(mapa);
+        pino.on('dragend', () => marcar(pino.getLatLng()));
+      } else pino.setLatLng([p.lat, p.lng]);
+    }
+    salvarDadosCliente({ destino });
+    atualizarTotais();
+  }
+
+  function iniciarMapa() {
+    const div = document.getElementById('chk-mapa');
+    if (!div || typeof L === 'undefined') return;
+    if (mapa) { mapa.invalidateSize(); return; }
+    const centro = destino || loja.localizacao;
+    mapa = L.map(div).setView([centro.lat, centro.lng], destino ? 16 : 14);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapa);
+    L.circleMarker([loja.localizacao.lat, loja.localizacao.lng], { radius: 7, color: 'var(--primary)' }).addTo(mapa).bindTooltip('🏪 Loja');
+    if (destino) {
+      pino = L.marker([destino.lat, destino.lng], { draggable: true }).addTo(mapa);
+      pino.on('dragend', () => marcar(pino.getLatLng()));
+    }
+    mapa.on('click', (e) => marcar(e.latlng));
+    setTimeout(() => mapa && mapa.invalidateSize(), 200);
+  }
+
+  document.getElementById('chk-gps')?.addEventListener('click', () => {
+    if (!navigator.geolocation) { showToast('Localização indisponível neste aparelho. Marque no mapa.'); return; }
+    showToast('Buscando sua localização...');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        if (mapa) mapa.setView([p.lat, p.lng], 17);
+        marcar(p);
+      },
+      () => showToast('Não conseguimos sua localização. Toque no mapa para marcar.'),
+      { enableHighAccuracy: true, timeout: 15000 }
+    );
+  });
+  content.querySelectorAll('input[name="chk-tipo"]').forEach(r => r.onchange = atualizarTotais);
+  atualizarTotais();
 
   document.getElementById('btn-enviar-pedido').onclick = async () => {
     const nome = document.getElementById('chk-nome').value.trim();
     const whatsapp = document.getElementById('chk-whats').value.replace(/\D/g, '');
+    const tipoEntrega = tipoAtual();
     const endereco = document.getElementById('chk-endereco').value.trim();
     const pagamento = selPag.value;
     const trocoParaCentavos = pagamento === 'dinheiro' ? Math.round((Number(document.getElementById('chk-troco').value) || 0) * 100) : 0;
 
-    if (!nome || whatsapp.length < 10 || !endereco) {
-      showToast('Preencha nome, WhatsApp válido e endereço.');
+    if (!nome || whatsapp.length < 10) {
+      showToast('Preencha seu nome e um WhatsApp válido.');
       return;
     }
+    if (tipoEntrega === 'entrega' && endereco.length < 5) {
+      showToast('Preencha o endereço completo para a entrega.');
+      return;
+    }
+    guardarCampos();
 
     const btn = document.getElementById('btn-enviar-pedido');
     btn.disabled = true;
     btn.textContent = 'Enviando pedido...';
 
     try {
-      // O Worker recalcula os preços com o cardápio oficial e grava o pedido
+      // O Worker recalcula preços e frete com os dados oficiais e grava o pedido
       const resp = await fetch('/api/pedidos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -402,7 +542,9 @@ function abrirModalCheckout() {
           checkoutToken,
           clienteNome: nome,
           clienteWhatsapp: whatsapp,
-          enderecoTexto: endereco,
+          tipoEntrega,
+          enderecoTexto: tipoEntrega === 'entrega' ? endereco : '',
+          destinoCoords: tipoEntrega === 'entrega' && destino ? destino : null,
           formaPagamento: pagamento,
           trocoParaCentavos,
           origem: new URLSearchParams(window.location.search).get('origem') || 'direto',
@@ -416,16 +558,14 @@ function abrirModalCheckout() {
         btn.textContent = 'Enviar Pedido Agora';
         return;
       }
-      const pedidoRef = { id: resultado.id };
-      const numeroPedido = resultado.numeroPedido;
 
       carrinho = [];
       localStorage.removeItem(`carrinho_${AppState.lojaId}`);
       checkoutToken = novoCheckoutToken();
-      salvarPedidoLocal(AppState.lojaId, { id: pedidoRef.id, numero: numeroPedido });
+      salvarPedidoLocal(AppState.lojaId, { id: resultado.id, numero: resultado.numeroPedido });
       showToast('Pedido enviado com sucesso!');
       // Vai direto para a tela de acompanhamento (o link fica salvo no aparelho)
-      window.location.href = `/${AppState.slug}/pedido/${pedidoRef.id}`;
+      window.location.href = `/${AppState.slug}/pedido/${resultado.id}`;
     } catch (err) {
       console.error(err);
       showToast('Erro ao enviar pedido. Tente novamente.');

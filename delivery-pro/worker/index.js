@@ -104,7 +104,10 @@ async function criarPedidoSeguro(request, env) {
     if (!/^chk_[A-Za-z0-9_]{8,80}$/.test(token)) throw new ErroPedido('Atualize a página e tente de novo.');
     const nome = String(corpo.clienteNome || '').trim();
     const whatsapp = String(corpo.clienteWhatsapp || '').replace(/\D/g, '');
-    const endereco = String(corpo.enderecoTexto || '').trim();
+    const tipoEntrega = corpo.tipoEntrega === 'retirada' ? 'retirada' : 'entrega';
+    const endereco = tipoEntrega === 'retirada' ? 'Retirada na loja' : String(corpo.enderecoTexto || '').trim();
+    const destino = corpo.destinoCoords && coordsValidas({ lat: Number(corpo.destinoCoords.lat), lng: Number(corpo.destinoCoords.lng) })
+      ? { lat: Number(corpo.destinoCoords.lat), lng: Number(corpo.destinoCoords.lng) } : null;
     const formaPagamento = String(corpo.formaPagamento || '');
     const trocoParaCentavos = Number(corpo.trocoParaCentavos) || 0;
     const origem = String(corpo.origem || 'direto').replace(/[^a-z0-9_-]/gi, '').slice(0, 30) || 'direto';
@@ -141,10 +144,24 @@ async function criarPedidoSeguro(request, env) {
       return { produtoId: prod.id, nome: prod.nome, quantidade, unitarioCentavos, detalhes };
     });
 
-    const totalCentavos = itens.reduce((acc, i) => acc + i.unitarioCentavos * i.quantidade, 0);
-    if (totalCentavos <= 0) throw new ErroPedido('Total do pedido inválido.');
+    const subtotalCentavos = itens.reduce((acc, i) => acc + i.unitarioCentavos * i.quantidade, 0);
+    if (subtotalCentavos <= 0) throw new ErroPedido('Total do pedido inválido.');
     const minimo = Number(loja.pedidoMinimoCentavos) || 0;
-    if (totalCentavos < minimo) throw new ErroPedido(`O pedido mínimo desta loja é ${reais(minimo)}.`);
+    if (subtotalCentavos < minimo) throw new ErroPedido(`O pedido mínimo desta loja é ${reais(minimo)}.`);
+
+    // ---- Frete recalculado no servidor ----
+    let freteCentavos = 0;
+    let distanciaKm = null;
+    if (tipoEntrega === 'entrega') {
+      const frete = calcularFrete(loja, destino);
+      if (frete.configurado) {
+        if (frete.precisaLocal) throw new ErroPedido('Marque sua localização no mapa para calcularmos a entrega.');
+        if (frete.fora) throw new ErroPedido(`Seu endereço (${frete.distanciaKm} km) fica fora da área de entrega. Escolha retirar na loja.`);
+        freteCentavos = frete.freteCentavos;
+        distanciaKm = frete.distanciaKm;
+      }
+    }
+    const totalCentavos = subtotalCentavos + freteCentavos;
     if (formaPagamento === 'dinheiro' && trocoParaCentavos && trocoParaCentavos < totalCentavos) {
       throw new ErroPedido(`O troco precisa ser para um valor maior que o total (${reais(totalCentavos)}).`);
     }
@@ -155,8 +172,12 @@ async function criarPedidoSeguro(request, env) {
       clienteNome: nome,
       clienteWhatsapp: whatsapp,
       enderecoTexto: endereco,
-      tipoEntrega: 'entrega',
+      tipoEntrega,
+      destinoCoords: tipoEntrega === 'entrega' ? destino : null,
       itens,
+      subtotalCentavos,
+      freteCentavos,
+      distanciaKm,
       totalCentavos,
       formaPagamento,
       trocoParaCentavos: formaPagamento === 'dinheiro' ? trocoParaCentavos : 0,
@@ -201,6 +222,34 @@ function calcularItemOficial(prod, selecoes) {
     detalhes.push(`${grp.titulo}: ${escolhidas.map(o => o.nome).join(' / ')}`);
   });
   return { unitarioCentavos: total, detalhes };
+}
+
+// ---- Frete: MESMA conta de js/frete.js (se mudar lá, mude aqui) ----
+const FATOR_RUAS = 1.35;
+function distanciaRetaKm(a, b) {
+  const R = 6371;
+  const rad = (g) => (g * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+function coordsValidas(c) {
+  return !!c && Number.isFinite(c.lat) && Number.isFinite(c.lng) && Math.abs(c.lat) <= 90 && Math.abs(c.lng) <= 180;
+}
+function calcularFrete(loja, destino) {
+  const f = loja && loja.frete;
+  const origem = loja && loja.localizacao;
+  if (!f || !coordsValidas(origem)) return { configurado: false, freteCentavos: 0 };
+  if (!coordsValidas(destino)) return { configurado: true, precisaLocal: true };
+  const km = distanciaRetaKm(origem, destino) * FATOR_RUAS;
+  const distanciaKm = Math.round(km * 10) / 10;
+  if (Number(f.raioMaxKm) > 0 && km > Number(f.raioMaxKm)) return { configurado: true, fora: true, distanciaKm };
+  const excedente = Math.max(0, km - (Number(f.kmInclusos) || 0));
+  let freteCentavos = (Number(f.baseCentavos) || 0) + Math.ceil((excedente * (Number(f.porKmCentavos) || 0)) / 50) * 50;
+  const adicional = f.adicionalAtivo && Number(f.adicionalCentavos) > 0 ? (f.adicionalTexto || 'Adicional') : null;
+  if (adicional) freteCentavos += Number(f.adicionalCentavos);
+  return { configurado: true, freteCentavos, distanciaKm, adicional };
 }
 
 function reais(centavos) {

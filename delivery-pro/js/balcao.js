@@ -2,6 +2,7 @@ import { db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { montarItem } from './cardapio.js';
 import { abrirGestaoCardapio } from './gestao-cardapio.js';
+import { abrirConfigEntrega } from './config-entrega.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
@@ -23,6 +24,7 @@ export function iniciarBalcao() {
         <button id="btn-ativar-caixa" class="btn-primary" style="width:auto;">🔊 Abrir Caixa e Ativar Campainha</button>
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
         <button id="btn-gerenciar-cardapio" class="btn-outline-sm">🍕 Gerenciar cardápio</button>
+        <button id="btn-config-entrega" class="btn-outline-sm">🛵 Entrega e frete</button>
         <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
       </div>
     </div>
@@ -51,6 +53,7 @@ export function iniciarBalcao() {
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
   document.getElementById('btn-cardapio-exemplo').onclick = criarCardapioExemplo;
   document.getElementById('btn-gerenciar-cardapio').onclick = abrirGestaoCardapio;
+  document.getElementById('btn-config-entrega').onclick = abrirConfigEntrega;
 
   escutarPedidosEmTempoReal();
 }
@@ -164,8 +167,9 @@ function criarCardPedidoBalcao(p) {
     <div style="margin:8px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
       ${(p.itens || []).map(i => `<div>${esc(i.quantidade)}x ${esc(i.nome)} ${i.detalhes?.length ? `(${esc(i.detalhes.join(', '))})` : ''}</div>`).join('')}
     </div>
+    ${p.freteCentavos ? `<div style="display:flex; justify-content:space-between; font-size:13px; color:var(--text-muted);"><span>🛵 Entrega${p.distanciaKm ? ` (${esc(p.distanciaKm)} km)` : ''}</span><span>${formatarCentavos(p.freteCentavos)}</span></div>` : ''}
     <div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:8px;">
-      <span>${esc((p.formaPagamento || '').toUpperCase())}</span>
+      <span>${esc((p.formaPagamento || '').toUpperCase())}${p.tipoEntrega === 'retirada' ? ' · 🏪 RETIRADA' : ''}</span>
       <strong>${formatarCentavos(p.totalCentavos)}</strong>
     </div>
     ${trocoTxt}
@@ -211,6 +215,8 @@ function imprimirComandaTermica(p) {
       `).join('')}
     </div>
     <div style="padding-top:6px;">
+      ${p.freteCentavos ? `Subtotal: ${formatarCentavos(p.subtotalCentavos ?? (p.totalCentavos - p.freteCentavos))}<br/>Entrega: ${formatarCentavos(p.freteCentavos)}<br/>` : ''}
+      ${p.tipoEntrega === 'retirada' ? '*** RETIRADA NA LOJA ***<br/>' : ''}
       <strong>TOTAL: ${formatarCentavos(p.totalCentavos)}</strong><br/>
       Pagamento: ${esc((p.formaPagamento || '').toUpperCase())}
       ${p.trocoParaCentavos > p.totalCentavos ? `<br/>TROCO P/ ${formatarCentavos(p.trocoParaCentavos)}: ${formatarCentavos(p.trocoParaCentavos - p.totalCentavos)}` : ''}
