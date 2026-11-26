@@ -1732,6 +1732,38 @@ async function painelMaster(request, env) {
 
     if (corpo.acao === 'eu') return jsonResponse({ ok: true }); // usado pelo simulador de rota (/demo)
 
+    // Fotos dos modelos (Unsplash, chave no secret UNSPLASH_ACCESS_KEY). Guardadas em config/fotosModelos.
+    if (corpo.acao === 'lerFotos') {
+      const doc = await fs.ler('config/fotosModelos');
+      return jsonResponse({ temChave: Boolean(env.UNSPLASH_ACCESS_KEY), fotos: (doc && doc.fotos) || {} });
+    }
+    if (corpo.acao === 'buscarFotos') {
+      if (!env.UNSPLASH_ACCESS_KEY) throw new ErroPedido('Falta a chave do Unsplash no Cloudflare (UNSPLASH_ACCESS_KEY).', 400);
+      const termos = (Array.isArray(corpo.termos) ? corpo.termos : []).map(t => String(t).toLowerCase().replace(/[^a-z0-9 ]/g, '').trim().slice(0, 60)).filter(Boolean).slice(0, 40);
+      const atual = (await fs.ler('config/fotosModelos')) || {};
+      const fotos = atual.fotos || {};
+      let feitas = 0, limite = false, erro = null;
+      for (const termo of termos) {
+        if (fotos[termo]) continue;
+        const r = await fetch(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(termo)}&per_page=3&orientation=squarish&content_filter=high`, {
+          headers: { Authorization: `Client-ID ${env.UNSPLASH_ACCESS_KEY}`, 'Accept-Version': 'v1' }
+        });
+        if (r.status === 401) { erro = 'A chave do Unsplash foi recusada. Confira se colou a "Chave de acesso" (Access Key).'; break; }
+        if (r.status === 403 || r.status === 429) { limite = true; break; }
+        if (!r.ok) continue;
+        const d = await r.json();
+        const f = d.results && d.results[0];
+        if (f && f.urls && f.urls.raw) {
+          fotos[termo] = { raw: f.urls.raw, autor: (f.user && f.user.name) || '', link: (f.user && f.user.links && f.user.links.html) || '', download: (f.links && f.links.download_location) || '' };
+          feitas++;
+        } else fotos[termo] = { raw: '', vazio: true };
+        if (r.headers.get('X-Ratelimit-Remaining') === '0') { limite = true; break; }
+      }
+      if (feitas || termos.length) await fs.gravarJuntos([{ caminho: 'config/fotosModelos', dados: { fotos, atualizadoEm: new Date() } }]);
+      if (erro) throw new ErroPedido(erro, 400);
+      return jsonResponse({ ok: true, feitas, limite, total: Object.values(fotos).filter(x => x.raw).length });
+    }
+
     // "Vitrine pronta": o Master cria a loja do cliente ANTES da visita, com o visual do ramo.
     // O Master fica como dono provisório (pode montar cardápio, logo, cores) até transferir.
     if (corpo.acao === 'criarLojaDemo') {
@@ -1751,11 +1783,18 @@ async function painelMaster(request, env) {
           tempoEstimado: String(corpo.tempo || '30-45 min').slice(0, 20),
           descricao: String(corpo.descricao || '').slice(0, 160) || null,
           layoutVitrine: corpo.layout === 'varejo' ? 'varejo' : 'gastronomia',
-          ramo, demo: true, ativo: true, plano: 'teste', trialAte: new Date(Date.now() + 30 * DIA_MS), origemParceiro: 'master'
+          ramo, demo: true, ativo: true, plano: 'teste', trialAte: new Date(Date.now() + 30 * DIA_MS), origemParceiro: 'master',
+          bannerUrl: /^https:\/\/images\.unsplash\.com\/\S+$/.test(corpo.bannerUrl || '') ? corpo.bannerUrl : null,
+          logoUrl: /^https:\/\/images\.unsplash\.com\/\S+$/.test(corpo.logoUrl || '') ? corpo.logoUrl : null
         } },
         { caminho: `lojas/${lojaId}/equipe/${usuario.sub}`, dados: { papel: 'dono', nome: 'Master (demonstração)', email: usuario.email || null } }
       ]);
       if (!ok) throw new ErroPedido('Esse endereço acabou de ser usado. Escolha outro.', 409);
+      // Regra do Unsplash: avisar quando uma foto é usada (endpoint de "download")
+      if (env.UNSPLASH_ACCESS_KEY && Array.isArray(corpo.downloads)) {
+        const urls = [...new Set(corpo.downloads.map(String))].filter(u => /^https:\/\/api\.unsplash\.com\/photos\/[A-Za-z0-9_-]+\/download(\?\S*)?$/.test(u)).slice(0, 30);
+        await Promise.all(urls.map(u => fetch(u, { headers: { Authorization: `Client-ID ${env.UNSPLASH_ACCESS_KEY}` } }).catch(() => null)));
+      }
       return jsonResponse({ ok: true, lojaId, slug });
     }
 

@@ -185,9 +185,38 @@ const MODELOS = {
 
 // Ramos disponíveis (para o Master criar loja de demonstração com o visual certo)
 export const RAMOS = Object.fromEntries(Object.entries(MODELOS).map(([k, m]) => [k, { nome: m.nome, cor: m.cor, layout: m.layout, descricao: m.descricao, tempo: m.tempo, itens: m.itens.length }]));
-export function cardapioDoRamo(ramo) {
+// fotos = { termo: { url, autor, link } } (buscadas pelo Master no Unsplash). Sem fotos, sai sem imagem.
+export function cardapioDoRamo(ramo, fotos = {}) {
   const m = MODELOS[ramo];
-  return m ? montarDoModelo(m) : null;
+  if (!m) return null;
+  const c = montarDoModelo(m);
+  c.produtos.forEach(p => {
+    const f = fotos[BUSCA_FOTO[p.nome]];
+    if (f && f.url) { p.imagemUrl = f.url; p.imagemCredito = { autor: f.autor || '', link: f.link || '' }; }
+  });
+  return c;
+}
+
+// Termo de busca (inglês) da foto de cada produto no Unsplash. Produtos iguais usam a mesma foto.
+export const BUSCA_FOTO = { "Absorvente (8 un.)": "feminine hygiene pads", "Areia sanitária 4kg": "cat litter box", "Arroz 5kg": "rice bag grocery", "Açaí 300ml": "acai bowl", "Açaí 500ml": "acai bowl granola", "Açaí 700ml": "acai bowl fruits", "Açúcar 1kg": "sugar bowl", "Barca de açaí 1L (para dividir)": "acai bowl sharing", "Barra de cereal": "granola bar", "Batata com cheddar e bacon": "cheese fries bacon", "Batata frita G": "french fries", "Batata frita P": "french fries basket", "Brahma lata 350ml": "beer can", "Brinquedo mordedor": "dog chew toy", "Brownie com sorvete": "brownie ice cream", "Budweiser lata 350ml": "beer cans cold", "Burger Vegetariano": "veggie burger", "Cachaça 51 965ml": "cachaca bottle", "Café 500g": "coffee beans bag", "Carvão 3kg": "charcoal barbecue", "Chicken Burger": "chicken burger", "Coleira ajustável": "dog collar", "Combo Smash Duplo + batata P + refri lata": "burger fries soda combo", "Combo X-Burger + batata P + refri lata": "burger and fries meal", "Comedouro inox": "dog food bowl", "Condicionador 350ml": "hair conditioner bottle", "Copo descartável (50 un.)": "disposable cups", "Corona long neck 330ml": "beer bottle lime", "Creme dental 90g": "toothpaste", "Curativos (10 un.)": "adhesive bandage", "Desodorante aerosol": "deodorant spray", "Detergente 500ml": "dish soap bottle", "Energético 250ml": "energy drink can", "Escova de dentes": "toothbrush", "Feijoada completa (sábado)": "feijoada", "Feijão carioca 1kg": "beans", "Fio dental 50m": "dental floss", "Fralda tamanho M (30 un.)": "baby diapers", "Gelo em cubos 5kg": "ice cubes", "Gin Tanqueray 750ml": "gin bottle", "Heineken long neck 330ml": "green beer bottle", "Hidratante corporal": "body lotion", "Isotônico 500ml": "sports drink bottle", "Leite integral 1L": "milk carton", "Lenço umedecido (50 un.)": "baby wipes", "Marmita G": "brazilian lunch plate rice beans", "Marmita M": "rice beans chicken plate", "Marmita P": "lunch box rice beans", "Milkshake 400ml": "milkshake", "Nuggets (10 un.)": "chicken nuggets", "Onion rings": "onion rings", "Original 600ml": "beer bottle", "Osso mastigável": "dog bone treat", "Ovos (12 un.)": "eggs carton", "Papel higiênico (12 rolos)": "toilet paper rolls", "Parmegiana com arroz e fritas": "chicken parmigiana", "Petisco bifinho 65g": "dog treats", "Pizza Broto (4 fatias)": "small pizza", "Pizza Grande (8 fatias)": "pizza", "Pomada para assaduras": "baby cream", "Pote de sorvete 1,5L": "ice cream tub", "Preservativo (3 un.)": "pharmacy shelf", "Protetor solar FPS 50": "sunscreen", "Pudim de leite": "flan caramel pudding", "Pão de forma": "sliced bread", "Ração cães adultos 15kg": "dog food", "Ração cães filhotes 3kg": "puppy eating", "Ração gatos adultos 10kg": "cat food", "Refrigerante 2L": "soda bottle", "Refrigerante lata 350ml": "soda can", "Sabonete em barra": "bar soap", "Sabão em pó 1kg": "laundry detergent", "Sachê para gatos 85g": "cat eating wet food", "Shampoo 350ml": "shampoo bottle", "Shampoo pet 500ml": "dog bath", "Skol lata 350ml": "beer can ice", "Smash Duplo": "smash burger", "Stella Artois long neck 330ml": "beer glass bottle", "Strogonoff de frango": "chicken stroganoff", "Suco natural 500ml": "orange juice", "Tapete higiênico (30 un.)": "puppy pad", "Termômetro digital": "digital thermometer", "Vinho tinto seco 750ml": "red wine bottle", "Vinho tinto suave 750ml": "red wine glass", "Vodka Smirnoff 998ml": "vodka bottle", "Whiskey Jack Daniel's 1L": "whiskey bottle", "Whisky Red Label 1L": "whisky glass", "X-Bacon": "bacon burger", "X-Burger": "cheeseburger", "X-Egg": "burger with egg", "X-Salada": "burger lettuce tomato", "X-Tudo": "loaded burger", "Água mineral 1,5L": "water bottle", "Água mineral 500ml": "mineral water bottle", "Água sem gás 500ml": "water bottle small", "Óleo de soja 900ml": "cooking oil bottle", "Álcool em gel 70% 500ml": "hand sanitizer" };
+
+// Capa e logo de cada ramo (busca no Unsplash)
+export const BUSCA_RAMO = {
+  pizzaria: { capa: 'pizzeria wood oven', logo: 'pizza top view' },
+  hamburgueria: { capa: 'burger restaurant', logo: 'burger close up' },
+  adega: { capa: 'bar drinks shelf', logo: 'beer glass' },
+  acai: { capa: 'acai bowls table', logo: 'acai bowl top view' },
+  marmitaria: { capa: 'home cooked food table', logo: 'rice and beans' },
+  petshop: { capa: 'pet shop dog', logo: 'happy dog' },
+  mercadinho: { capa: 'grocery store aisle', logo: 'grocery basket' },
+  farmacia: { capa: 'pharmacy store', logo: 'pharmacy cross' }
+};
+
+// Todas as buscas necessárias (sem repetir)
+export function buscasDosModelos() {
+  const termos = new Set(Object.values(BUSCA_FOTO));
+  Object.values(BUSCA_RAMO).forEach(r => { termos.add(r.capa); termos.add(r.logo); });
+  return [...termos];
 }
 
 // Modelo → formato do cardápio (categorias + produtos com IDs novos)

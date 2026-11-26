@@ -436,6 +436,8 @@ export async function abrirGestaoCardapio() {
     };
     const foto = urlSegura(p.imagemUrl);
     if (foto) out.imagemUrl = foto;
+    // Crédito do fotógrafo (fotos de exemplo do Unsplash): só vale enquanto a foto for a do Unsplash
+    if (foto && p.imagemCredito && /^https:\/\/images\.unsplash\.com\//.test(foto)) out.imagemCredito = { autor: String(p.imagemCredito.autor || '').slice(0, 80), link: String(p.imagemCredito.link || '').slice(0, 300) };
     if (p.controlarEstoque) { out.controlarEstoque = true; out.estoque = Number(p.estoque) || 0; }
     if (p.oferta && p.oferta.precoCentavos > 0 && (p.oferta.dias || []).length) out.oferta = { precoCentavos: p.oferta.precoCentavos, dias: [...p.oferta.dias] };
     if (p.grupos?.length) {

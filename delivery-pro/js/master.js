@@ -2,7 +2,7 @@
 // Tudo passa pelo Worker (/api/master), que confere se o login é de um Master.
 import { auth, db, formatarCentavos, showToast, esc } from './config.js';
 import { statusAssinatura } from './plano.js';
-import { RAMOS, cardapioDoRamo } from './importar-cardapio.js';
+import { RAMOS, cardapioDoRamo, buscasDosModelos, BUSCA_FOTO, BUSCA_RAMO } from './importar-cardapio.js';
 import { doc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const DIA_MS = 24 * 60 * 60 * 1000;
@@ -202,6 +202,8 @@ async function abrirConfig() {
 
       <h4 class="gc-subtitulo">💳 Receber mensalidades por Pix (Mercado Pago)</h4>
       <div id="ms-mp"><p class="gc-dica">Carregando...</p></div>
+      <h4 class="gc-subtitulo">📷 Fotos dos modelos (Unsplash)</h4>
+      <div id="ms-fotos"><p class="gc-dica">Carregando...</p></div>
       <h4 class="gc-subtitulo">Últimos pagamentos de mensalidade</h4>
       <div id="ms-cobrancas"><p class="gc-dica">Carregando...</p></div>
     </form>`;
@@ -209,6 +211,7 @@ async function abrirConfig() {
   overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
   desenharMercadoPago(overlay.querySelector('#ms-mp'));
   desenharCobrancas(overlay.querySelector('#ms-cobrancas'));
+  desenharFotosModelos(overlay.querySelector('#ms-fotos'));
   overlay.querySelector('form').onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -340,9 +343,21 @@ function abrirCriarLoja() {
     btn.disabled = true; btn.textContent = 'Criando...';
     try {
       const r = RAMOS[ramo];
-      const res = await api({ acao: 'criarLojaDemo', nome: f.nome.value.trim(), slug: f.slug.value, whatsapp: f.zap.value, cor: f.cor.value, descricao: f.desc.value.trim(), tempo: r.tempo, layout: r.layout, ramo });
+      // Fotos do banco (se já foram buscadas no Unsplash): produtos, capa e logo do ramo
+      let banco = {};
+      try { banco = (await api({ acao: 'lerFotos' })).fotos || {}; } catch (_) {}
+      const fotos = fotosProntas(banco, 'w=600&h=600');
+      const cardapio = cardapioDoRamo(ramo, fotos);
+      const capa = BUSCA_RAMO[ramo] && banco[BUSCA_RAMO[ramo].capa];
+      const logo = BUSCA_RAMO[ramo] && banco[BUSCA_RAMO[ramo].logo];
+      const downloads = [capa, logo, ...cardapio.produtos.map(p => banco[BUSCA_FOTO[p.nome]])].filter(x => x && x.download).map(x => x.download);
+      const res = await api({
+        acao: 'criarLojaDemo', nome: f.nome.value.trim(), slug: f.slug.value, whatsapp: f.zap.value, cor: f.cor.value, descricao: f.desc.value.trim(), tempo: r.tempo, layout: r.layout, ramo,
+        bannerUrl: capa && capa.raw ? `${capa.raw}&w=1400&h=560&fit=crop&q=70&auto=format` : null,
+        logoUrl: logo && logo.raw ? `${logo.raw}&w=300&h=300&fit=crop&q=75&auto=format` : null,
+        downloads
+      });
       // Cardápio do ramo (o Master é dono provisório, então pode gravar)
-      const cardapio = cardapioDoRamo(ramo);
       await setDoc(doc(db, 'lojas', res.lojaId, 'publico', 'cardapio_completo'), { ...cardapio, atualizadoEm: serverTimestamp() });
       const link = `${window.location.origin}/${res.slug}`;
       f.innerHTML = `
@@ -409,5 +424,42 @@ function abrirTransferir(loja) {
       showToast(err.message, 6000);
       btn.disabled = false; btn.textContent = 'Entregar a loja';
     }
+  };
+}
+
+// ===================== Fotos dos modelos (Unsplash) =====================
+// banco = { termo: { raw, autor, link, download } } → { termo: { url, autor, link } } no tamanho pedido
+function fotosProntas(banco, tamanho) {
+  const out = {};
+  Object.entries(banco).forEach(([t, f]) => {
+    if (f && f.raw) out[t] = { url: `${f.raw}&${tamanho}&fit=crop&q=70&auto=format`, autor: f.autor || '', link: f.link ? `${f.link}?utm_source=delivery_pro&utm_medium=referral` : '' };
+  });
+  return out;
+}
+
+async function desenharFotosModelos(box) {
+  let r;
+  try { r = await api({ acao: 'lerFotos' }); } catch (err) { box.innerHTML = `<p class="gc-dica">${esc(err.message)}</p>`; return; }
+  const todas = buscasDosModelos();
+  const prontas = todas.filter(t => r.fotos[t] && (r.fotos[t].raw || r.fotos[t].vazio));
+  const comFoto = todas.filter(t => r.fotos[t] && r.fotos[t].raw).length;
+  const faltam = todas.filter(t => !prontas.includes(t));
+  if (!r.temChave) {
+    box.innerHTML = `<p class="gc-dica">Para as lojas de demonstração já nascerem com fotos, coloque a "Chave de acesso" do Unsplash no Cloudflare: <strong>Workers e Pages → delivery-pro → Configurações → Variáveis e segredos → Adicionar</strong>, tipo <strong>Segredo</strong>, nome <code>UNSPLASH_ACCESS_KEY</code>.</p>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="ms-fotos-barra"><div style="width:${Math.round((prontas.length / todas.length) * 100)}%"></div></div>
+    <p class="gc-dica"><strong>${comFoto} de ${todas.length}</strong> fotos prontas. ${faltam.length ? 'O Unsplash grátis libera cerca de 50 buscas por hora: toque abaixo, e se pedir para esperar, volte em 1 hora.' : '✅ Todas as fotos estão prontas! As próximas lojas de demonstração já nascem com fotos.'}</p>
+    ${faltam.length ? '<button class="btn-outline-sm" type="button" id="ms-buscar-fotos">📷 Buscar fotos agora</button>' : ''}
+    <p class="gc-dica" style="font-size:12px;">Fotos gratuitas do <a href="https://unsplash.com/?utm_source=delivery_pro&utm_medium=referral" target="_blank" rel="noopener">Unsplash</a>, com crédito ao fotógrafo no cardápio.</p>`;
+  const btn = box.querySelector('#ms-buscar-fotos');
+  if (btn) btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = 'Buscando fotos... (até 1 minuto)';
+    try {
+      const res = await api({ acao: 'buscarFotos', termos: faltam.slice(0, 40) });
+      showToast(res.limite ? `+${res.feitas} fotos. O Unsplash pediu uma pausa: volte em 1 hora para continuar.` : `+${res.feitas} fotos prontas!`, 6000);
+    } catch (err) { showToast(err.message, 6000); }
+    desenharFotosModelos(box);
   };
 }

@@ -250,7 +250,7 @@ function renderizarProdutos(dados, modoLayout) {
           const preco = temOpcoes ? precoMinimo(prod) : (oferta ? oferta.porCentavos : Number(prod.precoCentavos) || 0);
           return `
             <button class="vt-produto${esgotado ? ' esgotado' : ''}" data-prod-id="${esc(prod.id)}" data-busca="${esc(`${prod.nome} ${prod.descricao || ''}`.toLowerCase())}" ${esgotado ? 'disabled' : ''}>
-              <div class="vt-foto">${foto ? `<img src="${foto}" alt="" loading="lazy" />` : '<span>🍽️</span>'}</div>
+              <div class="vt-foto">${foto ? `<img src="${foto}" alt="" loading="lazy"${prod.imagemCredito && prod.imagemCredito.autor ? ` title="Foto: ${esc(prod.imagemCredito.autor)} / Unsplash"` : ''} />` : '<span>🍽️</span>'}</div>
               <div class="vt-produto-info">
                 <strong>${esc(prod.nome)}</strong>
                 ${prod.descricao ? `<p>${esc(prod.descricao)}</p>` : ''}
@@ -263,7 +263,9 @@ function renderizarProdutos(dados, modoLayout) {
         }).join('')}
       </div>
     </section>
-  `).join('') + '<p class="vt-vazio hidden" id="vt-vazio">Nenhum produto encontrado.</p>';
+  `).join('') + '<p class="vt-vazio hidden" id="vt-vazio">Nenhum produto encontrado.</p>'
+    + (ativos.some(p => p.imagemCredito && /^https:\/\/images\.unsplash\.com\//.test(p.imagemUrl || ''))
+      ? '<p class="gc-dica" style="text-align:center; font-size:12px; margin:16px 0;">Fotos de exemplo: <a href="https://unsplash.com/?utm_source=delivery_pro&utm_medium=referral" target="_blank" rel="noopener">Unsplash</a></p>' : '');
 
   // Toque no produto: adiciona direto ou abre as opções
   container.querySelectorAll('[data-prod-id]').forEach(btn => {
