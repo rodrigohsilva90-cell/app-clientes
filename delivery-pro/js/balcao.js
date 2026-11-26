@@ -343,6 +343,7 @@ function criarCardPedidoBalcao(p) {
     ${p.clienteVip ? `<p class="gc-dica" style="margin:0 0 4px;">Cliente fiel (${esc(p.clientePedidosAntes)} pedidos): que tal um mimo ou prioridade no preparo?</p>` : ''}
     ${p.recebedorNome ? `<p style="font-size:13px; margin:2px 0;">👤 Quem recebe: <strong>${esc(p.recebedorNome)}</strong>${p.recebedorWhats ? ` (${esc(p.recebedorWhats)})` : ''}</p>` : ''}
     ${p.clienteRestrito ? '<p style="font-size:12px; color:#9a3412; margin:2px 0;">⚠ Cliente com 2 ausências seguidas</p>' : ''}
+    ${p.status === 'entrega' && p.tentativaAusente ? `<div class="pedido-aviso">📵 O motoboy chegou${p.tentativaAusente.em && p.tentativaAusente.em.toDate ? ` às ${p.tentativaAusente.em.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : ''} e o cliente não atendeu. Ele foi fazer outra entrega e volta depois. ${p.clienteWhatsapp ? `<a href="https://wa.me/55${esc(String(p.clienteWhatsapp).replace(/\D/g, '').replace(/^55/, ''))}" target="_blank" rel="noopener">📲 Chamar o cliente</a>` : 'Ligue para o cliente.'}</div>` : ''}
     <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
     ${p.pinoManual ? '<p style="font-size:12px; color:#92400e; margin:2px 0;">📍 Pino ajustado à mão pelo cliente</p>' : ''}
     ${p.descontoFidelidadeCentavos ? `<div class="pedido-premio">🎁 Prêmio fidelidade usado: −${formatarCentavos(p.descontoFidelidadeCentavos)} (já descontado do total)</div>` : ''}

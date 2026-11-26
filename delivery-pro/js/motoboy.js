@@ -15,12 +15,23 @@ let minhasEntregas = [];      // entregas deste motoboy, na ordem da rota (a pri
 let ordemRota = [];           // ids na ordem escolhida (mantida enquanto o conjunto não muda)
 const chegadaAvisada = new Set();
 let assinaturaTela = '';
-const MAX_ENTREGAS_ROTA = 4;
+const MAX_ENTREGAS_ROTA = 3;
 let mapaMotoboy = null;
 let marcadorMoto = null;
 let linhaRotaMoto = null;
 
 const OFFLINE_QUEUE_KEY = 'motoboy_offline_actions_v1';
+const CHAVE_ORDEM = () => `motoboy_ordem_${AppState.lojaId}`;
+const CHAVE_VIAGEM = () => `motoboy_viagem_${AppState.lojaId}`;
+const LIMITE_DESVIO_M = 2500;   // pedido extra que desvia mais que isso fica para outro entregador
+const SLA_URGENTE_MS = 35 * 60 * 1000; // pedido esperando há 35+ min passa na frente se estiver quase no caminho
+const FOLGA_URGENTE_M = 1500;
+let ligarGps = null;            // liga o GPS (fica desligado quando não há entrega, para poupar bateria)
+let ultimoAtualId = null;
+const lerJson = (k, padrao) => { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? padrao; } catch (_) { return padrao; } };
+const gravarJson = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} };
+const pago = (p) => p.pagamentoStatus === 'aprovado';
+const FORMA = { dinheiro: 'Dinheiro', cartao_entrega: 'Cartão (maquininha)', cartao: 'Cartão (maquininha)', pix: 'Pix' };
 
 export function iniciarMotoboy() {
   const root = document.getElementById('app-root');
@@ -84,6 +95,7 @@ async function enviarPosicaoParaRota(coords) {
 // Ordem da rota: sempre a entrega mais próxima de onde a moto está (a partir da loja no começo)
 function ordenarRota(lista) {
   const ids = lista.map(p => p.id).sort().join(',');
+  if (!ordemRota.length) { const salva = lerJson(CHAVE_ORDEM(), []); if (Array.isArray(salva)) ordemRota = salva; } // ordem manual sobrevive a recarregar
   const idsAtuais = [...ordemRota].sort().join(',');
   if (ids !== idsAtuais) {
     const restantes = [...lista];
@@ -93,18 +105,58 @@ function ordenarRota(lista) {
       let melhor = 0;
       if (ponto) {
         let menor = Infinity;
+        const dists = restantes.map(p => (p.destinoCoords ? calcularDistanciaMetros(ponto.lat, ponto.lng, p.destinoCoords.lat, p.destinoCoords.lng) : Infinity));
+        dists.forEach((d, i) => { if (d < menor) { menor = d; melhor = i; } });
+        // Urgência: pedido esperando há 35+ min passa na frente se estiver até 1,5 km "fora" do mais perto
+        let maisAntigo = -1, tempoAntigo = 0;
         restantes.forEach((p, i) => {
-          const dist = p.destinoCoords ? calcularDistanciaMetros(ponto.lat, ponto.lng, p.destinoCoords.lat, p.destinoCoords.lng) : Infinity;
-          if (dist < menor) { menor = dist; melhor = i; }
+          const espera = Date.now() - (p.criadoEm && p.criadoEm.toMillis ? p.criadoEm.toMillis() : Date.now());
+          if (espera >= SLA_URGENTE_MS && dists[i] - menor <= FOLGA_URGENTE_M && espera > tempoAntigo) { tempoAntigo = espera; maisAntigo = i; }
         });
+        if (maisAntigo >= 0) melhor = maisAntigo;
       }
       const [escolhido] = restantes.splice(melhor, 1);
       nova.push(escolhido.id);
       if (escolhido.destinoCoords) ponto = escolhido.destinoCoords;
     }
     ordemRota = nova;
+    gravarJson(CHAVE_ORDEM(), ordemRota);
   }
   return ordemRota.map(id => lista.find(p => p.id === id)).filter(Boolean);
+}
+
+// Distância (linha reta) de uma rota: loja → paradas na ordem. Serve para medir o desvio de um pedido extra.
+function custoRota(paradas) {
+  let ponto = AppState.lojaDados.localizacao || ultimaPosicao;
+  if (!ponto) return 0;
+  let total = 0;
+  for (const p of paradas) {
+    if (!p.destinoCoords) continue;
+    total += calcularDistanciaMetros(ponto.lat, ponto.lng, p.destinoCoords.lat, p.destinoCoords.lng);
+    ponto = p.destinoCoords;
+  }
+  return total;
+}
+// Melhor custo inserindo o pedido novo em qualquer posição da rota atual
+function desvioDoPedido(novo) {
+  if (!novo.destinoCoords || !minhasEntregas.length) return 0;
+  const base = custoRota(minhasEntregas);
+  let melhor = Infinity;
+  for (let i = 0; i <= minhasEntregas.length; i++) {
+    const r = [...minhasEntregas.slice(0, i), novo, ...minhasEntregas.slice(i)];
+    melhor = Math.min(melhor, custoRota(r) - base);
+  }
+  return melhor;
+}
+
+function mudarOrdem(novaOrdem, motoboyUid) {
+  ordemRota = novaOrdem;
+  gravarJson(CHAVE_ORDEM(), ordemRota);
+  minhasEntregas = ordemRota.map(id => minhasEntregas.find(p => p.id === id)).filter(Boolean);
+  pedidoEmRotaAtual = minhasEntregas[0] || null;
+  assinaturaTela = '';
+  renderizarEntregaAtiva(pedidoEmRotaAtual, motoboyUid);
+  if (ultimaPosicao) enviarPosicaoParaRota(ultimaPosicao); // os clientes veem a nova ordem na hora
 }
 
 // 1. Telemetria GPS Adaptativa (8s em movimento / 30s parado) + WakeLock
@@ -118,6 +170,8 @@ async function iniciarTelemetriaGPS(motoboyUid) {
     return;
   }
 
+  ligarGps = () => {
+  if (watchId !== null) return;
   watchId = navigator.geolocation.watchPosition(
     async (pos) => {
       const { latitude, longitude, speed, accuracy } = pos.coords;
@@ -143,6 +197,7 @@ async function iniciarTelemetriaGPS(motoboyUid) {
       if (agora - ultimoEnvioTimestamp >= intervaloMinimo) {
         ultimoEnvioTimestamp = agora;
         ultimaPosicao = coords;
+        atualizarCerca();
 
         // Atualiza posição apenas no pedido ativo para privacidade e economia
         if (navigator.onLine) enviarPosicaoParaRota(coords);
@@ -157,6 +212,43 @@ async function iniciarTelemetriaGPS(motoboyUid) {
     },
     { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
   );
+  };
+  if (minhasEntregas.length) ligarGps();
+  else { const b = document.getElementById('gps-status-badge'); if (b) { b.textContent = '⏸ GPS em pausa (sem entrega na mão). Liga sozinho quando você pegar uma.'; b.style.color = 'var(--text-muted)'; } }
+  // Ao voltar do Google Maps/Waze o navegador pode ter pausado o GPS: lê uma posição nova na hora
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || !minhasEntregas.length) return;
+    navigator.geolocation.getCurrentPosition((pos) => {
+      const c = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy || 0) };
+      ultimaPosicao = c; ultimoEnvioTimestamp = Date.now();
+      if (navigator.onLine) enviarPosicaoParaRota(c);
+      atualizarCerca();
+    }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+  });
+}
+
+// Sem entrega na mão: desliga o GPS (bateria). Com entrega: liga.
+function ajustarGps() {
+  if (!('geolocation' in navigator)) return;
+  const badge = document.getElementById('gps-status-badge');
+  if (minhasEntregas.length) { if (watchId === null && ligarGps) ligarGps(); return; }
+  if (watchId !== null) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    if (badge) { badge.textContent = '⏸ GPS em pausa (sem entrega na mão). Liga sozinho quando você pegar uma.'; badge.style.color = 'var(--text-muted)'; }
+  }
+}
+
+// Mostra a distância até o cliente da vez e deixa o botão verde quando está dentro da cerca
+function atualizarCerca() {
+  const el = document.getElementById('mb-distancia');
+  const btn = document.getElementById('btn-concluir-entrega');
+  const p = pedidoEmRotaAtual;
+  if (!el || !btn || !p || !p.destinoCoords || !ultimaPosicao) return;
+  const raio = p.tipoLocal === 'condominio' || p.tipoLocal === 'rural' ? 150 : 100;
+  const v = validarCercaEntrega(ultimaPosicao, p.destinoCoords, raio);
+  el.textContent = v.permitido ? `📍 Você chegou (${v.distanciaMetros} m do pino).` : `📍 Faltam ${v.distanciaMetros >= 1000 ? (v.distanciaMetros / 1000).toFixed(1).replace('.', ',') + ' km' : v.distanciaMetros + ' m'} até o cliente.`;
+  btn.classList.toggle('mb-na-cerca', v.permitido);
 }
 
 // 2. Escuta Entregas Prontas e Entrega Ativa do Próprio Motoboy (LGPD)
@@ -186,6 +278,10 @@ function escutarEntregas(motoboyUid) {
     minhasEntregas = ordenarRota(minhas);
     pedidoEmRotaAtual = minhasEntregas[0] || null;
     AppState.entregaAtiva = Boolean(pedidoEmRotaAtual);
+    ajustarGps();
+    // Parada anterior concluída: o próximo cliente já passa a ver a moto (sem esperar o próximo ciclo do GPS)
+    const atualId = pedidoEmRotaAtual ? pedidoEmRotaAtual.id : null;
+    if (atualId !== ultimoAtualId) { ultimoAtualId = atualId; if (atualId && ultimaPosicao && navigator.onLine) enviarPosicaoParaRota(ultimaPosicao); }
 
     const trocoEl = document.getElementById('carteira-troco-valor');
     if (trocoEl) trocoEl.textContent = formatarCentavos(trocoTotalCentavos);
@@ -272,17 +368,37 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
   const mapsUrl = pedido.destinoCoords
     ? `https://www.google.com/maps/dir/?api=1&destination=${destinoCoords.lat},${destinoCoords.lng}`
     : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pedido.enderecoTexto)}`;
-  // Waze direto no ponto marcado pelo cliente (coordenadas, não o nome da rua)
+  // Waze direto no ponto marcado pelo cliente (coordenadas, não o nome da rua), modo moto
   const wazeUrl = pedido.destinoCoords
-    ? `https://waze.com/ul?ll=${destinoCoords.lat},${destinoCoords.lng}&navigate=yes`
+    ? `https://waze.com/ul?ll=${destinoCoords.lat},${destinoCoords.lng}&navigate=yes&vehicle_type=motorcycle`
     : `https://waze.com/ul?q=${encodeURIComponent(pedido.enderecoTexto)}&navigate=yes`;
+  // Rota completa (todas as paradas na ordem) no Google Maps, modo moto
+  const comPino = minhasEntregas.filter(p => p.destinoCoords);
+  const rotaCompletaUrl = comPino.length > 1
+    ? `https://www.google.com/maps/dir/?api=1&travelmode=two-wheeler&destination=${comPino.at(-1).destinoCoords.lat},${comPino.at(-1).destinoCoords.lng}&waypoints=${encodeURIComponent(comPino.slice(0, -1).map(p => `${p.destinoCoords.lat},${p.destinoCoords.lng}`).join('|'))}`
+    : null;
+  // Resumo da bag: o que cobrar em cada parada e o que já está pago
+  const aCobrar = minhasEntregas.filter(p => !pago(p) && p.formaPagamento !== 'pix');
+  const totalCobrar = aCobrar.reduce((a, p) => a + (Number(p.totalCentavos) || 0), 0);
+  const trocoBag = minhasEntregas.reduce((a, p) => a + (p.formaPagamento === 'dinheiro' && p.trocoParaCentavos > p.totalCentavos ? p.trocoParaCentavos - p.totalCentavos : 0), 0);
+  const linhaCobranca = (p) => pago(p) ? '<span class="mb-pago">✅ Já pago</span>'
+    : p.formaPagamento === 'pix' ? '<span class="mb-cobrar">Pix: confirme com a loja</span>'
+    : `<span class="mb-cobrar">💵 Cobrar ${formatarCentavos(p.totalCentavos)} · ${esc(FORMA[p.formaPagamento] || p.formaPagamento || '')}</span>`;
   const ep = pedido.enderecoPartes || null;
   const zapCliente = String(pedido.clienteWhatsapp || '').replace(/\D/g, '');
 
   box.innerHTML = `
+    ${minhasEntregas.length > 1 ? `
+      <div class="card mb-bag">
+        <strong>🎒 Sua bag: ${minhasEntregas.length} entregas</strong>
+        ${minhasEntregas.map((p, i) => `<div class="mb-bag-linha"><span>${i + 1}ª · #${esc(p.numeroPedido || p.id.slice(0, 4))} ${esc(String(p.clienteNome || '').split(/\s+/)[0])}${p.criadoEm && p.criadoEm.toMillis && Date.now() - p.criadoEm.toMillis() >= SLA_URGENTE_MS ? ` <span class="mb-cobrar">⏰ ${Math.round((Date.now() - p.criadoEm.toMillis()) / 60000)} min</span>` : ''}</span>${linhaCobranca(p)}</div>`).join('')}
+        <div class="mb-bag-total"><span>Total a cobrar na rua</span><strong>${formatarCentavos(totalCobrar)}</strong></div>
+        ${trocoBag ? `<div class="mb-bag-total"><span>Troco para levar</span><strong>${formatarCentavos(trocoBag)}</strong></div>` : ''}
+        ${rotaCompletaUrl ? `<a class="btn-primary" style="text-decoration:none; text-align:center; display:block; margin-top:8px;" href="${rotaCompletaUrl}" target="_blank" rel="noopener">🧭 Abrir rota completa no Google Maps (${comPino.length} paradas)</a>` : ''}
+      </div>` : ''}
     <div class="card" style="border: 2px solid var(--primary);">
       <div style="display:flex; justify-content:space-between; align-items:center;">
-        <span class="badge">EM ROTA AGORA</span>
+        <span class="badge">${minhasEntregas.length > 1 ? `1ª PARADA DE ${minhasEntregas.length}` : 'EM ROTA AGORA'}</span>
         <strong>Pedido #${esc(pedido.numeroPedido || pedido.id.slice(0, 4))}</strong>
       </div>
 
@@ -303,7 +419,7 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
         : `<p style="font-size:14px; color:var(--text-muted); margin:4px 0;"><strong>Endereço:</strong> ${esc(pedido.enderecoTexto)}</p>`}
       ${pedido.pinoManual ? `<div class="mb-alerta-pino">⚠ O cliente ajustou o pino no mapa à mão. Confira a referência${zapCliente ? ` ou <a href="https://wa.me/55${esc(zapCliente.replace(/^55/, ''))}" target="_blank" rel="noopener">chame no WhatsApp</a>` : ''} se não achar.</div>` : ''}
       ${!pedido.destinoCoords && pedido.tipoEntrega === 'entrega' ? '<div class="mb-alerta-pino">⚠ Sem pino no mapa: o GPS vai pelo nome da rua. Confira a referência.</div>' : ''}
-      <p style="font-size:14px;"><strong>Cobrar:</strong> ${formatarCentavos(pedido.totalCentavos)} (${esc((pedido.formaPagamento || '').toUpperCase())})</p>
+      <p style="font-size:14px;">${linhaCobranca(pedido)}</p>
 
       <div style="margin:10px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
         <strong>Conferência de Itens:</strong>
@@ -321,7 +437,9 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
           🚗 Waze
         </a>
       </div>
-      <button id="btn-concluir-entrega" class="btn-primary" style="margin-top:8px;">✅ Confirmar Entrega</button>
+      <p class="mb-distancia" id="mb-distancia">${pedido.destinoCoords ? '📍 Calculando a distância até o cliente...' : ''}</p>
+      <button id="btn-concluir-entrega" class="btn-primary" style="margin-top:4px;">✅ Confirmar Entrega</button>
+      ${proximas.length ? '<button id="btn-pular-entrega" class="btn-outline-sm" type="button" style="width:100%; margin-top:8px;">⏭️ Cliente não atende — ir para a próxima e voltar depois</button>' : ''}
 
       <button id="btn-ocorrencia-entrega" class="btn-outline-sm" style="width:100%; margin-top:8px; color:var(--danger); border-color:var(--danger);">
         ⚠️ Reportar Problema / Cliente Ausente
@@ -331,23 +449,34 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
       <div class="card rota-proximas">
         <strong>🗺 Próximas na rota (${proximas.length})</strong>
         <p class="gc-dica">Cada cliente vê só quantas entregas vêm antes da dele.</p>
+        <p class="gc-dica">A ordem é a sugerida pelo app (mais perto primeiro). Conhece um caminho melhor? Use as setas.</p>
         ${proximas.map((p, i) => `
           <div class="rota-item">
-            <div><strong>${i + 2}º · #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong><small>${esc(p.enderecoTexto)}</small></div>
-            <button class="btn-outline-sm" type="button" data-primeiro="${esc(p.id)}">Fazer agora</button>
+            <div><strong>${i + 2}ª · #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong><small>${esc(p.enderecoPartes && p.enderecoPartes.bairro ? p.enderecoPartes.bairro + ' · ' : '')}${esc(p.enderecoTexto)}</small>${p.tentativaAusente ? '<small class="mb-cobrar">⏭️ cliente não atendeu antes</small>' : ''}</div>
+            <div class="rota-setas">
+              <button class="btn-outline-sm" type="button" data-subir="${esc(p.id)}" aria-label="Entregar antes">⬆️</button>
+              ${i < proximas.length - 1 ? `<button class="btn-outline-sm" type="button" data-descer="${esc(p.id)}" aria-label="Entregar depois">⬇️</button>` : ''}
+            </div>
           </div>`).join('')}
       </div>` : ''}
   `;
-  box.querySelectorAll('[data-primeiro]').forEach(b => {
-    b.onclick = () => {
-      ordemRota = [b.dataset.primeiro, ...ordemRota.filter(id => id !== b.dataset.primeiro)];
-      minhasEntregas = ordemRota.map(id => minhasEntregas.find(p => p.id === id)).filter(Boolean);
-      pedidoEmRotaAtual = minhasEntregas[0];
-      assinaturaTela = '';
-      renderizarEntregaAtiva(pedidoEmRotaAtual, motoboyUid);
-      if (ultimaPosicao) enviarPosicaoParaRota(ultimaPosicao);
-    };
-  });
+  const ids = minhasEntregas.map(p => p.id);
+  const trocar = (i, j) => { const n = [...ids]; [n[i], n[j]] = [n[j], n[i]]; mudarOrdem(n, motoboyUid); };
+  box.querySelectorAll('[data-subir]').forEach(b => { b.onclick = () => { const i = ids.indexOf(b.dataset.subir); if (i > 0) trocar(i, i - 1); }; });
+  box.querySelectorAll('[data-descer]').forEach(b => { b.onclick = () => { const i = ids.indexOf(b.dataset.descer); if (i >= 0 && i < ids.length - 1) trocar(i, i + 1); }; });
+  // Cliente não atende: registra a tentativa (com o GPS de agora) para o balcão ligar, e manda para o fim da fila
+  const btnPular = document.getElementById('btn-pular-entrega');
+  if (btnPular) btnPular.onclick = async () => {
+    if (!confirm('O cliente não atendeu? O pedido vai para o fim da sua rota e a loja é avisada para ligar para ele.')) return;
+    btnPular.disabled = true;
+    try {
+      const u = auth.currentUser;
+      await fetch('/api/entrega/tentativa', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await u.getIdToken()}` }, body: JSON.stringify({ lojaId: AppState.lojaId, pedidoId: pedido.id, coords: ultimaPosicao || null }) });
+    } catch (_) {}
+    mudarOrdem([...ids.filter(id => id !== pedido.id), pedido.id], motoboyUid);
+    showToast('⏭️ Indo para a próxima. A loja vai ligar para o cliente.', 5000);
+  };
+  setTimeout(atualizarCerca, 150);
 
   setTimeout(() => {
     const mapContainer = document.getElementById('mapa-motoboy');
@@ -404,6 +533,7 @@ async function tentarFinalizarEntrega(pedido, tipoAcao) {
 
   if (!navigator.onLine) {
     salvarAcaoOffline({ lojaId: AppState.lojaId, pedidoId: pedido.id, payload });
+    registrarNaViagem(pedido, tipoAcao);
     showToast('Sem internet: entrega salva na fila e será sincronizada ao reconectar!');
     return;
   }
@@ -416,6 +546,8 @@ async function tentarFinalizarEntrega(pedido, tipoAcao) {
     avisarCliente(pedido.id);
     if (tipoAcao === 'concluido') carimbarPedido(pedido.id);
     showToast(tipoAcao === 'concluido' ? 'Entrega concluída com sucesso!' : 'Ocorrência registrada no balcão.');
+    registrarNaViagem(pedido, tipoAcao);
+    aposBaixa(pedido);
   } catch (err) {
     salvarAcaoOffline({ lojaId: AppState.lojaId, pedidoId: pedido.id, payload });
     showToast('Oscilação de rede: baixa enfileirada para envio automático.');
@@ -429,18 +561,24 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
     return;
   }
 
-  lista.innerHTML = pedidos.map(p => `
+  lista.innerHTML = pedidos.map(p => {
+    // Pedido extra que desvia muito da rota já assumida fica para outro entregador (o balcão ainda pode forçar)
+    const desvio = minhasEntregas.length ? desvioDoPedido(p) : 0;
+    const foraDaRota = desvio > LIMITE_DESVIO_M;
+    const travado = bloqueadoPorRotaAtiva || foraDaRota;
+    return `
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
       <div>
         <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
-        <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
-        <span style="font-size:13px; font-weight:600;">${formatarCentavos(p.totalCentavos)} • ${esc((p.formaPagamento || '').toUpperCase())}</span>
+        <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoPartes && p.enderecoPartes.bairro ? p.enderecoPartes.bairro + ' · ' : '')}${esc(p.enderecoTexto)}</p>
+        <span style="font-size:13px; font-weight:600;">${formatarCentavos(p.totalCentavos)} • ${esc((p.formaPagamento || '').toUpperCase())}${pago(p) ? ' · ✅ pago' : ''}</span>
+        ${minhasEntregas.length && p.destinoCoords ? `<small class="${foraDaRota ? 'mb-cobrar' : 'gc-dica'}" style="display:block;">${foraDaRota ? `Fora da sua rota (+${(desvio / 1000).toFixed(1).replace('.', ',')} km): deixe para outro entregador` : `Desvio de +${(desvio / 1000).toFixed(1).replace('.', ',')} km na sua rota`}</small>` : ''}
       </div>
-      <button class="btn-primary" style="width:auto;" ${bloqueadoPorRotaAtiva ? 'disabled' : ''} data-assumir="${p.id}">
-        ${bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : minhasEntregas.length ? '+ Levar também' : 'Pegar Entrega'}
+      <button class="btn-primary" style="width:auto;" ${travado ? 'disabled' : ''} data-assumir="${p.id}">
+        ${bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : foraDaRota ? 'Fora da rota' : minhasEntregas.length ? '+ Levar também' : 'Pegar Entrega'}
       </button>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 
   lista.querySelectorAll('button[data-assumir]').forEach(btn => {
     btn.onclick = async () => {
@@ -475,4 +613,69 @@ async function sincronizarFilaOffline() {
   }
   localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(restantes));
   if (restantes.length === 0) showToast('Entregas offline sincronizadas com o servidor!');
+}
+
+
+// ===================== Viagem: transição entre paradas e acerto com o caixa =====================
+function registrarNaViagem(p, tipoAcao) {
+  const v = lerJson(CHAVE_VIAGEM(), []);
+  if (!v.some(x => x.id === p.id)) {
+    v.push({ id: p.id, numero: p.numeroPedido || p.id.slice(0, 4), nome: String(p.clienteNome || '').split(/\s+/)[0], forma: p.formaPagamento || '', valor: Number(p.totalCentavos) || 0, pago: pago(p), resultado: tipoAcao });
+    gravarJson(CHAVE_VIAGEM(), v);
+  }
+}
+
+function bipe(vezes = 2) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    for (let i = 0; i < vezes; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = 880 + i * 220; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.25, ctx.currentTime + i * 0.18);
+      o.start(ctx.currentTime + i * 0.18); o.stop(ctx.currentTime + i * 0.18 + 0.12);
+    }
+    if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+  } catch (_) {}
+}
+
+function aposBaixa(feito) {
+  const restantes = ordemRota.map(id => minhasEntregas.find(p => p.id === id)).filter(p => p && p.id !== feito.id);
+  bipe(restantes.length ? 2 : 3);
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay mb-transicao';
+  if (restantes.length) {
+    const prox = restantes[0];
+    const url = prox.destinoCoords
+      ? `https://www.google.com/maps/dir/?api=1&travelmode=two-wheeler&destination=${prox.destinoCoords.lat},${prox.destinoCoords.lng}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(prox.enderecoTexto || '')}`;
+    overlay.innerHTML = `
+      <div class="card mb-transicao-card">
+        <p class="mb-transicao-ok">✅ Parada concluída!</p>
+        <p>Próxima: <strong>#${esc(prox.numeroPedido || prox.id.slice(0, 4))} · ${esc(String(prox.clienteNome || '').split(/\s+/)[0])}</strong><br/><small>${esc(prox.enderecoPartes && prox.enderecoPartes.bairro ? prox.enderecoPartes.bairro : prox.enderecoTexto || '')}</small></p>
+        <a class="btn-primary mb-botao-gigante" href="${url}" target="_blank" rel="noopener" data-ir>🧭 Ir para a próxima parada</a>
+        <button class="btn-outline-sm" type="button" data-fechar style="width:100%; margin-top:8px;">Ver no painel</button>
+      </div>`;
+  } else {
+    const v = lerJson(CHAVE_VIAGEM(), []);
+    const soma = (f) => v.filter(f).reduce((a, x) => a + x.valor, 0);
+    const dinheiro = soma(x => x.resultado === 'concluido' && !x.pago && x.forma === 'dinheiro');
+    const cartao = soma(x => x.resultado === 'concluido' && !x.pago && /cartao/.test(x.forma));
+    const pixOuPago = soma(x => x.resultado === 'concluido' && (x.pago || x.forma === 'pix'));
+    const voltar = v.filter(x => x.resultado !== 'concluido');
+    overlay.innerHTML = `
+      <div class="card mb-transicao-card">
+        <p class="mb-transicao-ok">🏁 Viagem encerrada!</p>
+        <strong>Acerto com o caixa</strong>
+        <div class="mb-bag-total"><span>💵 Dinheiro recebido</span><strong>${formatarCentavos(dinheiro)}</strong></div>
+        <div class="mb-bag-total"><span>💳 Na maquininha</span><strong>${formatarCentavos(cartao)}</strong></div>
+        <div class="mb-bag-total"><span>✅ Pix / já pago</span><strong>${formatarCentavos(pixOuPago)}</strong></div>
+        ${voltar.length ? `<p class="mb-cobrar" style="margin-top:6px;">⚠ Volte com ${voltar.length} pedido(s) com problema: ${voltar.map(x => '#' + esc(x.numero)).join(', ')}</p>` : ''}
+        <div class="gc-dica" style="margin-top:6px;">${v.map(x => `#${esc(x.numero)} ${esc(x.nome)} · ${x.resultado === 'concluido' ? formatarCentavos(x.valor) + ' ' + esc(FORMA[x.forma] || x.forma) + (x.pago ? ' (pago)' : '') : 'ocorrência'}`).join('<br/>')}</div>
+        <button class="btn-primary mb-botao-gigante" type="button" data-acertado>👍 Acertado com o caixa</button>
+      </div>`;
+  }
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-fechar]')?.addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-ir]')?.addEventListener('click', () => setTimeout(() => overlay.remove(), 300));
+  overlay.querySelector('[data-acertado]')?.addEventListener('click', () => { gravarJson(CHAVE_VIAGEM(), []); overlay.remove(); });
 }

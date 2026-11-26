@@ -520,3 +520,19 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .vt-simular-form { display: flex; gap: 6px; }
 .vt-simular-form input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; }
 .vt-simular small { font-size: 13px; color: var(--text-muted); }
+.acomp-tentativa { display: flex; flex-direction: column; gap: 6px; border: 1px solid #fdba74; background: #fff7ed; }
+.acomp-tentativa span { font-size: 14px; color: var(--text-muted); }
+.acomp-atualizado { display: block; font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.mb-bag { border: 1px solid var(--border); }
+.mb-bag-linha { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; padding: 4px 0; border-bottom: 1px dashed var(--border); flex-wrap: wrap; }
+.mb-bag-total { display: flex; justify-content: space-between; font-size: 14px; margin-top: 6px; }
+.mb-pago { color: #15803d; font-weight: 700; font-size: 13px; }
+.mb-cobrar { color: #b91c1c; font-weight: 700; font-size: 13px; }
+.mb-distancia { font-size: 14px; margin: 8px 0 0; color: var(--text-muted); }
+#btn-concluir-entrega.mb-na-cerca { background: #16a34a; border-color: #16a34a; }
+.rota-setas { display: flex; gap: 4px; }
+.rota-setas .btn-outline-sm { padding: 4px 8px; }
+.mb-transicao { align-items: flex-end; }
+.mb-transicao-card { width: 100%; max-width: 480px; margin: 0; }
+.mb-transicao-ok { font-size: 20px; font-weight: 800; margin: 0 0 6px; }
+.mb-botao-gigante { display: block; text-align: center; text-decoration: none; font-size: 18px; padding: 18px; margin-top: 12px; }

@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 64be965a7fa85ce6602deff8d011b45197dc5ece4293f7f8e322798bf6ed9bcf).
+worker.js = cópia EXATA do que está no ar (sha256 aa90a70282156211b3fe5b409277fdeac5509e3a70949fd334f91267f55884f6).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
@@ -21,3 +21,4 @@ Ficha de clientes e cartão fidelidade: lojas/{id}/clientes/{whatsapp} (só o Wo
 Carimbo: o app chama /api/fidelidade/carimbar quando o pedido é concluído (conta uma vez só por pedido, campo contabilizadoEm).
 Consulta pública /api/fidelidade?loja=&whats= devolve só números. Config da loja em lojas/{id}.fidelidade = { ativo, meta, premioCentavos, minimoCentavos }.
 Ausências: balcão confirma a ocorrência (/api/clientes acao ocorrencia); 2 seguidas = clientes/{wa}.ausenciasSeguidas>=2 => só Pix automático na entrega; entrega concluída zera. Hábitos: clientes/{wa}.dias.dN e horas.hN; optInMarketing gravado no pedido.
+Motoboy: até 3 entregas, ordem por vizinho mais próximo + urgência (35 min), setas e "cliente não atende" (/api/entrega/tentativa grava tentativaAusente), desvio máx. 2,5 km, GPS desligado sem entrega, acerto de caixa local (localStorage).

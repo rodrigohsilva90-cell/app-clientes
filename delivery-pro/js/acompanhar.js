@@ -74,10 +74,12 @@ export function iniciarAcompanhamento(pedidoId) {
     <a href="/${esc(AppState.slug)}" class="btn-outline-sm" style="text-decoration:none; display:inline-block; margin-bottom:12px;">← Voltar ao cardápio</a>
     <div class="card" id="acomp-status"><p>Carregando seu pedido...</p></div>
     <div class="card hidden acomp-chegando" id="acomp-chegando">🏁 <strong>O entregador está chegando ao seu endereço!</strong><span>Fique de olho no portão ou no interfone.</span></div>
+    <div class="card hidden acomp-tentativa" id="acomp-tentativa"></div>
     <div class="card hidden acomp-parada" id="acomp-parada"></div>
     <div class="card hidden" id="acomp-mapa-card">
       <strong>🛵 Entregador a caminho</strong>
       <p class="acomp-antes hidden" id="acomp-antes"></p>
+      <small class="acomp-atualizado" id="acomp-atualizado"></small>
       <div id="acomp-mapa" style="height:260px; border-radius:8px; margin-top:10px; z-index:1;"></div>
     </div>
     <div class="card hidden" id="acomp-push"></div>
@@ -331,11 +333,35 @@ function distanciaMetros(a, b) {
   return 2 * 6371000 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+let ultimaPosicaoEm = 0;
+let relogioPosicao = null;
+function desenharIdadePosicao() {
+  const el = document.getElementById('acomp-atualizado');
+  if (!el) { clearInterval(relogioPosicao); relogioPosicao = null; return; }
+  if (!ultimaPosicaoEm) { el.textContent = ''; return; }
+  const s = Math.max(0, Math.round((Date.now() - ultimaPosicaoEm) / 1000));
+  el.textContent = s < 60 ? `Posição atualizada há ${s} s` : `Posição atualizada há ${Math.round(s / 60)} min (o sinal do entregador pode estar fraco)`;
+}
+
 function renderMapa(p) {
   const card = document.getElementById('acomp-mapa-card');
   if (!card) return;
   const coords = p.motoboyCoords;
   const aviso = document.getElementById('acomp-chegando');
+  // O entregador passou e ninguém atendeu: avisa o cliente (ele volta depois das outras entregas)
+  const tent = document.getElementById('acomp-tentativa');
+  if (tent) {
+    const t = p.status === 'entrega' && p.tentativaAusente;
+    tent.classList.toggle('hidden', !t);
+    if (t) {
+      const hora = t.em && t.em.toDate ? t.em.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+      tent.innerHTML = `📵 <strong>O entregador passou aí${hora ? ` às ${hora}` : ''} e não conseguiu falar com você.</strong><span>Ele foi fazer outra entrega e volta em seguida. Fique de olho no portão e no telefone; a loja pode te ligar.</span>`;
+    }
+  }
+  // "Atualizado há X s": no celular, o GPS do entregador pode pausar quando ele abre o Google Maps/Waze
+  ultimaPosicaoEm = p.gpsAtualizadoEm && p.gpsAtualizadoEm.toMillis ? p.gpsAtualizadoEm.toMillis() : ultimaPosicaoEm;
+  if (!relogioPosicao) relogioPosicao = setInterval(desenharIdadePosicao, 5000);
+  desenharIdadePosicao();
   // Entregador fazendo outra entrega antes desta: não mostra onde ele está (privacidade do outro cliente)
   const parada = document.getElementById('acomp-parada');
   const emParada = p.status === 'entrega' && coords && !coords.chegou && Number(coords.antes) >= 1 && !Number.isFinite(coords.lat);

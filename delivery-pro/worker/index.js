@@ -88,6 +88,9 @@ export default {
       if (url.pathname === '/api/fidelidade/carimbar' && request.method === 'POST') {
         return carimbarPedido(request, env);
       }
+      if (url.pathname === '/api/entrega/tentativa' && request.method === 'POST') {
+        return tentativaEntrega(request, env);
+      }
       if (url.pathname === '/api/clientes' && request.method === 'POST') {
         return painelClientes(request, env);
       }
@@ -859,6 +862,34 @@ async function carimbarPedido(request, env) {
   }
 }
 
+// Motoboy chegou e o cliente não atendeu: registra a tentativa (hora + GPS) para o balcão ligar.
+// O pedido continua com ele (vai para o fim da rota); não conta como ausência até o balcão confirmar.
+async function tentativaEntrega(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const pedidoId = String(corpo.pedidoId || '');
+    if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId) || !/^[A-Za-z0-9_-]{6,100}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+    const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    let usuario;
+    try { usuario = await verificarTokenFirebase(token, conta.project_id); }
+    catch (_) { throw new ErroPedido('Sessão inválida. Entre de novo.', 401); }
+    const fs = await firestore(env);
+    const [entregador, p] = await Promise.all([fs.ler(`lojas/${lojaId}/entregadores/${usuario.sub}`), fs.ler(`lojas/${lojaId}/pedidos/${pedidoId}`)]);
+    if (!entregador || !p || p.motoboyId !== usuario.sub || p.status !== 'entrega') throw new ErroPedido('Sem permissão para este pedido.', 403);
+    const c = corpo.coords && Number.isFinite(Number(corpo.coords.lat)) && Number.isFinite(Number(corpo.coords.lng)) ? { lat: Number(corpo.coords.lat), lng: Number(corpo.coords.lng) } : null;
+    await fs.atualizar(`lojas/${lojaId}/pedidos/${pedidoId}`, { tentativaAusente: { em: new Date(), coords: c }, tentativasAusente: (Number(p.tentativasAusente) || 0) + 1 });
+    return jsonResponse({ ok: true });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('tentativaEntrega', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível registrar.' }, 500);
+  }
+}
+
 // Chave com o maior número num mapa de contagem ({ sex: 5, sab: 2 } → 'sex'); null se vazio
 function maiorChave(m) {
   if (!m || typeof m !== 'object') return null;
@@ -907,7 +938,7 @@ async function painelClientes(request, env) {
       const emAndamento = pedidos.filter(x => ['novo', 'preparo', 'entrega', 'aguardando_pagamento'].includes(x.status));
       if (emAndamento.length) throw new ErroPedido('Este cliente tem um pedido em andamento. Conclua antes de apagar os dados.', 409);
       // Pedidos continuam no histórico (valores), mas sem nome, telefone e endereço
-      await fs.atualizarVarios(pedidos.map(x => ({ caminho: `lojas/${lojaId}/pedidos/${x.id}`, dados: { clienteNome: 'Cliente anonimizado', clienteWhatsapp: '', enderecoTexto: x.tipoEntrega === 'entrega' ? 'Endereço removido (LGPD)' : (x.enderecoTexto || ''), destinoCoords: null, enderecoPartes: null, coordsBaixa: null, motoboyCoords: null, recebedorNome: null, recebedorWhats: null, anonimizadoEm: new Date() } })));
+      await fs.atualizarVarios(pedidos.map(x => ({ caminho: `lojas/${lojaId}/pedidos/${x.id}`, dados: { clienteNome: 'Cliente anonimizado', clienteWhatsapp: '', enderecoTexto: x.tipoEntrega === 'entrega' ? 'Endereço removido (LGPD)' : (x.enderecoTexto || ''), destinoCoords: null, enderecoPartes: null, coordsBaixa: null, motoboyCoords: null, recebedorNome: null, recebedorWhats: null, tentativaAusente: null, anonimizadoEm: new Date() } })));
       await fs.apagar([`lojas/${lojaId}/clientes/${wa}`, `lojas/${lojaId}/carrinhos/${wa}`]);
       return jsonResponse({ ok: true, pedidos: pedidos.length });
     }
