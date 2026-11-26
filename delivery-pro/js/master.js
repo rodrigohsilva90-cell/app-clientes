@@ -3,7 +3,7 @@
 import { auth, db, formatarCentavos, showToast, esc } from './config.js';
 import { statusAssinatura } from './plano.js';
 import { RAMOS, cardapioDoRamo, buscasDosModelos, BUSCA_FOTO, BUSCA_RAMO } from './importar-cardapio.js';
-import { doc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { doc, setDoc, getDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const DIA_MS = 24 * 60 * 60 * 1000;
 let lojas = [];
@@ -117,6 +117,8 @@ function render() {
   root.querySelector('#ms-config').onclick = abrirConfig;
   root.querySelector('#ms-criar-loja').onclick = abrirCriarLoja;
   root.querySelectorAll('[data-transferir]').forEach(b => b.onclick = () => abrirTransferir(lojas.find(l => l.id === b.dataset.transferir)));
+  root.querySelectorAll('[data-excluir]').forEach(b => b.onclick = () => abrirExcluir(lojas.find(l => l.id === b.dataset.excluir)));
+  root.querySelectorAll('[data-fotos]').forEach(b => b.onclick = () => colocarFotos(lojas.find(l => l.id === b.dataset.fotos), b));
   root.querySelectorAll('[data-acao]').forEach(b => b.onclick = () => executar(b.dataset.loja, b.dataset.acao, b.dataset.dias));
 }
 
@@ -148,11 +150,12 @@ function cartao({ l, ass, st, parada, vencendo }) {
       <div class="ms-acoes">
         ${zap ? `<a class="btn-outline-sm" href="https://wa.me/55${esc(zap.replace(/^55/, ''))}" target="_blank" rel="noopener">💬 WhatsApp</a>` : ''}
         ${l.slug ? `<a class="btn-outline-sm" href="/demo?loja=${esc(l.slug)}" target="_blank" rel="noopener" title="Simular uma entrega saindo desta loja">🎬 Simular entrega</a>` : ''}
-        ${l.demo ? `<a class="btn-outline-sm" href="/${esc(l.slug || '')}/painel" target="_blank" rel="noopener">🛠 Montar loja</a><button class="btn-primary" style="width:auto; font-size:13px; padding:6px 12px;" data-transferir="${esc(l.id)}">🤝 Entregar ao cliente</button>` : ''}
+        ${l.demo ? `<a class="btn-outline-sm" href="/${esc(l.slug || '')}/painel" target="_blank" rel="noopener">🛠 Montar loja</a><button class="btn-primary" style="width:auto; font-size:13px; padding:6px 12px;" data-transferir="${esc(l.id)}">🤝 Entregar ao cliente</button><button class="btn-outline-sm" data-fotos="${esc(l.id)}">📷 Colocar fotos</button>` : ''}
         <button class="btn-outline-sm" data-loja="${esc(l.id)}" data-acao="teste" data-dias="7">+7 dias de teste</button>
         <button class="btn-outline-sm" data-loja="${esc(l.id)}" data-acao="essencial" data-dias="30">Essencial 30 dias</button>
         <button class="btn-outline-sm" data-loja="${esc(l.id)}" data-acao="pro" data-dias="30">Pro 30 dias</button>
         ${ass.plano !== 'bloqueada' ? `<button class="btn-outline-sm gc-perigo" data-loja="${esc(l.id)}" data-acao="bloqueada">Bloquear</button>` : ''}
+        <button class="btn-outline-sm gc-perigo" data-excluir="${esc(l.id)}">🗑 Excluir loja</button>
       </div>
     </div>`;
 }
@@ -452,7 +455,10 @@ async function desenharFotosModelos(box) {
     <div class="ms-fotos-barra"><div style="width:${Math.round((prontas.length / todas.length) * 100)}%"></div></div>
     <p class="gc-dica"><strong>${comFoto} de ${todas.length}</strong> fotos prontas. ${faltam.length ? 'O Unsplash grátis libera cerca de 50 buscas por hora: toque abaixo, e se pedir para esperar, volte em 1 hora.' : '✅ Todas as fotos estão prontas! As próximas lojas de demonstração já nascem com fotos.'}</p>
     ${faltam.length ? '<button class="btn-outline-sm" type="button" id="ms-buscar-fotos">📷 Buscar fotos agora</button>' : ''}
+    ${comFoto ? '<button class="btn-outline-sm" type="button" id="ms-ver-fotos">👀 Ver as fotos por ramo e categoria</button>' : ''}
     <p class="gc-dica" style="font-size:12px;">Fotos gratuitas do <a href="https://unsplash.com/?utm_source=delivery_pro&utm_medium=referral" target="_blank" rel="noopener">Unsplash</a>, com crédito ao fotógrafo no cardápio.</p>`;
+  const ver = box.querySelector('#ms-ver-fotos');
+  if (ver) ver.onclick = () => abrirGaleria(r.fotos);
   const btn = box.querySelector('#ms-buscar-fotos');
   if (btn) btn.onclick = async () => {
     btn.disabled = true; btn.textContent = 'Buscando fotos... (até 1 minuto)';
@@ -461,5 +467,104 @@ async function desenharFotosModelos(box) {
       showToast(res.limite ? `+${res.feitas} fotos. O Unsplash pediu uma pausa: volte em 1 hora para continuar.` : `+${res.feitas} fotos prontas!`, 6000);
     } catch (err) { showToast(err.message, 6000); }
     desenharFotosModelos(box);
+  };
+}
+
+// Galeria: mostra em qual ramo e categoria cada foto do banco vai entrar
+function abrirGaleria(banco) {
+  const fotos = fotosProntas(banco, 'w=200&h=200');
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  const mini = (f, legenda, largo) => `<figure class="ms-gal-item${largo ? ' largo' : ''}">${f ? `<img src="${esc(f.url)}" alt="" loading="lazy" />` : '<span>sem foto ainda</span>'}<figcaption>${esc(legenda)}</figcaption></figure>`;
+  overlay.innerHTML = `
+    <div class="card gc-form" style="max-width:720px; width:100%; margin:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>📷 Fotos dos modelos</h3><button class="btn-outline-sm" type="button" data-fechar>✕</button>
+      </div>
+      <p class="gc-dica">Estas fotos entram sozinhas nas lojas de demonstração: ao <strong>criar</strong> uma loja nova, ou tocando em <strong>📷 Colocar fotos</strong> numa loja de demonstração que já existe.</p>
+      ${Object.keys(BUSCA_RAMO).map(ramo => {
+        const c = cardapioDoRamo(ramo, fotos);
+        if (!c) return '';
+        return `<details class="ms-gal-ramo"><summary><strong>${esc(RAMOS[ramo] ? RAMOS[ramo].nome : ramo)}</strong> <span class="gc-dica">${c.produtos.filter(p => p.imagemUrl).length} de ${c.produtos.length} produtos com foto</span></summary>
+          <div class="ms-gal-grade">${mini(fotos[BUSCA_RAMO[ramo].capa], 'Capa', true)}${mini(fotos[BUSCA_RAMO[ramo].logo], 'Logo')}</div>
+          ${c.categorias.map(cat => `<h4 class="gc-subtitulo">${esc(cat.nome)}</h4><div class="ms-gal-grade">${c.produtos.filter(p => p.categoriaId === cat.id).map(p => mini(p.imagemUrl ? { url: p.imagemUrl } : null, p.nome)).join('')}</div>`).join('')}
+        </details>`;
+      }).join('')}
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+}
+
+// Coloca as fotos do banco numa loja de demonstração que já existe (só onde não tem foto)
+async function colocarFotos(loja, btn) {
+  if (!loja) return;
+  if (!loja.ramo || !BUSCA_RAMO[loja.ramo]) { showToast('Esta loja não tem ramo de modelo, então não sei quais fotos usar.', 6000); return; }
+  btn.disabled = true; btn.textContent = 'Colocando fotos...';
+  try {
+    const banco = (await api({ acao: 'lerFotos' })).fotos || {};
+    const fotos = fotosProntas(banco, 'w=600&h=600');
+    if (!Object.keys(fotos).length) throw new Error('O banco de fotos está vazio. Vá em ⚙ Configurações → Buscar fotos.');
+    const ref = doc(db, 'lojas', loja.id, 'publico', 'cardapio_completo');
+    const snap = await getDoc(ref);
+    let novas = 0;
+    const downloads = [];
+    if (snap.exists()) {
+      const c = snap.data();
+      (c.produtos || []).forEach(p => {
+        const termo = BUSCA_FOTO[p.nome];
+        if (p.imagemUrl || !termo || !fotos[termo]) return;
+        p.imagemUrl = fotos[termo].url;
+        p.imagemCredito = { autor: fotos[termo].autor, link: fotos[termo].link };
+        if (banco[termo].download) downloads.push(banco[termo].download);
+        novas++;
+      });
+      if (novas) await setDoc(ref, { ...c, atualizadoEm: serverTimestamp() });
+    }
+    const capa = banco[BUSCA_RAMO[loja.ramo].capa], logo = banco[BUSCA_RAMO[loja.ramo].logo];
+    [capa, logo].forEach(x => { if (x && x.download) downloads.push(x.download); });
+    const r = await api({
+      acao: 'fotosLojaDemo', lojaId: loja.id, downloads,
+      bannerUrl: capa && capa.raw ? `${capa.raw}&w=1400&h=560&fit=crop&q=70&auto=format` : null,
+      logoUrl: logo && logo.raw ? `${logo.raw}&w=300&h=300&fit=crop&q=75&auto=format` : null
+    });
+    showToast(`✅ ${novas} foto(s) de produto${r.capa ? ', capa' : ''}${r.logo ? ' e logo' : ''} colocadas. Abra o cardápio para ver.`, 6000);
+  } catch (err) { showToast(err.message, 6000); }
+  btn.disabled = false; btn.textContent = '📷 Colocar fotos';
+}
+
+// Exclui a loja de vez (pede para digitar o endereço, para não apagar sem querer)
+function abrirExcluir(loja) {
+  if (!loja) return;
+  const alvo = loja.slug || loja.nome;
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  overlay.innerHTML = `
+    <form class="card gc-form" style="max-width:420px; width:100%; margin:0;" novalidate>
+      <h3>🗑 Excluir "${esc(loja.nome)}"</h3>
+      <p>Isso apaga <strong>de vez</strong> a loja: cardápio, pedidos, equipe, fotos e o endereço <strong>/${esc(loja.slug || '')}</strong>. <strong>Não tem como desfazer.</strong></p>
+      ${loja.demo ? '' : '<div class="pedido-aviso">⚠ Esta loja já pertence a um cliente. O dono perde o acesso ao cardápio e ao painel.</div>'}
+      <label>Para confirmar, digite: <strong>${esc(alvo)}</strong></label>
+      <input name="conf" autocomplete="off" autocapitalize="none" />
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button class="btn-outline-sm" type="button" data-fechar>Cancelar</button>
+        <button class="btn-primary gc-perigo" type="submit" style="width:auto; background:#dc2626; border-color:#dc2626;">Excluir de vez</button>
+      </div>
+    </form>`;
+  document.body.appendChild(overlay);
+  const f = overlay.querySelector('form');
+  overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    if (f.conf.value.trim().toLowerCase() !== String(alvo).toLowerCase()) { showToast('O texto não confere. Digite exatamente: ' + alvo, 5000); return; }
+    const btn = f.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Excluindo...';
+    try {
+      await api({ acao: 'excluirLoja', lojaId: loja.id, confirmar: f.conf.value.trim() });
+      lojas = lojas.filter(l => l.id !== loja.id);
+      overlay.remove();
+      showToast('Loja excluída.');
+      render();
+    } catch (err) { showToast(err.message, 6000); btn.disabled = false; btn.textContent = 'Excluir de vez'; }
   };
 }

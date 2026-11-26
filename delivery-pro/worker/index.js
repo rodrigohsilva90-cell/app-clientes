@@ -1798,6 +1798,68 @@ async function painelMaster(request, env) {
       return jsonResponse({ ok: true, lojaId, slug });
     }
 
+    // Coloca capa e logo (fotos do Unsplash) numa loja de demonstração que já existe
+    if (corpo.acao === 'fotosLojaDemo') {
+      const lojaId = String(corpo.lojaId || '');
+      if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId)) throw new ErroPedido('Loja inválida.');
+      const loja = await fs.ler(`lojas/${lojaId}`);
+      if (!loja) throw new ErroPedido('Loja não encontrada.', 404);
+      if (!loja.demo) throw new ErroPedido('Só dá para colocar as fotos de exemplo em lojas de demonstração.');
+      const unsplash = (u) => /^https:\/\/images\.unsplash\.com\/\S+$/.test(u || '');
+      const mudar = {};
+      if (unsplash(corpo.bannerUrl) && (!loja.bannerUrl || unsplash(loja.bannerUrl))) mudar.bannerUrl = corpo.bannerUrl;
+      if (unsplash(corpo.logoUrl) && (!loja.logoUrl || unsplash(loja.logoUrl))) mudar.logoUrl = corpo.logoUrl;
+      if (Object.keys(mudar).length) await fs.atualizar(`lojas/${lojaId}`, mudar);
+      if (env.UNSPLASH_ACCESS_KEY && Array.isArray(corpo.downloads)) {
+        const urls = [...new Set(corpo.downloads.map(String))].filter(u => /^https:\/\/api\.unsplash\.com\/photos\/[A-Za-z0-9_-]+\/download(\?\S*)?$/.test(u)).slice(0, 30);
+        await Promise.all(urls.map(u => fetch(u, { headers: { Authorization: `Client-ID ${env.UNSPLASH_ACCESS_KEY}` } }).catch(() => null)));
+      }
+      cacheLojas.clear();
+      return jsonResponse({ ok: true, capa: Boolean(mudar.bannerUrl), logo: Boolean(mudar.logoUrl) });
+    }
+
+    // Exclui uma loja de vez: cardápio, pedidos, equipe, endereço e fotos. Não tem volta.
+    // Para confirmar, o Master digita o endereço (slug) da loja.
+    if (corpo.acao === 'excluirLoja') {
+      const lojaId = String(corpo.lojaId || '');
+      if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId)) throw new ErroPedido('Loja inválida.');
+      const loja = await fs.ler(`lojas/${lojaId}`);
+      if (!loja) throw new ErroPedido('Loja não encontrada.', 404);
+      let slug = loja.slug || null;
+      if (!slug) { const s = (await fs.listar('slugs')).find(x => x.lojaId === lojaId); if (s) slug = s.id; }
+      const confirmar = String(corpo.confirmar || '').trim().toLowerCase();
+      if (confirmar !== String(slug || loja.nome || '').toLowerCase()) throw new ErroPedido('Confirmação não confere. Digite exatamente o endereço da loja.');
+      const caminhos = [];
+      const pessoas = new Set();
+      for (const sub of ['equipe', 'entregadores', 'pedidos', 'publico', 'turnos', 'segredos', 'carrinhos', 'pushPedidos']) {
+        const docs = await fs.listar(`lojas/${lojaId}/${sub}`);
+        docs.forEach(d => { caminhos.push(`lojas/${lojaId}/${sub}/${d.id}`); if (sub === 'equipe' || sub === 'entregadores') pessoas.add(d.id); });
+      }
+      // Perfil de quem trabalhava só nesta loja deixa de apontar para ela
+      for (const uid of pessoas) {
+        if (uid === usuario.sub) continue;
+        const perfil = await fs.ler(`usuarios/${uid}`);
+        if (perfil && perfil.lojaId === lojaId) caminhos.push(`usuarios/${uid}`);
+      }
+      if (slug) caminhos.push(`slugs/${slug}`);
+      caminhos.push(`lojas/${lojaId}`);
+      for (let i = 0; i < caminhos.length; i += 400) await fs.apagar(caminhos.slice(i, i + 400));
+      // Fotos enviadas pela loja (KV)
+      if (env.FOTOS) {
+        try {
+          let cursor;
+          for (let i = 0; i < 10; i++) {
+            const lista = await env.FOTOS.list({ prefix: `${lojaId}/`, cursor });
+            await Promise.all(lista.keys.map(k => env.FOTOS.delete(k.name)));
+            if (lista.list_complete) break;
+            cursor = lista.cursor;
+          }
+        } catch (_) {}
+      }
+      cacheLojas.clear();
+      return jsonResponse({ ok: true, apagados: caminhos.length });
+    }
+
     // Entrega a loja de demonstração ao cliente: cria (ou usa) o login dele, passa a ser o dono
     // e o teste grátis de 7 dias começa agora. O Master sai da equipe da loja.
     if (corpo.acao === 'transferirLoja') {
