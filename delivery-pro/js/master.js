@@ -365,7 +365,7 @@ function abrirCriarLoja() {
       const link = `${window.location.origin}/${res.slug}`;
       f.innerHTML = `
         <h3>✅ Loja criada!</h3>
-        <p class="gc-dica">A vitrine já está no ar com o cardápio de ${esc(r.nome)}. Antes da visita, abra "Montar loja" para colocar o logo (🎨 Aparência), ajustar preços e fotos e, se quiser, o endereço da loja (🛵 Entrega e frete).</p>
+        <p class="gc-dica">A vitrine já está no ar com o cardápio de ${esc(r.nome)}. Antes da visita, abra "Montar loja" e toque em ⚙ Configurações para colocar o logo (🎨 Aparência), ajustar preços e fotos e, se quiser, o endereço da loja (🛵 Entrega e frete).</p>
         <div class="ms-links">
           <a class="btn-primary" style="text-decoration:none; text-align:center;" href="/${esc(res.slug)}" target="_blank" rel="noopener">👀 Ver cardápio</a>
           <a class="btn-outline-sm" style="text-decoration:none; text-align:center;" href="/${esc(res.slug)}/painel" target="_blank" rel="noopener">🛠 Montar loja (logo, preços, fotos)</a>

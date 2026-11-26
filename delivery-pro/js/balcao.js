@@ -63,17 +63,7 @@ export async function iniciarBalcao() {
         <button id="btn-som" class="btn-outline-sm">🔊 Ativar campainha</button>
         <button id="btn-pausa" class="btn-outline-sm">⏸ Pausar pedidos</button>
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
-        <button id="btn-carrinhos" class="btn-outline-sm">🛒 Carrinhos abandonados</button>
-        ${ehDono ? `
-          <button id="btn-gerenciar-cardapio" class="btn-outline-sm">🍕 Gerenciar cardápio</button>
-          <button id="btn-config-entrega" class="btn-outline-sm">🛵 Entrega e frete</button>
-          <button id="btn-equipe" class="btn-outline-sm">👥 Equipe</button>
-          <button id="btn-horarios" class="btn-outline-sm">🕒 Horários</button>
-          <button id="btn-aparencia" class="btn-outline-sm">🎨 Aparência</button>
-          <button id="btn-avaliacoes" class="btn-outline-sm">⭐ Avaliações</button>
-          <button id="btn-pix" class="btn-outline-sm">💳 Pix automático</button>
-          <button id="btn-importar-cardapio" class="btn-outline-sm">📥 Importar cardápio</button>
-        ` : ''}
+        ${ehDono ? '<button id="btn-config" class="btn-outline-sm btn-config-loja">⚙ Configurações</button>' : '<button id="btn-carrinhos" class="btn-outline-sm">🛒 Carrinhos abandonados</button>'}
       </div>
     </div>
 
@@ -103,17 +93,8 @@ export async function iniciarBalcao() {
 
   document.getElementById('btn-som').onclick = ativarSomEWakeLock;
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
-  document.getElementById('btn-carrinhos').onclick = abrirCarrinhos;
-  if (ehDono) {
-    document.getElementById('btn-importar-cardapio').onclick = abrirImportarCardapio;
-    document.getElementById('btn-gerenciar-cardapio').onclick = abrirGestaoCardapio;
-    document.getElementById('btn-config-entrega').onclick = abrirConfigEntrega;
-    document.getElementById('btn-equipe').onclick = abrirEquipe;
-    document.getElementById('btn-horarios').onclick = abrirConfigHorarios;
-    document.getElementById('btn-aparencia').onclick = abrirConfigAparencia;
-    document.getElementById('btn-avaliacoes').onclick = abrirAvaliacoes;
-    document.getElementById('btn-pix').onclick = abrirConfigPix;
-  }
+  if (ehDono) document.getElementById('btn-config').onclick = abrirMenuConfig;
+  else document.getElementById('btn-carrinhos').onclick = abrirCarrinhos;
 
   document.getElementById('btn-pausa').onclick = () => pausarPedidos(!estadoCaixa.pausada);
   document.addEventListener('loja-atualizada', atualizarStatusLoja);
@@ -731,5 +712,63 @@ async function despacharParaEntregador(p) {
         showToast('Erro ao despachar o pedido.');
       }
     };
+  });
+}
+
+// ===================== Menu único de configurações do dono =====================
+// Tudo o que é ajuste da loja fica aqui, separado por assunto, para o painel ter poucos botões.
+const MENU_CONFIG = [
+  { titulo: '🍕 Cardápio', itens: [
+    { icone: '🍕', nome: 'Produtos e preços', dica: 'Adicionar, editar, fotos, ofertas e estoque', abrir: () => abrirGestaoCardapio() },
+    { icone: '📥', nome: 'Importar cardápio', dica: 'Modelo pronto do seu ramo ou planilha', abrir: () => abrirImportarCardapio() }
+  ] },
+  { titulo: '🏪 Página da loja', itens: [
+    { icone: '🎨', nome: 'Aparência', dica: 'Logo, capa, cores e descrição', abrir: () => abrirConfigAparencia() },
+    { icone: '🕒', nome: 'Horários', dica: 'Dias e horas de funcionamento', abrir: () => abrirConfigHorarios() },
+    { icone: '🛵', nome: 'Entrega e frete', dica: 'Endereço da loja, taxas e áreas', abrir: () => abrirConfigEntrega() },
+    { icone: '💳', nome: 'Pix automático', dica: 'Receber pelo Mercado Pago', abrir: () => abrirConfigPix() }
+  ] },
+  { titulo: '👥 Equipe', itens: [
+    { icone: '👥', nome: 'Equipe e entregadores', dica: 'Balcão, cozinha e motoboys', abrir: () => abrirEquipe() }
+  ] },
+  { titulo: '📈 Clientes e vendas', itens: [
+    { icone: '⭐', nome: 'Avaliações', dica: 'O que os clientes acharam', abrir: () => abrirAvaliacoes() },
+    { icone: '🛒', nome: 'Carrinhos abandonados', dica: 'Quem desistiu no meio do pedido', abrir: () => abrirCarrinhos() }
+  ] }
+];
+
+function abrirMenuConfig() {
+  const slug = AppState.lojaDados.slug || AppState.slug || '';
+  const linkLoja = `${window.location.origin}/${slug}`;
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  overlay.innerHTML = `
+    <div class="card gc-form cfg-menu" style="max-width:520px; width:100%; margin:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>⚙ Configurações da loja</h3><button class="btn-outline-sm" type="button" data-fechar>✕</button>
+      </div>
+      <div class="cfg-link">
+        <span>🔗 Link da sua loja</span>
+        <a href="${esc(linkLoja)}" target="_blank" rel="noopener">${esc(linkLoja.replace(/^https?:\/\//, ''))}</a>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="btn-outline-sm" type="button" data-copiar>📋 Copiar link</button>
+          <a class="btn-outline-sm" href="${esc(linkLoja)}" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">👀 Ver como o cliente vê</a>
+        </div>
+      </div>
+      ${MENU_CONFIG.map((g, gi) => `
+        <h4 class="gc-subtitulo">${g.titulo}</h4>
+        <div class="cfg-grade">
+          ${g.itens.map((it, ii) => `<button type="button" class="cfg-item" data-g="${gi}" data-i="${ii}"><span class="cfg-icone">${it.icone}</span><span><strong>${esc(it.nome)}</strong><small>${esc(it.dica)}</small></span></button>`).join('')}
+        </div>`).join('')}
+    </div>`;
+  document.body.appendChild(overlay);
+  const fechar = () => overlay.remove();
+  overlay.querySelector('[data-fechar]').onclick = fechar;
+  overlay.onclick = (e) => { if (e.target === overlay) fechar(); };
+  overlay.querySelector('[data-copiar]').onclick = async () => {
+    try { await navigator.clipboard.writeText(linkLoja); showToast('Link copiado!'); } catch (_) { showToast(linkLoja, 6000); }
+  };
+  overlay.querySelectorAll('.cfg-item').forEach(b => {
+    b.onclick = () => { fechar(); MENU_CONFIG[b.dataset.g].itens[b.dataset.i].abrir(); };
   });
 }

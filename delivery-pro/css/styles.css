@@ -430,3 +430,14 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .ms-gal-item img, .ms-gal-item span { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: var(--border); display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--text-muted); text-align: center; }
 .ms-gal-item.largo img, .ms-gal-item.largo span { aspect-ratio: 2.1; }
 .ms-gal-item figcaption { font-size: 11px; line-height: 1.2; color: var(--text-muted); }
+.btn-config-loja { font-weight: 700; }
+.cfg-menu { max-height: 90vh; overflow-y: auto; }
+.cfg-link { display: flex; flex-direction: column; gap: 6px; background: #f9fafb; border: 1px solid var(--border); border-radius: 12px; padding: 10px; margin: 8px 0 4px; }
+.cfg-link > span { font-size: 13px; color: var(--text-muted); }
+.cfg-link a:not(.btn-outline-sm) { font-weight: 700; word-break: break-all; }
+.cfg-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.cfg-item { display: flex; gap: 10px; align-items: center; text-align: left; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface, #fff); font: inherit; color: inherit; cursor: pointer; min-height: 64px; }
+.cfg-item:hover, .cfg-item:focus-visible { border-color: var(--primary); }
+.cfg-icone { font-size: 24px; flex-shrink: 0; }
+.cfg-item strong { display: block; }
+.cfg-item small { display: block; font-size: 12px; color: var(--text-muted); line-height: 1.3; }

@@ -48,7 +48,7 @@ export async function abrirGestaoCardapio() {
   overlay.innerHTML = `
     <div class="gc-janela">
       <header class="gc-topo">
-        <h3>🍕 Gerenciar cardápio</h3>
+        <h3>🍕 Produtos e preços</h3>
         <div style="display:flex; gap:8px; align-items:center;">
           <span id="gc-status" class="gc-status"></span>
           <button class="btn-primary" id="gc-salvar" style="width:auto;">💾 Salvar</button>

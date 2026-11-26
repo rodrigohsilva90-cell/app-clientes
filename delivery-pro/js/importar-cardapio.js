@@ -1,5 +1,5 @@
 // Ativação relâmpago: importa um cardápio pronto por segmento ou uma planilha CSV.
-// Os preços dos modelos são só sugestões — o dono ajusta depois em "Gerenciar cardápio".
+// Os preços dos modelos são só sugestões — o dono ajusta depois em "⚙ Configurações → Produtos e preços".
 import { db, showToast, esc, formatarCentavos } from './config.js';
 import { AppState } from './router.js';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
@@ -292,7 +292,7 @@ export function abrirImportarCardapio() {
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
         <h3>📥 Importar cardápio</h3><button class="btn-outline-sm" type="button" data-fechar>✕</button>
       </div>
-      <p class="gc-dica">Comece em 1 minuto: escolha um modelo pronto do seu ramo ou envie uma planilha. Depois é só ajustar preços e fotos em "Gerenciar cardápio".</p>
+      <p class="gc-dica">Comece em 1 minuto: escolha um modelo pronto do seu ramo ou envie uma planilha. Depois é só ajustar preços e fotos em "⚙ Configurações → Produtos e preços".</p>
 
       <h4 class="gc-subtitulo">1. Modelo pronto</h4>
       <div class="imp-modelos">
@@ -383,7 +383,7 @@ export function abrirImportarCardapio() {
         AppState.lojaDados.layoutVitrine = escolhido.layout;
       }
       overlay.remove();
-      showToast(`✅ ${escolhido.produtos.length} produtos importados! Ajuste preços e fotos em "Gerenciar cardápio".`, 6000);
+      showToast(`✅ ${escolhido.produtos.length} produtos importados! Ajuste preços e fotos em "⚙ Configurações → Produtos e preços".`, 6000);
     } catch (err) {
       console.error(err);
       showToast(err.code === 'permission-denied' ? 'Só o dono pode importar o cardápio.' : (err.message || 'Erro ao importar.'), 6000);
