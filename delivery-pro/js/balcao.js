@@ -15,6 +15,7 @@ import { abrirCarrinhos } from './carrinhos.js';
 import { abrirConfigPix } from './config-pix.js';
 import { abrirImportarCardapio } from './importar-cardapio.js';
 import { pedirAceiteTermos } from './termos.js';
+import { abrirRelatorios } from './relatorios.js';
 import { avisarCliente } from './notificar.js';
 import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
@@ -731,7 +732,8 @@ const MENU_CONFIG = [
   { titulo: '👥 Equipe', itens: [
     { icone: '👥', nome: 'Equipe e entregadores', dica: 'Balcão, cozinha e motoboys', abrir: () => abrirEquipe() }
   ] },
-  { titulo: '📈 Clientes e vendas', itens: [
+  { titulo: '📈 Vendas e clientes', itens: [
+    { icone: '📊', nome: 'Relatórios', dica: 'Faturamento, mais vendidos, horário de pico', abrir: () => abrirRelatorios() },
     { icone: '⭐', nome: 'Avaliações', dica: 'O que os clientes acharam', abrir: () => abrirAvaliacoes() },
     { icone: '🛒', nome: 'Carrinhos abandonados', dica: 'Quem desistiu no meio do pedido', abrir: () => abrirCarrinhos() }
   ] }

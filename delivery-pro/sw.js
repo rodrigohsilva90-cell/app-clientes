@@ -1,4 +1,4 @@
-const CACHE_NAME = 'delivery-pro-v32';
+const CACHE_NAME = 'delivery-pro-v33';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -32,7 +32,8 @@ const STATIC_ASSETS = [
   '/js/config-pix.js',
   '/js/termos.js',
   '/js/demo.js',
-  '/js/importar-cardapio.js'
+  '/js/importar-cardapio.js',
+  '/js/relatorios.js'
 ];
 
 self.addEventListener('install', (event) => {
