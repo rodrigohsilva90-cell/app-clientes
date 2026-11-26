@@ -277,7 +277,7 @@ function renderizarConcluidos() {
   const ok = concluidosHoje.filter(p => p.status === 'concluido');
   const total = ok.reduce((a, p) => a + (Number(p.totalCentavos) || 0), 0);
   col.innerHTML = `
-    <div class="card conc-resumo"><span>${ok.length} pedido(s) hoje</span><strong>${formatarCentavos(total)}</strong></div>
+    <div class="card conc-resumo"><span>${ok.length} pedido(s) hoje</span>${papel === 'dono' ? `<strong>${formatarCentavos(total)}</strong>` : ''}</div>
     ${concluidosHoje.slice(0, 30).map(p => `
       <div class="card conc-item${p.status === 'ocorrencia' ? ' ocorrencia' : ''}">
         <div><strong>#${esc(p.numeroPedido || p.id.slice(0, 4))}</strong> · ${esc(String(p.clienteNome || '').split(/\s+/)[0])}
@@ -378,6 +378,7 @@ function criarCardPedidoBalcao(p) {
     ${p.status === 'entrega' && linkAvisoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin-bottom:8px;" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>` : ''}
     ${botaoAcao}
     ${p.tipoEntrega === 'entrega' && ['preparo', 'entrega'].includes(p.status) ? '<button class="btn-outline-sm" type="button" data-resumo style="width:100%; margin-top:6px;">📋 Copiar resumo para motoboy avulso</button>' : ''}
+    ${p.status === 'preparo' ? '<button class="btn-outline-sm gc-perigo" type="button" data-cancelar-aceito style="width:100%; margin-top:6px;">✖ Cancelar pedido</button>' : ''}
     ${p.status === 'entrega' ? '<button class="btn-outline-sm gc-perigo" type="button" data-cancelar-rota style="width:100%; margin-top:6px;">✖ Cancelar entrega em rota</button>' : ''}
     ${p.tipoEntrega === 'entrega' && ['novo', 'preparo'].includes(p.status) ? '<button class="btn-outline-sm" type="button" data-converter style="width:100%; margin-top:6px;">🔄 Sem entregador? Converter para retirada</button>' : ''}
   `;
@@ -386,6 +387,7 @@ function criarCardPedidoBalcao(p) {
   div.querySelector('[data-resumo]')?.addEventListener('click', () => copiarResumoAvulso(p));
   div.querySelector('[data-converter]')?.addEventListener('click', () => converterParaRetirada(p));
   div.querySelector('[data-cancelar-rota]')?.addEventListener('click', () => cancelarEmRota(p));
+  div.querySelector('[data-cancelar-aceito]')?.addEventListener('click', () => cancelarAceito(p));
   div.querySelector('[data-avisar]')?.addEventListener('click', () => marcarAvisado(p));
   div.querySelector('[data-recusar]')?.addEventListener('click', async () => {
     const motivo = prompt('Motivo da recusa (o cliente verá que o pedido foi cancelado):', 'Loja sem condições de atender agora');
@@ -820,6 +822,7 @@ const MENU_CONFIG = [
   { titulo: '👥 Equipe', itens: [
     { icone: '👥', nome: 'Equipe e entregadores', dica: 'Balcão, cozinha e motoboys', abrir: () => abrirEquipe() },
     { icone: '🛵', nome: 'Repasse dos motoboys', dica: 'Diária, valor por entrega, chuva e meta', abrir: () => abrirConfigRepasse() },
+    { icone: '🔐', nome: 'PIN do dono', dica: 'Funcionário só cancela pedido com seu PIN', abrir: () => abrirConfigPin() },
     { icone: '💰', nome: 'Acerto dos motoboys', dica: 'Fechar o turno e ver quanto pagar', abrir: () => abrirAcertos() }
   ] },
   { titulo: '📈 Vendas e clientes', itens: [
@@ -916,6 +919,7 @@ async function converterParaRetirada(p) {
   const frete = Number(p.freteCentavos) || 0;
   const pagoPix = p.pagamentoStatus === 'aprovado';
   if (!confirm(`Converter o pedido #${p.numeroPedido || ''} para RETIRADA no balcão?\n\nA taxa de entrega (${formatarCentavos(frete)}) sai do total.${pagoPix && frete ? ' Como já foi pago no Pix, devolva a taxa ao cliente pelo Pix.' : ''}`)) return;
+  if (frete && !(await pedirPinDono('tirar a taxa de entrega do pedido'))) return;
   try {
     await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
       tipoEntrega: 'retirada', freteCentavos: 0, totalCentavos: Math.max(0, (Number(p.totalCentavos) || 0) - frete),
@@ -1013,6 +1017,7 @@ function cancelarEmRota(p) {
   overlay.querySelectorAll('[data-manter]').forEach(b => {
     b.onclick = async () => {
       const manter = b.dataset.manter === '1' && Boolean(p.motoboyId);
+      if (!(await pedirPinDono('cancelar um pedido em rota'))) return;
       try {
         await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
           status: 'cancelado', canceladoEmRota: true, canceladoEm: serverTimestamp(), atualizadoEm: serverTimestamp(),
@@ -1024,4 +1029,92 @@ function cancelarEmRota(p) {
       } catch (err) { console.error(err); showToast('Não foi possível cancelar.'); }
     };
   });
+}
+
+
+// ===================== PIN do dono =====================
+// Funcionário do balcão: cancelar pedido aceito ou mexer no valor exige o PIN de 4 dígitos do dono.
+// O dono logado não precisa digitar. O PIN é conferido no servidor (o app nunca vê o PIN guardado).
+async function apiPin(corpo) {
+  const u = auth.currentUser;
+  const r = await fetch('/api/pin', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await u.getIdToken()}` }, body: JSON.stringify({ lojaId: AppState.lojaId, ...corpo }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.erro || 'Não foi possível conferir o PIN.');
+  return d;
+}
+
+function pedirPinDono(acao) {
+  if (papel === 'dono') return Promise.resolve(true);
+  return new Promise((resolver) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'gc-overlay';
+    overlay.innerHTML = `
+      <form class="card" style="max-width:340px; width:100%; margin:0; text-align:center;" novalidate>
+        <h3>🔐 PIN do dono</h3>
+        <p class="gc-dica" style="margin:6px 0 10px;">Para ${esc(acao)}, peça ao dono digitar o PIN.</p>
+        <input name="pin" type="password" inputmode="numeric" maxlength="4" autocomplete="off" class="pin-campo" placeholder="••••" />
+        <p class="gc-dica" id="pin-erro" style="color:var(--danger); min-height:18px;"></p>
+        <button class="btn-primary" type="submit">Confirmar</button>
+        <button class="btn-outline-sm" type="button" data-fechar style="width:100%; margin-top:8px;">Cancelar</button>
+      </form>`;
+    document.body.appendChild(overlay);
+    const f = overlay.querySelector('form');
+    const fim = (ok) => { overlay.remove(); resolver(ok); };
+    f.pin.focus();
+    overlay.querySelector('[data-fechar]').onclick = () => fim(false);
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = f.querySelector('button[type="submit"]');
+      btn.disabled = true;
+      try { await apiPin({ acao: 'verificar', pin: f.pin.value.trim() }); fim(true); }
+      catch (err) { overlay.querySelector('#pin-erro').textContent = err.message; f.pin.value = ''; f.pin.focus(); btn.disabled = false; }
+    };
+  });
+}
+
+// Dono: criar ou trocar o PIN
+async function abrirConfigPin() {
+  let temPin = false;
+  try { temPin = (await apiPin({ acao: 'status' })).temPin; } catch (_) {}
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  overlay.innerHTML = `
+    <form class="card gc-form" style="max-width:380px; width:100%; margin:0;" novalidate>
+      <div style="display:flex; justify-content:space-between; align-items:center;"><h3>🔐 PIN do dono</h3><button class="btn-outline-sm" type="button" data-fechar>✕</button></div>
+      <p class="gc-dica">${temPin ? '✅ Sua loja já tem PIN. Digite um novo para trocar.' : 'Crie um PIN de 4 números.'} O funcionário do balcão vai precisar dele para <strong>cancelar um pedido já aceito</strong> ou <strong>tirar a taxa de entrega</strong>. Você, logado como dono, não precisa digitar.</p>
+      <label>Novo PIN (4 números)</label>
+      <input name="pin" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" class="pin-campo" />
+      <label>Repita o PIN</label>
+      <input name="pin2" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" class="pin-campo" />
+      <p class="gc-dica">Não use datas fáceis como 1234 ou o ano de nascimento.</p>
+      <button class="btn-primary" type="submit">💾 Salvar PIN</button>
+    </form>`;
+  document.body.appendChild(overlay);
+  const f = overlay.querySelector('form');
+  overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const pin = f.pin.value.trim();
+    if (!/^\d{4}$/.test(pin)) return showToast('O PIN precisa ter 4 números.');
+    if (pin !== f.pin2.value.trim()) return showToast('Os dois PINs estão diferentes.');
+    if (['0000', '1111', '1234', '4321', '2222', '9999'].includes(pin)) return showToast('Esse PIN é fácil demais. Escolha outro.');
+    try { await apiPin({ acao: 'definir', pin }); showToast('🔐 PIN salvo!'); overlay.remove(); }
+    catch (err) { showToast(err.message, 5000); }
+  };
+}
+
+// Cancelar pedido já aceito (em preparo): dono direto; funcionário com PIN. Guarda o motivo e quem cancelou.
+async function cancelarAceito(p) {
+  const motivo = prompt(`Cancelar o pedido #${p.numeroPedido || ''}? Escreva o motivo:`);
+  if (motivo === null) return;
+  if (motivo.trim().length < 3) { showToast('Escreva o motivo do cancelamento.'); return; }
+  if (!(await pedirPinDono('cancelar um pedido aceito'))) return;
+  try {
+    await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
+      status: 'cancelado', canceladoEm: serverTimestamp(), atualizadoEm: serverTimestamp(),
+      motivoCancelamento: motivo.trim().slice(0, 200), canceladoPor: auth.currentUser ? auth.currentUser.uid : null, canceladoComPin: papel !== 'dono'
+    });
+    avisarCliente(p.id);
+    showToast(`Pedido #${p.numeroPedido || ''} cancelado.`);
+  } catch (err) { console.error(err); showToast('Não foi possível cancelar.'); }
 }

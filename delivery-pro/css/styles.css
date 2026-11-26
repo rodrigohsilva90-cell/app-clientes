@@ -598,3 +598,4 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .mb-saldo.positivo { background: #dcfce7; color: #14532d; }
 .mb-saldo.negativo { background: #fee2e2; color: #7f1d1d; }
 .mb-ganho { display: block; color: #15803d; font-weight: 700; font-size: 13px; }
+.pin-campo { font-size: 28px; letter-spacing: 12px; text-align: center; width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 10px; margin: 4px 0 8px; }

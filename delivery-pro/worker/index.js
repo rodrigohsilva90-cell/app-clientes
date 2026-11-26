@@ -94,6 +94,9 @@ export default {
       if (url.pathname === '/api/acertos' && request.method === 'POST') {
         return acertosMotoboy(request, env);
       }
+      if (url.pathname === '/api/pin' && request.method === 'POST') {
+        return pinDono(request, env);
+      }
       if (url.pathname === '/api/cheguei' && request.method === 'POST') {
         return clienteChegou(request, env);
       }
@@ -1023,6 +1026,39 @@ async function acertosMotoboy(request, env) {
     if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
     console.error('acertosMotoboy', err && err.stack || err);
     return jsonResponse({ erro: 'Não foi possível carregar.' }, 500);
+  }
+}
+
+// PIN de 4 dígitos do dono: o funcionário do balcão precisa dele para cancelar pedido aceito ou dar desconto.
+// Guardado só como hash com sal em lojas/{id}/segredos/pinDono (o app não consegue ler).
+const hashPin = async (sal, pin) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${sal}:${pin}`)))].map(b => b.toString(16).padStart(2, '0')).join('');
+async function pinDono(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const { fs, uid, papel } = await usuarioDaEquipe(request, env, lojaId, ['dono', 'balcao']);
+    const caminho = `lojas/${lojaId}/segredos/pinDono`;
+    const pin = String(corpo.pin || '');
+    if (corpo.acao === 'status') return jsonResponse({ temPin: Boolean(await fs.ler(caminho)) });
+    if (corpo.acao === 'definir') {
+      if (papel !== 'dono') throw new ErroPedido('Só o dono pode criar o PIN.', 403);
+      if (!/^\d{4}$/.test(pin)) throw new ErroPedido('O PIN precisa ter 4 números.');
+      const sal = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+      await fs.gravarJuntos([{ caminho, dados: { sal, hash: await hashPin(sal, pin), criadoEm: new Date(), criadoPor: uid } }]);
+      return jsonResponse({ ok: true });
+    }
+    // verificar: no máximo 8 tentativas a cada 10 minutos por pessoa (evita "chutar" o PIN)
+    if (!dentroDoLimite(`pin:${lojaId}:${uid}`)) throw new ErroPedido('Muitas tentativas. Aguarde 10 minutos ou chame o dono.', 429);
+    const sec = await fs.ler(caminho);
+    if (!sec) throw new ErroPedido('O dono ainda não criou o PIN (⚙ Configurações → 🔐 PIN do dono).', 409);
+    if (!/^\d{4}$/.test(pin) || (await hashPin(sec.sal, pin)) !== sec.hash) throw new ErroPedido('PIN errado.', 403);
+    return jsonResponse({ ok: true });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('pinDono', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível conferir o PIN.' }, 500);
   }
 }
 
