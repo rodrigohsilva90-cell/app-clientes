@@ -1,4 +1,4 @@
-import { db, formatarCentavos, showToast, esc, WORKER_API_URL } from './config.js';
+import { db, auth, formatarCentavos, showToast, esc, WORKER_API_URL } from './config.js';
 import { AppState } from './router.js';
 import { montarItem, ofertaDoDia } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes, enviarAvaliacao } from './acompanhar.js';
@@ -60,8 +60,8 @@ function renovarTurnstile() {
 let ultimoAvisoCarrinho = 0;
 function avisarCarrinhoAbandonado(forcar) {
   try {
-    if (!carrinho.length || !AppState.slug) return;
-    const d = lerDadosCliente();
+    if (!carrinho.length || !AppState.slug || ehAparelhoDaLoja()) return;
+    const d = rascunho && rascunho.whatsapp ? rascunho : lerDadosCliente();
     const whatsapp = String(d.whatsapp || '').replace(/\D/g, '');
     if (whatsapp.length < 10) return;
     if (!forcar && Date.now() - ultimoAvisoCarrinho < 60000) return;
@@ -474,8 +474,15 @@ function atualizarBarraCarrinho() {
   barra.classList.remove('hidden');
 }
 
-// Dados do cliente e último local marcado ficam só neste aparelho (para não digitar de novo)
+// Dados do cliente ficam neste aparelho SÓ se ele marcar "Lembrar meus dados" (e nunca quando
+// quem está mexendo é alguém da loja logado, ex.: o celular do balcão ou o do vendedor na demonstração).
+// Enquanto a tela de finalizar está aberta, o que foi digitado fica só na memória (rascunho).
 const CHAVE_CLIENTE = 'dados_cliente_v1';
+let rascunho = null;
+const ehAparelhoDaLoja = () => Boolean(auth.currentUser);
+function esquecerCliente() {
+  try { localStorage.removeItem(CHAVE_CLIENTE); localStorage.removeItem(CHAVE_ENDERECOS); } catch (_) {}
+}
 function lerDadosCliente() {
   try { return JSON.parse(localStorage.getItem(CHAVE_CLIENTE) || '{}'); } catch (_) { return {}; }
 }
@@ -502,19 +509,72 @@ function guardarEndereco(e) {
   } catch (_) {}
 }
 
+// ---- Endereço em partes (CEP, rua, número, bairro, complemento) ----
+const soDigitos = (t) => String(t || '').replace(/\D/g, '');
+function montarEnderecoTexto(c) {
+  const linha = [c.rua, c.numero].filter(Boolean).join(', ');
+  return [linha, c.bairro].filter(Boolean).join(' - ') + (c.compl ? ` (${c.compl})` : '');
+}
+
+// CEP → rua, bairro, cidade (ViaCEP, gratuito)
+async function buscarCep(cep) {
+  const n = soDigitos(cep);
+  if (n.length !== 8) return null;
+  try {
+    const r = await fetch(`https://viacep.com.br/ws/${n}/json/`);
+    const d = await r.json();
+    return d && !d.erro ? { rua: d.logradouro || '', bairro: d.bairro || '', cidade: d.localidade || '', uf: d.uf || '' } : null;
+  } catch (_) { return null; }
+}
+
+// Endereço → ponto no mapa (OpenStreetMap / Nominatim). Procura perto da loja primeiro.
+// Só o endereço vai na busca (nunca nome ou telefone).
+async function localizarEndereco(c, perto) {
+  if (!c.rua) return null;
+  const caixa = perto ? `&viewbox=${perto.lng - 0.35},${perto.lat + 0.35},${perto.lng + 0.35},${perto.lat - 0.35}` : '';
+  const tentativas = [];
+  const params = new URLSearchParams({ format: 'jsonv2', limit: '1', countrycodes: 'br', 'accept-language': 'pt-BR', street: `${c.numero ? c.numero + ' ' : ''}${c.rua}` });
+  if (c.cidade) params.set('city', c.cidade);
+  if (c.uf) params.set('state', c.uf);
+  if (soDigitos(c.cep).length === 8) params.set('postalcode', soDigitos(c.cep).replace(/^(\d{5})(\d{3})$/, '$1-$2'));
+  tentativas.push(params.toString() + caixa);
+  tentativas.push(new URLSearchParams({ format: 'jsonv2', limit: '1', countrycodes: 'br', 'accept-language': 'pt-BR', q: [c.rua + (c.numero ? ', ' + c.numero : ''), c.bairro, c.cidade, c.uf].filter(Boolean).join(', ') }).toString() + caixa);
+  for (const t of tentativas) {
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?${t}`);
+      const lista = await r.json();
+      if (Array.isArray(lista) && lista[0]) return { lat: Number(lista[0].lat), lng: Number(lista[0].lon), exato: ['house', 'building', 'place'].includes(lista[0].addresstype) };
+    } catch (_) {}
+  }
+  return null;
+}
+
+// Ponto no mapa → rua e bairro (para quem usa o GPS e não sabe o endereço de cabeça)
+async function enderecoDoPonto(p) {
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${p.lat}&lon=${p.lng}&zoom=18&addressdetails=1&accept-language=pt-BR`);
+    const d = await r.json();
+    const a = (d && d.address) || {};
+    return { rua: a.road || a.pedestrian || '', numero: a.house_number || '', bairro: a.suburb || a.neighbourhood || a.quarter || a.city_district || '', cidade: a.city || a.town || a.village || '', uf: '', cep: soDigitos(a.postcode) };
+  } catch (_) { return null; }
+}
+
 function abrirModalCheckout() {
   const modal = document.getElementById('modal-checkout');
   const content = document.getElementById('modal-checkout-conteudo');
   const loja = AppState.lojaDados || {};
   const subtotalCentavos = carrinho.reduce((acc, i) => acc + i.unitarioCentavos * i.quantidade, 0);
-  const salvo = lerDadosCliente();
+  const daLoja = ehAparelhoDaLoja();
+  const guardado = daLoja ? {} : lerDadosCliente();
+  const enderecosGuardados = daLoja ? [] : lerEnderecos();
+  const temGuardado = Boolean(guardado.nome || guardado.whatsapp || enderecosGuardados.length);
+  // Os campos começam VAZIOS. Dados salvos só entram quando a pessoa toca em "Sou eu".
+  if (!rascunho) rascunho = { campos: {}, lembrar: !daLoja, confirmado: false };
+  const salvo = rascunho.confirmado ? { ...guardado, ...rascunho } : { ...rascunho };
+  const c0 = salvo.campos || {};
   const temFrete = calcularFrete(loja, null).configurado;
   let destino = coordsValidas(salvo.destino) ? salvo.destino : null;
-  const enderecos = lerEnderecos();
-  if (!salvo.endereco && enderecos[0]) { // primeira vez nesta versão: já começa no endereço salvo
-    salvo.endereco = enderecos[0].endereco;
-    if (!destino && coordsValidas(enderecos[0].destino)) destino = enderecos[0].destino;
-  }
+  const enderecos = rascunho.confirmado ? enderecosGuardados : [];
   let apelido = salvo.apelido && APELIDOS.includes(salvo.apelido) ? salvo.apelido : (enderecos[0] ? enderecos[0].apelido : 'Casa');
   let mapa = null;
   let pino = null;
@@ -541,6 +601,15 @@ function abrirModalCheckout() {
       `).join('')}
     </div>
 
+    ${temGuardado && !rascunho.confirmado ? `
+      <div class="chk-salvo" id="chk-salvo">
+        <div><strong>👋 Já pediu neste aparelho?</strong><small>Tem dados salvos de ${esc(String(guardado.nome || 'um cliente').split(/\s+/)[0])}.</small></div>
+        <div class="chk-salvo-botoes">
+          <button type="button" class="btn-primary" data-salvo="usar">Sou eu, preencher</button>
+          <button type="button" class="btn-outline-sm" data-salvo="apagar">Não sou eu</button>
+        </div>
+      </div>` : ''}
+
     <label style="${rotulo}">Seu Nome</label>
     <input id="chk-nome" type="text" placeholder="Ex: João Silva" value="${esc(salvo.nome || '')}" style="${campo}" />
 
@@ -561,19 +630,35 @@ function abrirModalCheckout() {
           ${enderecos.map(e => `<button type="button" class="chk-end" data-end="${esc(e.apelido)}"><strong>${e.apelido === 'Casa' ? '🏠' : e.apelido === 'Trabalho' ? '💼' : '📍'} ${esc(e.apelido)}</strong><small>${esc(e.endereco)}</small></button>`).join('')}
           <button type="button" class="chk-end" data-end="_novo"><strong>＋ Novo</strong><small>outro endereço</small></button>
         </div>` : ''}
-      <label style="${rotulo}">Endereço completo e referência</label>
-      <input id="chk-endereco" type="text" placeholder="Rua das Flores, 123 - Centro (portão azul)" value="${esc(salvo.endereco || '')}" style="${campo}" />
+      <div class="chk-end-grade">
+        <div class="cep"><label style="${rotulo}">CEP <small style="font-weight:400;">(opcional)</small></label>
+          <input id="chk-cep" type="tel" inputmode="numeric" maxlength="9" placeholder="00000-000" value="${esc(c0.cep || '')}" style="${campo}" /></div>
+        <div class="rua"><label style="${rotulo}">Rua / Avenida</label>
+          <input id="chk-rua" type="text" autocomplete="address-line1" placeholder="Rua das Flores" value="${esc(c0.rua || (c0.rua === undefined && salvo.endereco ? salvo.endereco : ''))}" style="${campo}" /></div>
+        <div class="num"><label style="${rotulo}">Número</label>
+          <input id="chk-numero" type="text" inputmode="numeric" placeholder="123" value="${esc(c0.numero || '')}" style="${campo}" /></div>
+        <div class="bairro"><label style="${rotulo}">Bairro</label>
+          <input id="chk-bairro" type="text" placeholder="Centro" value="${esc(c0.bairro || '')}" style="${campo}" /></div>
+        <div class="compl"><label style="${rotulo}">Complemento / referência</label>
+          <input id="chk-compl" type="text" placeholder="Apto 12, portão azul, perto da padaria" value="${esc(c0.compl || '')}" style="${campo}" /></div>
+      </div>
       ${temFrete ? `
-        <label style="${rotulo}">Marque sua localização no mapa</label>
-        <button class="btn-outline-sm" id="chk-gps" type="button" style="margin:4px 0 6px;">📍 Usar minha localização</button>
+        <div class="chk-mapa-topo">
+          <label style="${rotulo}">Confira no mapa</label>
+          <button class="btn-outline-sm" id="chk-gps" type="button">📍 Estou em casa (usar GPS)</button>
+        </div>
+        <p class="chk-mapa-status" id="chk-mapa-status">Digite a rua e o número: o mapa vai até lá sozinho.</p>
         <div id="chk-mapa" class="chk-mapa"></div>
-        <p class="gc-dica">Toque no mapa ou arraste o pino até a sua porta. Isso calcula a entrega e guia o motoboy.</p>
+        <p class="gc-dica">Se o pino não estiver na sua porta, arraste ou toque no lugar certo. Isso calcula a entrega e guia o motoboy.</p>
       ` : ''}
       <label style="${rotulo}">Salvar este endereço como</label>
       <div class="chk-tipo" id="chk-apelidos">
         ${APELIDOS.map(a => `<label><input type="radio" name="chk-apelido" value="${a}" ${a === apelido ? 'checked' : ''} /> ${a}</label>`).join('')}
       </div>
     </div>
+
+    ${daLoja ? '<p class="gc-dica">🔒 Você está logado na loja: os dados deste cliente não ficam salvos neste aparelho.</p>' : `
+    <label class="chk-lembrar"><input type="checkbox" id="chk-lembrar" ${rascunho.lembrar ? 'checked' : ''} /> <span>Lembrar meus dados neste aparelho <small>Desmarque se o celular não for seu.</small></span></label>`}
 
     <label style="${rotulo}">Forma de Pagamento</label>
     <select id="chk-pagamento" style="${campo}">
@@ -623,20 +708,38 @@ function abrirModalCheckout() {
   };
   const tipoAtual = () => content.querySelector('input[name="chk-tipo"]:checked').value;
 
+  const lerCampos = () => ({
+    cep: document.getElementById('chk-cep').value.trim(),
+    rua: document.getElementById('chk-rua').value.trim(),
+    numero: document.getElementById('chk-numero').value.trim(),
+    bairro: document.getElementById('chk-bairro').value.trim(),
+    compl: document.getElementById('chk-compl').value.trim(),
+    cidade: cidadeUf.cidade, uf: cidadeUf.uf
+  });
+  let cidadeUf = { cidade: c0.cidade || '', uf: c0.uf || '' };
+  const lembrar = () => !daLoja && Boolean(document.getElementById('chk-lembrar')?.checked);
   function guardarCampos() {
-    salvarDadosCliente({
+    const campos = lerCampos();
+    const dados = {
       nome: document.getElementById('chk-nome').value.trim(),
       whatsapp: document.getElementById('chk-whats').value.trim(),
-      endereco: document.getElementById('chk-endereco').value.trim(),
+      endereco: montarEnderecoTexto(campos),
+      campos,
       tipo: tipoAtual(),
       apelido: content.querySelector('input[name="chk-apelido"]:checked')?.value || 'Casa',
       destino
-    });
+    };
+    rascunho = { ...rascunho, ...dados, lembrar: lembrar() };
+    return dados;
   }
 
   // Escolher um endereço salvo preenche o texto e o pino; "Novo" limpa os dois
+  function preencherCampos(c) {
+    ['cep', 'rua', 'numero', 'bairro', 'compl'].forEach(k => { document.getElementById(`chk-${k}`).value = c[k] || ''; });
+    cidadeUf = { cidade: c.cidade || '', uf: c.uf || '' };
+  }
   function marcarEnderecoAtivo() {
-    const texto = document.getElementById('chk-endereco').value.trim();
+    const texto = montarEnderecoTexto(lerCampos());
     content.querySelectorAll('[data-end]').forEach(b => {
       const e = enderecos.find(x => x.apelido === b.dataset.end);
       b.classList.toggle('ativo', e ? e.endereco === texto : !enderecos.some(x => x.endereco === texto));
@@ -645,7 +748,7 @@ function abrirModalCheckout() {
   content.querySelectorAll('[data-end]').forEach(b => {
     b.onclick = () => {
       const e = enderecos.find(x => x.apelido === b.dataset.end);
-      document.getElementById('chk-endereco').value = e ? e.endereco : '';
+      preencherCampos(e ? (e.campos || { rua: e.endereco }) : {});
       const radio = content.querySelector(`input[name="chk-apelido"][value="${e ? e.apelido : (APELIDOS.find(a => !enderecos.some(x => x.apelido === a)) || 'Outro')}"]`);
       if (radio) radio.checked = true;
       if (pino) { pino.remove(); pino = null; }
@@ -654,15 +757,74 @@ function abrirModalCheckout() {
         marcar(e.destino);
         if (mapa) mapa.setView([e.destino.lat, e.destino.lng], 16);
       } else {
-        salvarDadosCliente({ destino: null });
         atualizarTotais();
-        if (!e) document.getElementById('chk-endereco').focus();
+        if (!e) document.getElementById('chk-rua').focus();
+        else localizarNoMapa();
       }
       marcarEnderecoAtivo();
     };
   });
-  document.getElementById('chk-endereco').addEventListener('input', marcarEnderecoAtivo);
+  ['chk-rua', 'chk-numero', 'chk-bairro', 'chk-compl'].forEach(id => document.getElementById(id).addEventListener('input', marcarEnderecoAtivo));
   marcarEnderecoAtivo();
+
+  // "Sou eu" preenche com os dados salvos; "Não sou eu" apaga tudo deste aparelho
+  content.querySelectorAll('[data-salvo]').forEach(b => {
+    b.onclick = () => {
+      guardarCampos();
+      if (b.dataset.salvo === 'usar') {
+        const ult = enderecosGuardados[0];
+        rascunho = { ...guardado, campos: guardado.campos || (ult && ult.campos) || (guardado.endereco ? { rua: guardado.endereco } : {}), destino: guardado.destino || (ult && ult.destino) || null, lembrar: true, confirmado: true };
+      } else {
+        esquecerCliente();
+        rascunho = { campos: {}, lembrar: false, confirmado: false };
+        showToast('Pronto, os dados salvos foram apagados deste aparelho.');
+      }
+      if (mapa) { mapa.remove(); mapa = null; }
+      abrirModalCheckout();
+    };
+  });
+  document.getElementById('chk-lembrar')?.addEventListener('change', (e) => {
+    if (!e.target.checked) { esquecerCliente(); showToast('Seus dados não ficarão salvos neste aparelho.'); }
+    guardarCampos();
+  });
+
+  // ---- Endereço digitado → mapa ----
+  const statusMapa = (t) => { const el = document.getElementById('chk-mapa-status'); if (el) el.innerHTML = t; };
+  let buscaSeq = 0;
+  let timerBusca = null;
+  async function localizarNoMapa() {
+    const c = lerCampos();
+    if (!temFrete || !c.rua) return;
+    const seq = ++buscaSeq;
+    statusMapa('🔎 Procurando o endereço no mapa...');
+    const p = await localizarEndereco(c, loja.localizacao);
+    if (seq !== buscaSeq) return; // a pessoa continuou digitando
+    if (!p) { statusMapa('⚠ Não achamos esse endereço no mapa. <strong>Toque no mapa</strong> no lugar da sua casa.'); return; }
+    marcar(p);
+    if (mapa) mapa.setView([p.lat, p.lng], p.exato ? 18 : 17);
+    statusMapa(p.exato ? '✅ Achamos! Confira se o pino está na sua porta.' : '📍 Achamos a rua. <strong>Arraste o pino</strong> até a sua casa.');
+  }
+  const agendarBusca = () => { clearTimeout(timerBusca); timerBusca = setTimeout(localizarNoMapa, 900); };
+  ['chk-rua', 'chk-numero', 'chk-bairro'].forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', agendarBusca);
+    el.addEventListener('change', () => { clearTimeout(timerBusca); localizarNoMapa(); });
+  });
+  const campoCep = document.getElementById('chk-cep');
+  campoCep.addEventListener('input', async () => {
+    const n = soDigitos(campoCep.value).slice(0, 8);
+    campoCep.value = n.length > 5 ? `${n.slice(0, 5)}-${n.slice(5)}` : n;
+    if (n.length !== 8) return;
+    statusMapa('🔎 Buscando o CEP...');
+    const r = await buscarCep(n);
+    if (!r) { statusMapa('⚠ CEP não encontrado. Pode digitar a rua normalmente.'); return; }
+    if (r.rua) document.getElementById('chk-rua').value = r.rua;
+    if (r.bairro) document.getElementById('chk-bairro').value = r.bairro;
+    cidadeUf = { cidade: r.cidade, uf: r.uf };
+    marcarEnderecoAtivo();
+    document.getElementById('chk-numero').focus();
+    localizarNoMapa();
+  });
 
   // Recalcula entrega e total (o Worker refaz a mesma conta ao receber o pedido)
   let freteAtual = { freteCentavos: 0 };
@@ -723,7 +885,7 @@ function abrirModalCheckout() {
         pino.on('dragend', () => marcar(pino.getLatLng()));
       } else pino.setLatLng([p.lat, p.lng]);
     }
-    salvarDadosCliente({ destino });
+    if (rascunho) rascunho.destino = destino;
     atualizarTotais();
   }
 
@@ -731,15 +893,15 @@ function abrirModalCheckout() {
     const div = document.getElementById('chk-mapa');
     if (!div || typeof L === 'undefined') return;
     if (mapa) { mapa.invalidateSize(); return; }
-    const centro = destino || loja.localizacao;
+    const centro = destino || loja.localizacao || { lat: -23.5505, lng: -46.6333 };
     mapa = L.map(div).setView([centro.lat, centro.lng], destino ? 16 : 14);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapa);
     L.circleMarker([loja.localizacao.lat, loja.localizacao.lng], { radius: 7, color: 'var(--primary)' }).addTo(mapa).bindTooltip('🏪 Loja');
     if (destino) {
       pino = L.marker([destino.lat, destino.lng], { draggable: true }).addTo(mapa);
-      pino.on('dragend', () => marcar(pino.getLatLng()));
+      pino.on('dragend', () => { buscaSeq++; marcar(pino.getLatLng()); });
     }
-    mapa.on('click', (e) => marcar(e.latlng));
+    mapa.on('click', (e) => { buscaSeq++; marcar(e.latlng); statusMapa('✅ Pino marcado. Pode arrastar para ajustar.'); });
     setTimeout(() => mapa && mapa.invalidateSize(), 200);
   }
 
@@ -749,8 +911,19 @@ function abrirModalCheckout() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        if (mapa) mapa.setView([p.lat, p.lng], 17);
+        if (mapa) mapa.setView([p.lat, p.lng], 18);
+        buscaSeq++; // cancela uma busca por texto em andamento
         marcar(p);
+        statusMapa('✅ Pino na sua localização. Confira e complete o endereço.');
+        if (!document.getElementById('chk-rua').value.trim()) {
+          enderecoDoPonto(p).then(e => {
+            if (!e || document.getElementById('chk-rua').value.trim()) return;
+            preencherCampos({ ...lerCampos(), rua: e.rua, numero: e.numero, bairro: e.bairro, cep: e.cep.length === 8 ? `${e.cep.slice(0, 5)}-${e.cep.slice(5)}` : '' });
+            cidadeUf = { cidade: e.cidade, uf: '' };
+            marcarEnderecoAtivo();
+            document.getElementById(e.numero ? 'chk-compl' : 'chk-numero').focus();
+          });
+        }
       },
       () => showToast('Não conseguimos sua localização. Toque no mapa para marcar.'),
       { enableHighAccuracy: true, timeout: 15000 }
@@ -763,7 +936,8 @@ function abrirModalCheckout() {
     const nome = document.getElementById('chk-nome').value.trim();
     const whatsapp = document.getElementById('chk-whats').value.replace(/\D/g, '');
     const tipoEntrega = tipoAtual();
-    const endereco = document.getElementById('chk-endereco').value.trim();
+    const campos = lerCampos();
+    const endereco = montarEnderecoTexto(campos);
     const pagamento = selPag.value;
     const trocoParaCentavos = pagamento === 'dinheiro' ? Math.round((Number(document.getElementById('chk-troco').value) || 0) * 100) : 0;
 
@@ -771,11 +945,12 @@ function abrirModalCheckout() {
       showToast('Preencha seu nome e um WhatsApp válido.');
       return;
     }
-    if (tipoEntrega === 'entrega' && endereco.length < 5) {
-      showToast('Preencha o endereço completo para a entrega.');
+    if (tipoEntrega === 'entrega' && (campos.rua.length < 3 || !campos.numero)) {
+      showToast(campos.rua.length < 3 ? 'Preencha a rua da entrega.' : 'Preencha o número da casa (ou "s/n").');
+      document.getElementById(campos.rua.length < 3 ? 'chk-rua' : 'chk-numero').focus();
       return;
     }
-    guardarCampos();
+    const dadosCliente = guardarCampos();
 
     const btn = document.getElementById('btn-enviar-pedido');
     btn.disabled = true;
@@ -818,9 +993,17 @@ function abrirModalCheckout() {
         return;
       }
 
-      if (tipoEntrega === 'entrega') {
-        guardarEndereco({ apelido: content.querySelector('input[name="chk-apelido"]:checked')?.value || 'Casa', endereco, destino: destino || null });
+      // Só agora (pedido enviado e com "Lembrar" marcado) os dados vão para o aparelho.
+      // Se era outra pessoa (não tocou em "Sou eu"), apaga os dados antigos antes.
+      if (lembrar()) {
+        if (!rascunho.confirmado) { esquecerCliente(); try { localStorage.setItem(CHAVE_ENDERECOS, '[]'); } catch (_) {} }
+        salvarDadosCliente(dadosCliente);
       }
+      if (tipoEntrega === 'entrega' && lembrar()) {
+        guardarEndereco({ apelido: content.querySelector('input[name="chk-apelido"]:checked')?.value || 'Casa', endereco, campos, destino: destino || null });
+      }
+      if (!lembrar()) esquecerCliente();
+      rascunho = null; // próximo pedido começa limpo
       guardarUltimoPedido(carrinho);
       carrinho = [];
       localStorage.removeItem(`carrinho_${AppState.lojaId}`);

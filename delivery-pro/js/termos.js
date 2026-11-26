@@ -119,13 +119,16 @@ function privacidadeHtml(cfg) {
     </ul>
     <p><strong>Não vendemos dados pessoais</strong> e não usamos seus dados para publicidade de terceiros.</p>
 
+    <h2>Dados guardados no seu aparelho</h2>
+    <p>Seu nome, WhatsApp e endereços só ficam guardados <strong>no seu próprio celular</strong> se você marcar "Lembrar meus dados neste aparelho" ao finalizar o pedido. Eles não aparecem para outras pessoas em outros aparelhos. Para apagar, toque em "Não sou eu" ou desmarque a opção.</p>
+
     <h2>4. Localização</h2>
     <p>O ponto que o cliente marca no mapa é usado para o frete e para o entregador chegar. O GPS do entregador só é enviado enquanto há uma entrega em andamento; a transmissão para o cliente <strong>para quando o entregador chega a cerca de 50 metros</strong> do endereço e é encerrada ao concluir a entrega. Em rotas com várias entregas, cada cliente vê apenas quantas entregas vêm antes da sua, nunca o endereço dos outros.</p>
 
     <h2>5. Com quem compartilhamos</h2>
     <ul>
       <li>Com a <strong>loja</strong> do pedido (e a equipe dela).</li>
-      <li>Com fornecedores que fazem o sistema funcionar: <strong>Google Firebase</strong> (banco de dados e login, com dados guardados em São Paulo), <strong>Cloudflare</strong> (hospedagem, fotos e proteção anti-trote), <strong>Mercado Pago</strong> (quando o pagamento é por Pix automático), <strong>OpenStreetMap</strong> (mapas) e os serviços de notificação do navegador (Google, Apple, Mozilla, Microsoft). Alguns desses fornecedores podem processar dados fora do Brasil, com as garantias previstas na LGPD.</li>
+      <li>Com fornecedores que fazem o sistema funcionar: <strong>Google Firebase</strong> (banco de dados e login, com dados guardados em São Paulo), <strong>Cloudflare</strong> (hospedagem, fotos e proteção anti-trote), <strong>Mercado Pago</strong> (quando o pagamento é por Pix automático), <strong>OpenStreetMap</strong> (mapas e busca do endereço no mapa: só o endereço é enviado), <strong>ViaCEP</strong> (preencher o endereço pelo CEP) e os serviços de notificação do navegador (Google, Apple, Mozilla, Microsoft). Alguns desses fornecedores podem processar dados fora do Brasil, com as garantias previstas na LGPD.</li>
       <li>Com autoridades, quando a lei ou uma ordem judicial exigir.</li>
     </ul>
 
