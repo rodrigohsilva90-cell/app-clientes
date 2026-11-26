@@ -78,31 +78,55 @@ export async function iniciarBalcao() {
       </div>
     </div>
 
-    <!-- Kanban de Pedidos -->
-    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px;">
-      <div>
+    <!-- Kanban de Pedidos (no celular vira abas com contador) -->
+    <nav class="bc-abas" id="bc-abas">
+      <button type="button" class="ativa" data-aba="novo">🔔 Novos <b data-cont="novo">0</b></button>
+      <button type="button" data-aba="preparo">${AppState.lojaDados.layoutVitrine === 'varejo' ? '📦 Separação' : '🔥 Preparo'} <b data-cont="preparo">0</b></button>
+      <button type="button" data-aba="entrega">🛵 Rota <b data-cont="entrega">0</b></button>
+      <button type="button" data-aba="concluido">✅ Feitos <b data-cont="concluido">0</b></button>
+    </nav>
+    <div class="kanban" id="kanban">
+      <div class="ativa" data-coluna="novo">
         <h3 style="margin-bottom:8px;">🔔 Novos Pedidos</h3>
         <div id="col-novo"></div>
       </div>
-      <div>
+      <div data-coluna="preparo">
         <h3 style="margin-bottom:8px;">${AppState.lojaDados.layoutVitrine === 'varejo' ? '📦 Em Separação' : '🔥 Em Preparo'}</h3>
         <div id="col-preparo"></div>
       </div>
-      <div>
+      <div data-coluna="entrega">
         <h3 style="margin-bottom:8px;">🛵 Saiu para Entrega</h3>
         <div id="col-entrega"></div>
       </div>
-      <div>
+      <div data-coluna="concluido">
         <h3 style="margin-bottom:8px;">✅ Concluídos hoje</h3>
         <div id="col-concluido"></div>
       </div>
     </div>
+
+    <!-- Barra fixa de baixo (só no celular), na zona do polegar -->
+    <nav class="bc-nav" id="bc-nav">
+      <button type="button" data-nav="pedidos">📋<span>Pedidos</span></button>
+      <button type="button" data-nav="cardapio">${ehDono ? '🍕<span>Cardápio</span>' : '📦<span>Estoque</span>'}</button>
+      <button type="button" data-nav="caixa">💰<span>Caixa</span></button>
+      <button type="button" data-nav="ajustes">${ehDono ? '⚙<span>Ajustes</span>' : '➕<span>Pedido</span>'}</button>
+    </nav>
 
     <!-- Área oculta exclusiva para Impressão Térmica (58mm/80mm) -->
     <div id="print-receipt"></div>
   `;
 
   document.getElementById('btn-som').onclick = ativarSomEWakeLock;
+  // Abas do celular: mostra uma coluna por vez
+  const mostrarAba = (aba) => {
+    document.querySelectorAll('#bc-abas [data-aba]').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
+    document.querySelectorAll('#kanban [data-coluna]').forEach(c => c.classList.toggle('ativa', c.dataset.coluna === aba));
+  };
+  document.querySelectorAll('#bc-abas [data-aba]').forEach(b => { b.onclick = () => { mostrarAba(b.dataset.aba); window.scrollTo({ top: document.getElementById('bc-abas').offsetTop - 60, behavior: 'smooth' }); }; });
+  document.querySelector('#bc-nav [data-nav="pedidos"]').onclick = () => { mostrarAba('novo'); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  document.querySelector('#bc-nav [data-nav="cardapio"]').onclick = () => (ehDono ? abrirGestaoCardapio() : abrirEstoqueRapido());
+  document.querySelector('#bc-nav [data-nav="caixa"]').onclick = () => document.getElementById('btn-caixa').click();
+  document.querySelector('#bc-nav [data-nav="ajustes"]').onclick = () => (ehDono ? abrirMenuConfig() : abrirPedidoManualRapido());
   if (ehDono) desenharModoOperacao();
   ligarIndicadorRede();
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
@@ -276,6 +300,10 @@ function renderizarColunas() {
   ultimosPedidos.forEach((p) => {
     if (colunas[p.status]) colunas[p.status].appendChild(criarCardPedidoBalcao(p));
   });
+  for (const st of ['novo', 'preparo', 'entrega']) {
+    const b = document.querySelector(`#bc-abas [data-cont="${st}"]`);
+    if (b) { const n = ultimosPedidos.filter(p => p.status === st).length; b.textContent = n; b.classList.toggle('tem', n > 0); }
+  }
 }
 
 function renderizarConcluidos() {
@@ -283,6 +311,8 @@ function renderizarConcluidos() {
   if (!col) return;
   const ok = concluidosHoje.filter(p => p.status === 'concluido');
   const total = ok.reduce((a, p) => a + (Number(p.totalCentavos) || 0), 0);
+  const contConc = document.querySelector('#bc-abas [data-cont="concluido"]');
+  if (contConc) contConc.textContent = concluidosHoje.length;
   col.innerHTML = `
     <div class="card conc-resumo"><span>${ok.length} pedido(s) hoje</span>${papel === 'dono' ? `<strong>${formatarCentavos(total)}</strong>` : ''}</div>
     ${concluidosHoje.slice(0, 30).map(p => `
@@ -413,6 +443,7 @@ function criarCardPedidoBalcao(p) {
   if (btnNext) {
     btnNext.onclick = async () => {
       const novoStatus = btnNext.dataset.next;
+      try { navigator.vibrate && navigator.vibrate(40); } catch (_) {}
       if (novoStatus === 'entrega') return despacharParaEntregador(p);
       await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
         status: novoStatus,

@@ -181,13 +181,13 @@ export async function iniciarVitrine() {
     </div>
 
     <!-- Modal de Montagem de Produto (Meio a Meio / Adicionais) -->
-    <div id="modal-produto" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:1000; display:flex; align-items:center; justify-content:center; padding:16px;">
-      <div class="card" style="max-width:500px; width:100%; max-height:85vh; overflow-y:auto;" id="modal-produto-conteudo"></div>
+    <div id="modal-produto" class="vt-gaveta-fundo hidden">
+      <div class="card vt-gaveta" id="modal-produto-conteudo"></div>
     </div>
 
     <!-- Modal de Checkout -->
-    <div id="modal-checkout" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:1000; display:flex; align-items:center; justify-content:center; padding:16px;">
-      <div class="card" style="max-width:500px; width:100%; max-height:90vh; overflow-y:auto;" id="modal-checkout-conteudo"></div>
+    <div id="modal-checkout" class="vt-gaveta-fundo hidden">
+      <div class="card vt-gaveta" id="modal-checkout-conteudo"></div>
     </div>
   `;
 
@@ -358,13 +358,14 @@ function abrirModalProduto(prod) {
   const content = document.getElementById('modal-produto-conteudo');
 
   content.innerHTML = `
+    <div class="vt-gaveta-alca" aria-hidden="true"></div>
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-      <h3>${prod.nome}</h3>
-      <button class="btn-outline-sm" id="fechar-modal-prod">✕</button>
+      <h3>${esc(prod.nome)}</h3>
+      <button class="btn-outline-sm" id="fechar-modal-prod" aria-label="Fechar">✕</button>
     </div>
     ${(prod.grupos || []).map((grp, idx) => `
       <div style="border-top:1px solid var(--border); padding:10px 0;">
-        <strong>${grp.titulo}</strong>
+        <strong>${esc(grp.titulo)}</strong>
         <small style="display:block; color:var(--text-muted); margin-bottom:6px;">
           Escolha de ${grp.minimo || 0} até ${grp.maximo || 1} (${grp.regraDePreco || 'SOMA'})
         </small>
@@ -372,18 +373,26 @@ function abrirModalProduto(prod) {
           <label style="display:flex; justify-content:space-between; padding:6px 0; cursor:pointer;">
             <span>
               <input type="checkbox" data-grp="${idx}" data-op="${opIdx}" />
-              ${op.nome}
+              ${esc(op.nome)}
             </span>
             <span>+${formatarCentavos(op.precoCentavos)}</span>
           </label>
         `).join('')}
       </div>
     `).join('')}
-    <button class="btn-primary" id="confirmar-item-modal" style="margin-top:12px;">Adicionar à Sacola</button>
+    <div class="vt-gaveta-rodape"><button class="btn-primary" id="confirmar-item-modal">Adicionar</button></div>
   `;
+  // Preço ao vivo no botão (conta o que já foi escolhido)
+  const atualizarBotaoPreco = () => {
+    const parcial = montarItem({ ...prod, grupos: (prod.grupos || []).map(g => ({ ...g, minimo: 0 })) }, selecoesAtuais, AppState.lojaDados);
+    const b = document.getElementById('confirmar-item-modal');
+    if (b && parcial.item) b.textContent = `Adicionar • ${formatarCentavos(parcial.item.unitarioCentavos)}`;
+  };
 
   modal.classList.remove('hidden');
+  atualizarBotaoPreco();
   document.getElementById('fechar-modal-prod').onclick = () => modal.classList.add('hidden');
+  modal.onclick = (e) => { if (e.target === modal) modal.classList.add('hidden'); };
 
   content.querySelectorAll('input[type="checkbox"]').forEach(chk => {
     chk.onchange = () => {
@@ -402,6 +411,7 @@ function abrirModalProduto(prod) {
       } else {
         selecoesAtuais[gIdx] = selecoesAtuais[gIdx].filter(o => o !== grupo.opcoes[oIdx]);
       }
+      atualizarBotaoPreco();
     };
   });
 
@@ -476,6 +486,7 @@ function adicionarAoCarrinho(item) {
   else carrinho.push(item);
   localStorage.setItem(`carrinho_${AppState.lojaId}`, JSON.stringify(carrinho));
   atualizarBarraCarrinho();
+  try { navigator.vibrate && navigator.vibrate(40); } catch (_) {}
   showToast(`${item.nome} adicionado!`);
 }
 
@@ -653,6 +664,7 @@ function abrirModalCheckout() {
   const rotulo = 'display:block; font-size:13px; font-weight:600;';
 
   content.innerHTML = `
+    <div class="vt-gaveta-alca" aria-hidden="true"></div>
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
       <h3>Finalizar Pedido</h3>
       <button class="btn-outline-sm" id="fechar-checkout">✕</button>
@@ -758,7 +770,7 @@ function abrirModalCheckout() {
 
     <div id="box-troco" class="hidden" style="margin-bottom:10px;">
       <label style="${rotulo}">Troco para quanto? (R$)</label>
-      <input id="chk-troco" type="number" placeholder="Ex: 100" style="${campo}" />
+      <input id="chk-troco" type="number" inputmode="decimal" placeholder="Ex: 100" style="${campo}" />
     </div>
 
     <div class="chk-resumo">
@@ -770,7 +782,7 @@ function abrirModalCheckout() {
     </div>
 
     <div id="chk-turnstile" class="chk-turnstile"></div>
-    <button class="btn-primary" id="btn-enviar-pedido">Enviar Pedido Agora</button>
+    <div class="vt-gaveta-rodape"><button class="btn-primary" id="btn-enviar-pedido">Enviar Pedido Agora</button></div>
     <p class="gc-dica" style="text-align:center; margin-top:8px;">Seus dados são usados só para este pedido. <a href="/privacidade?loja=${esc(AppState.slug)}" target="_blank" rel="noopener">Política de Privacidade</a></p>
   `;
 

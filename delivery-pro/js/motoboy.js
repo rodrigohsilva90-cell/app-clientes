@@ -37,6 +37,8 @@ const FORMA = { dinheiro: 'Dinheiro', cartao_entrega: 'Cartão (maquininha)', ca
 export function iniciarMotoboy() {
   const root = document.getElementById('app-root');
   const user = auth.currentUser;
+  aplicarContrasteRua();
+  setInterval(aplicarContrasteRua, 10 * 60000);
 
   if (!user) {
     root.innerHTML = `<div class="card"><h3>Acesso Restrito</h3><p>Faça login com sua conta de entregador para acessar a fila.</p></div>`;
@@ -166,10 +168,16 @@ function mudarOrdem(novaOrdem, motoboyUid) {
 }
 
 // 1. Telemetria GPS Adaptativa (8s em movimento / 30s parado) + WakeLock
+async function telaAcesa(ligar) {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    if (ligar && (!wakeLockMotoboy || wakeLockMotoboy.released) && document.visibilityState === 'visible') wakeLockMotoboy = await navigator.wakeLock.request('screen');
+    else if (!ligar && wakeLockMotoboy && !wakeLockMotoboy.released) { await wakeLockMotoboy.release(); wakeLockMotoboy = null; }
+  } catch (_) {}
+}
+
 async function iniciarTelemetriaGPS(motoboyUid) {
-  if ('wakeLock' in navigator) {
-    try { wakeLockMotoboy = await navigator.wakeLock.request('screen'); } catch (_) {}
-  }
+  telaAcesa(minhasEntregas.length > 0);
 
   if (!('geolocation' in navigator)) {
     showToast('GPS não suportado neste aparelho.');
@@ -224,6 +232,7 @@ async function iniciarTelemetriaGPS(motoboyUid) {
   // Ao voltar do Google Maps/Waze o navegador pode ter pausado o GPS: lê uma posição nova na hora
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible' || !minhasEntregas.length) return;
+    telaAcesa(true); // o celular solta a tela acesa ao sair do app: pede de novo
     navigator.geolocation.getCurrentPosition((pos) => {
       const c = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy || 0) };
       ultimaPosicao = c; ultimoEnvioTimestamp = Date.now();
@@ -237,6 +246,7 @@ async function iniciarTelemetriaGPS(motoboyUid) {
 function ajustarGps() {
   if (!('geolocation' in navigator)) return;
   const badge = document.getElementById('gps-status-badge');
+  telaAcesa(minhasEntregas.length > 0);
   if (minhasEntregas.length) { if (watchId === null && ligarGps) ligarGps(); return; }
   if (watchId !== null) {
     navigator.geolocation.clearWatch(watchId);
@@ -392,6 +402,8 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
     : `<span class="mb-cobrar">💵 Cobrar ${formatarCentavos(p.totalCentavos)} · ${esc(FORMA[p.formaPagamento] || p.formaPagamento || '')}</span>`;
   const ep = pedido.enderecoPartes || null;
   const zapCliente = String(pedido.clienteWhatsapp || '').replace(/\D/g, '');
+  // Quem recebe (se for outra pessoa com telefone) é quem o entregador chama na porta
+  const zapContato = String(pedido.recebedorWhats || pedido.clienteWhatsapp || '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
 
   box.innerHTML = `
     ${minhasEntregas.length > 1 ? `
@@ -402,7 +414,7 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
         ${trocoBag ? `<div class="mb-bag-total"><span>Troco para levar</span><strong>${formatarCentavos(trocoBag)}</strong></div>` : ''}
         ${rotaCompletaUrl ? `<a class="btn-primary" style="text-decoration:none; text-align:center; display:block; margin-top:8px;" href="${rotaCompletaUrl}" target="_blank" rel="noopener">🧭 Abrir rota completa no Google Maps (${comPino.length} paradas)</a>` : ''}
       </div>` : ''}
-    <div class="card" style="border: 2px solid var(--primary);">
+    <div class="card mb-ativo" style="border: 2px solid var(--primary);">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <span class="badge">${minhasEntregas.length > 1 ? `1ª PARADA DE ${minhasEntregas.length}` : 'EM ROTA AGORA'}</span>
         <strong>Pedido #${esc(pedido.numeroPedido || pedido.id.slice(0, 4))}</strong>
@@ -419,13 +431,13 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
       ${pedido.tipoLocal === 'condominio' ? '<div class="mb-alerta-pino">🏢 Condomínio: entregue na portaria se não puder subir.</div>' : pedido.tipoLocal === 'rural' ? '<div class="mb-alerta-pino">🌳 Sítio / área rural: siga o pino; a referência ajuda na entrada.</div>' : ''}
       ${ep && ep.rua ? `
         ${ep.bairro ? `<p class="mb-bairro">${esc(ep.bairro.toUpperCase())}</p>` : ''}
-        <p style="font-size:15px; margin:4px 0;"><strong>📍 ${esc(ep.rua)}${ep.numero ? `, ${esc(ep.numero)}` : ''}</strong></p>
+        <p class="mb-endereco"><strong>📍 ${esc(ep.rua)}${ep.numero ? `, ${esc(ep.numero)}` : ''}</strong></p>
         ${ep.compl ? `<p class="mb-referencia">🏠 <strong>${esc(ep.compl)}</strong></p>` : ''}
         ${ep.apelido ? `<p class="gc-dica" style="margin:2px 0;">Endereço salvo como: ${esc(ep.apelido)}</p>` : ''}`
-        : `<p style="font-size:14px; color:var(--text-muted); margin:4px 0;"><strong>Endereço:</strong> ${esc(pedido.enderecoTexto)}</p>`}
+        : `<p class="mb-endereco"><strong>📍 ${esc(pedido.enderecoTexto)}</strong></p>`}
       ${pedido.pinoManual ? `<div class="mb-alerta-pino">⚠ O cliente ajustou o pino no mapa à mão. Confira a referência${zapCliente ? ` ou <a href="https://wa.me/55${esc(zapCliente.replace(/^55/, ''))}" target="_blank" rel="noopener">chame no WhatsApp</a>` : ''} se não achar.</div>` : ''}
       ${!pedido.destinoCoords && pedido.tipoEntrega === 'entrega' ? '<div class="mb-alerta-pino">⚠ Sem pino no mapa: o GPS vai pelo nome da rua. Confira a referência.</div>' : ''}
-      <p style="font-size:14px;">${linhaCobranca(pedido)}</p>
+      <p class="mb-valor">${linhaCobranca(pedido)}</p>
 
       <div style="margin:10px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
         <strong>Conferência de Itens:</strong>
@@ -435,16 +447,17 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
       <!-- Mapa Leaflet ao Vivo -->
       <div id="mapa-motoboy" style="height:220px; border-radius:8px; margin:10px 0; z-index:1;"></div>
 
-      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-top:10px;">
-        <a href="${mapsUrl}" target="_blank" rel="noopener" class="btn-outline-sm" style="text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center;">
-          🧭 Google Maps
-        </a>
-        <a href="${wazeUrl}" target="_blank" rel="noopener" class="btn-outline-sm" style="text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center;">
-          🚗 Waze
-        </a>
-      </div>
       <p class="mb-distancia" id="mb-distancia">${pedido.destinoCoords ? '📍 Calculando a distância até o cliente...' : ''}</p>
-      <button id="btn-concluir-entrega" class="btn-primary" style="margin-top:4px;">✅ Confirmar Entrega</button>
+      <div class="mb-atalhos">
+        <a href="${wazeUrl}" target="_blank" rel="noopener">🗺️<span>Rota (Waze)</span></a>
+        ${zapContato ? `<a href="https://wa.me/55${esc(zapContato)}?text=${encodeURIComponent(`Olá, sou o entregador da ${AppState.lojaDados.nome || 'loja'} e cheguei no seu endereço!`)}" target="_blank" rel="noopener">💬<span>WhatsApp</span></a>
+        <a href="tel:+55${esc(zapContato)}">📞<span>Ligar</span></a>` : '<span class="mb-atalho-off">💬<span>Sem telefone</span></span><span class="mb-atalho-off">📞<span>Sem telefone</span></span>'}
+      </div>
+      <a class="mb-maps" href="${mapsUrl}" target="_blank" rel="noopener">ou abrir no Google Maps</a>
+      <div id="btn-concluir-entrega" class="mb-deslizar" role="slider" aria-label="Deslize para confirmar a entrega" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+        <span class="mb-deslizar-texto">Deslize para confirmar entrega →</span>
+        <span class="mb-deslizar-bola">✅</span>
+      </div>
       ${proximas.length ? '<button id="btn-pular-entrega" class="btn-outline-sm" type="button" style="width:100%; margin-top:8px;">⏭️ Cliente não atende — ir para a próxima e voltar depois</button>' : ''}
 
       <button id="btn-ocorrencia-entrega" class="btn-outline-sm" style="width:100%; margin-top:8px; color:var(--danger); border-color:var(--danger);">
@@ -499,8 +512,51 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
     }
   }, 100);
 
-  document.getElementById('btn-concluir-entrega').onclick = () => tentarFinalizarEntrega(pedido, 'concluido');
+  ligarDeslizar(document.getElementById('btn-concluir-entrega'), () => tentarFinalizarEntrega(pedido, 'concluido'));
   document.getElementById('btn-ocorrencia-entrega').onclick = () => tentarFinalizarEntrega(pedido, 'ocorrencia');
+}
+
+// Botão deslizante: só confirma arrastando a bolinha até o fim (não dá baixa sem querer no bolso/suporte)
+function ligarDeslizar(trilho, acao) {
+  if (!trilho) return;
+  const bola = trilho.querySelector('.mb-deslizar-bola');
+  let inicioX = null, max = 0, pos = 0;
+  const mover = (x) => {
+    pos = Math.max(0, Math.min(max, x));
+    bola.style.transform = `translateX(${pos}px)`;
+    trilho.style.setProperty('--progresso', `${Math.round((pos / (max || 1)) * 100)}%`);
+    trilho.setAttribute('aria-valuenow', String(Math.round((pos / (max || 1)) * 100)));
+  };
+  const soltar = () => {
+    if (inicioX === null) return;
+    inicioX = null;
+    bola.style.transition = 'transform .2s';
+    if (max && pos >= max * 0.85) {
+      mover(max);
+      try { navigator.vibrate && navigator.vibrate(40); } catch (_) {}
+      setTimeout(() => { mover(0); }, 600);
+      acao();
+    } else mover(0);
+  };
+  bola.addEventListener('pointerdown', (e) => {
+    max = trilho.clientWidth - bola.offsetWidth - 8;
+    inicioX = e.clientX - pos;
+    bola.style.transition = 'none';
+    bola.setPointerCapture(e.pointerId);
+  });
+  bola.addEventListener('pointermove', (e) => { if (inicioX !== null) mover(e.clientX - inicioX); });
+  bola.addEventListener('pointerup', soltar);
+  bola.addEventListener('pointercancel', () => { inicioX = null; bola.style.transition = 'transform .2s'; mover(0); });
+  // Teclado (acessibilidade): seta para a direita ou Enter confirma
+  trilho.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'ArrowRight') { e.preventDefault(); acao(); } });
+}
+
+// Alto contraste: escuro à noite (18h às 6h ou celular no modo escuro), claro e forte de dia (sol)
+function aplicarContrasteRua() {
+  const h = new Date().getHours();
+  const noite = h >= 18 || h < 6 || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.classList.toggle('mb-noite', noite);
+  document.documentElement.classList.toggle('mb-dia', !noite);
 }
 
 // 4. Validação de Cerca de 100m + Justificativa Auditável + Fila Offline
@@ -593,6 +649,7 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
       const texto = btn.textContent;
       btn.disabled = true; btn.textContent = '⏳ Reservando...';
       const ok = await assumirEntregaAtomica(btn.dataset.assumir, motoboyUid);
+      if (ok) { try { navigator.vibrate && navigator.vibrate(40); } catch (_) {} }
       if (!ok && document.body.contains(btn)) { btn.disabled = false; btn.textContent = texto; }
     };
   });

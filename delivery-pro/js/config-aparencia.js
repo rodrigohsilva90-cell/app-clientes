@@ -88,6 +88,26 @@ export function abrirConfigAparencia() {
     </form>
   `;
   document.body.appendChild(overlay);
+  // 👁️ Ver a loja como o cliente vê (tela cheia), e voltar a editar com 1 toque
+  const slugLoja = l.slug || AppState.slug || '';
+  if (slugLoja) {
+    const btnVer = document.createElement('button');
+    btnVer.type = 'button';
+    btnVer.className = 'ap-ver-ao-vivo';
+    btnVer.textContent = '👁️ Ver a loja ao vivo';
+    let quadro = null;
+    btnVer.onclick = () => {
+      if (quadro) { quadro.remove(); quadro = null; btnVer.textContent = '👁️ Ver a loja ao vivo'; return; }
+      quadro = document.createElement('iframe');
+      quadro.className = 'ap-quadro-previa';
+      quadro.title = 'Sua loja como o cliente vê';
+      quadro.src = `/${encodeURIComponent(slugLoja)}?previa=${Date.now()}`;
+      overlay.appendChild(quadro);
+      btnVer.textContent = '✏️ Voltar a editar';
+      showToast('Mostrando o que já foi salvo. Salve para ver as mudanças novas.', 4000);
+    };
+    overlay.appendChild(btnVer);
+  }
   const form = overlay.querySelector('form');
   overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
 
