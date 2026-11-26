@@ -2,7 +2,7 @@ import { db, auth, formatarCentavos, showToast, esc, WORKER_API_URL } from './co
 import { AppState } from './router.js';
 import { montarItem, ofertaDoDia } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes, enviarAvaliacao } from './acompanhar.js';
-import { calcularFrete, coordsValidas, adicionaisAgora, modoOperacaoAtual, esgotadoAgora } from './frete.js';
+import { calcularFrete, coordsValidas, adicionaisAgora, modoOperacaoAtual, esgotadoAgora, valorFreteKm } from './frete.js';
 import { situacaoLoja } from './horario.js';
 import { statusAssinatura } from './plano.js';
 import { configPublica } from './push-cliente.js';
@@ -113,7 +113,13 @@ export async function iniciarVitrine() {
   const iniciais = esc((loja.nome || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase());
   const chips = [
     modoOperacaoAtual(loja) === 'retirada' ? '🛍️ Retirada no balcão' : loja.taxaEntregaTexto ? `🛵 ${esc(loja.taxaEntregaTexto)}`
-      : (loja.frete && coordsValidas(loja.localizacao) ? `🛵 a partir de ${formatarCentavos((loja.frete.baseCentavos || 0) + adicionaisAgora(loja).centavos)}` : ''),
+      : (loja.frete && coordsValidas(loja.localizacao) ? (() => {
+          const fr = loja.frete;
+          const menor = (fr.modo === 'faixas' ? Math.min(...(fr.faixas || []).map(x => Number(x.centavos) || 0), Infinity) : valorFreteKm(fr, 0));
+          const v = (Number.isFinite(menor) ? menor : 0) + adicionaisAgora(loja).centavos;
+          return !v ? '🛵 Entrega grátis' : fr.modo === 'fixo' ? `🛵 Entrega ${formatarCentavos(v)}` : `🛵 Entrega a partir de ${formatarCentavos(v)}`;
+        })() : ''),
+    modoOperacaoAtual(loja) !== 'retirada' && loja.frete && Number(loja.frete.gratisAcimaCentavos) > 0 && loja.frete.modo !== 'gratis' ? `🎁 Entrega grátis acima de ${formatarCentavos(loja.frete.gratisAcimaCentavos)}` : '',
     modoOperacaoAtual(loja) === 'retirada' ? `⏱️ pronto em ${esc(loja.tempoPreparo || '15-25 min')}` : `⏱️ ${esc(tempoEstimado)}`,
     loja.pedidoMinimoCentavos ? `💲 Mín. ${formatarCentavos(loja.pedidoMinimoCentavos)}` : '',
     loja.fidelidade && loja.fidelidade.ativo ? `🎁 A cada ${esc(loja.fidelidade.meta || 10)} pedidos, ${formatarCentavos(loja.fidelidade.premioCentavos || 0)} de desconto` : ''
@@ -131,6 +137,7 @@ export async function iniciarVitrine() {
         <h1>${esc(loja.nome)}</h1>
         <span class="vt-aberto${situacao.aberta ? '' : ' fechado'}">● ${esc(situacao.aberta && situacao.semHorario ? 'Aberto' : situacao.texto)}</span>
         <div class="vt-chips">${chips.map(c => `<span class="vt-chip">${c}</span>`).join('')}</div>
+        ${loja.mostrarEndereco && loja.enderecoTexto ? `<a class="vt-endereco" href="https://www.google.com/maps/search/?api=1&query=${coordsValidas(loja.localizacao) ? `${loja.localizacao.lat},${loja.localizacao.lng}` : encodeURIComponent(loja.enderecoTexto)}" target="_blank" rel="noopener">📍 ${esc(loja.enderecoTexto)} <span>· ver no mapa</span></a>` : ''}
         ${loja.instagram ? `<a class="vt-insta" href="https://instagram.com/${esc(loja.instagram)}" target="_blank" rel="noopener">📸 @${esc(loja.instagram)}</a>` : ''}
       </div>
     </div>
@@ -708,6 +715,7 @@ function abrirModalCheckout() {
         ? '<label><input type="radio" name="chk-tipo" value="entrega" disabled /> 🛵 Entrega <small>(hoje não)</small></label><label><input type="radio" name="chk-tipo" value="retirada" checked /> 🏪 Retirar na loja</label>'
         : `<label><input type="radio" name="chk-tipo" value="entrega" ${salvo.tipo !== 'retirada' ? 'checked' : ''} /> 🛵 Entrega</label>
       <label><input type="radio" name="chk-tipo" value="retirada" ${salvo.tipo === 'retirada' ? 'checked' : ''} /> 🏪 Retirar na loja</label>`}
+    ${loja.mostrarEndereco && loja.enderecoTexto ? `<p class="gc-dica" style="margin:-6px 0 10px;">🏪 Retirada em: <strong>${esc(loja.enderecoTexto)}</strong></p>` : ''}
     </div>
 
     <div id="box-entrega">
@@ -1014,7 +1022,7 @@ function abrirModalCheckout() {
       freteAtual = { freteCentavos: 0 };
       linhaFrete.classList.add('hidden');
     } else {
-      freteAtual = calcularFrete(loja, destino);
+      freteAtual = calcularFrete(loja, destino, new Date(), subtotalCentavos);
       linhaFrete.classList.remove('hidden');
       const valor = document.getElementById('chk-frete');
       if (!freteAtual.configurado) {
@@ -1043,7 +1051,9 @@ function abrirModalCheckout() {
         };
         btn.disabled = true;
       } else {
-        valor.textContent = `${formatarCentavos(freteAtual.freteCentavos)} (${freteAtual.distanciaKm} km${freteAtual.adicional ? ` · ${freteAtual.adicional}` : ''})`;
+        valor.textContent = freteAtual.freteCentavos === 0
+          ? `Grátis 🎉${freteAtual.gratisPorValor ? ' (pedido acima do valor da loja)' : ''}`
+          : `${formatarCentavos(freteAtual.freteCentavos)} (${freteAtual.distanciaKm} km${freteAtual.adicional ? ` · ${freteAtual.adicional}` : ''})`;
         // Pino dentro da área: falta só o cliente confirmar que é a porta dele
         if (!pinoConfirmado) btn.disabled = true;
       }
@@ -1094,7 +1104,7 @@ function abrirModalCheckout() {
   function desenharConfirmacao() {
     const box = document.getElementById('chk-confirmar');
     if (!box) return;
-    const f = tipoAtual() === 'entrega' && temFrete && destino ? calcularFrete(loja, destino) : null;
+    const f = tipoAtual() === 'entrega' && temFrete && destino ? calcularFrete(loja, destino, new Date(), subtotalCentavos) : null;
     if (!f || f.fora || f.bloqueado || f.precisaLocal) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
     const rua = ruaDetectada ? `<small>📍 O pino está em: <strong>${esc(ruaDetectada)}</strong></small>` : '<small>📍 Identificando a rua...</small>';

@@ -294,7 +294,7 @@ async function criarPedidoSeguro(request, env) {
     let freteCentavos = 0;
     let distanciaKm = null;
     if (tipoEntrega === 'entrega') {
-      const frete = calcularFrete(loja, destino);
+      const frete = calcularFrete(loja, destino, new Date(), subtotalCentavos);
       if (frete.configurado) {
         if (frete.precisaLocal) throw new ErroPedido('Marque sua localização no mapa para calcularmos a entrega.');
         if (frete.fora) throw new ErroPedido(`Seu endereço (${frete.distanciaKm} km) fica fora da área de entrega. Escolha retirar na loja.`);
@@ -1637,7 +1637,27 @@ function adicionaisAgora(loja, data = new Date()) {
   if (f.noturnoAtivo && Number(f.noturnoCentavos) > 0 && dentroDoHorario(f.noturnoInicio, f.noturnoFim, loja, data)) { centavos += Number(f.noturnoCentavos); textos.push('Adicional noturno'); }
   return { centavos, texto: textos.length ? textos.join(' + ') : null };
 }
-function calcularFrete(loja, destino, data = new Date()) {
+// MESMA conta de js/frete.js (se mudar lá, mude aqui)
+// Valor da entrega para uma distância (sem adicionais). Modos:
+//  'fixo'      = mesmo valor para qualquer endereço da área
+//  'distancia' = taxa base com X km incluídos + R$ por km a mais (padrão das lojas antigas)
+//  'faixas'    = tabela "até N km = R$ X"
+//  'gratis'    = sem taxa
+function valorFreteKm(f, km) {
+  const modo = f.modo || 'distancia';
+  if (modo === 'gratis') return 0;
+  if (modo === 'fixo') return Number(f.fixoCentavos) || 0;
+  if (modo === 'faixas') {
+    const faixas = (Array.isArray(f.faixas) ? f.faixas : []).filter(x => Number(x.ateKm) > 0).sort((a, b) => Number(a.ateKm) - Number(b.ateKm));
+    if (!faixas.length) return 0;
+    const fx = faixas.find(x => km <= Number(x.ateKm)) || faixas[faixas.length - 1];
+    return Number(fx.centavos) || 0;
+  }
+  const excedente = Math.max(0, km - (Number(f.kmInclusos) || 0));
+  // arredonda o valor por km para cima, de 50 em 50 centavos
+  return (Number(f.baseCentavos) || 0) + Math.ceil((excedente * (Number(f.porKmCentavos) || 0)) / 50) * 50;
+}
+function calcularFrete(loja, destino, data = new Date(), subtotalCentavos = 0) {
   const f = loja && loja.frete;
   const origem = loja && loja.localizacao;
   if (!f || !coordsValidas(origem)) return { configurado: false, freteCentavos: 0 };
@@ -1647,8 +1667,9 @@ function calcularFrete(loja, destino, data = new Date()) {
   if (Number(f.raioMaxKm) > 0 && km > Number(f.raioMaxKm)) return { configurado: true, fora: true, distanciaKm };
   const area = areaBloqueada(loja, destino, data);
   if (area) return { configurado: true, bloqueado: true, distanciaKm, area: { nome: area.nome || 'esta região', sempre: !!area.sempre, inicio: area.inicio, fim: area.fim } };
-  const excedente = Math.max(0, km - (Number(f.kmInclusos) || 0));
-  let freteCentavos = (Number(f.baseCentavos) || 0) + Math.ceil((excedente * (Number(f.porKmCentavos) || 0)) / 50) * 50;
+  const gratisAcima = Number(f.gratisAcimaCentavos) || 0;
+  if (gratisAcima > 0 && Number(subtotalCentavos) >= gratisAcima) return { configurado: true, freteCentavos: 0, distanciaKm, adicional: null, gratisPorValor: true };
+  let freteCentavos = valorFreteKm(f, km);
   const extra = adicionaisAgora(loja, data);
   freteCentavos += extra.centavos;
   return { configurado: true, freteCentavos, distanciaKm, adicional: extra.texto };

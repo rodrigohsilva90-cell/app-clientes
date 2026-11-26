@@ -62,7 +62,27 @@ export function adicionaisAgora(loja, data = new Date()) {
 }
 
 // Retorna: { configurado:false } | { precisaLocal:true } | { fora:true, distanciaKm } | { bloqueado:true, area, distanciaKm } | { freteCentavos, distanciaKm, adicional }
-export function calcularFrete(loja, destino, data = new Date()) {
+// Valor da entrega para uma distância (sem adicionais). Modos:
+//  'fixo'      = mesmo valor para qualquer endereço da área
+//  'distancia' = taxa base com X km incluídos + R$ por km a mais (padrão das lojas antigas)
+//  'faixas'    = tabela "até N km = R$ X"
+//  'gratis'    = sem taxa
+export function valorFreteKm(f, km) {
+  const modo = f.modo || 'distancia';
+  if (modo === 'gratis') return 0;
+  if (modo === 'fixo') return Number(f.fixoCentavos) || 0;
+  if (modo === 'faixas') {
+    const faixas = (Array.isArray(f.faixas) ? f.faixas : []).filter(x => Number(x.ateKm) > 0).sort((a, b) => Number(a.ateKm) - Number(b.ateKm));
+    if (!faixas.length) return 0;
+    const fx = faixas.find(x => km <= Number(x.ateKm)) || faixas[faixas.length - 1];
+    return Number(fx.centavos) || 0;
+  }
+  const excedente = Math.max(0, km - (Number(f.kmInclusos) || 0));
+  // arredonda o valor por km para cima, de 50 em 50 centavos
+  return (Number(f.baseCentavos) || 0) + Math.ceil((excedente * (Number(f.porKmCentavos) || 0)) / 50) * 50;
+}
+
+export function calcularFrete(loja, destino, data = new Date(), subtotalCentavos = 0) {
   const f = loja && loja.frete;
   const origem = loja && loja.localizacao;
   if (!f || !coordsValidas(origem)) return { configurado: false, freteCentavos: 0 };
@@ -74,9 +94,10 @@ export function calcularFrete(loja, destino, data = new Date()) {
   const area = areaBloqueada(loja, destino, data);
   if (area) return { configurado: true, bloqueado: true, distanciaKm, area: { nome: area.nome || 'esta região', sempre: !!area.sempre, inicio: area.inicio, fim: area.fim } };
 
-  const excedente = Math.max(0, km - (Number(f.kmInclusos) || 0));
-  // arredonda o valor por km para cima, de 50 em 50 centavos
-  let freteCentavos = (Number(f.baseCentavos) || 0) + Math.ceil((excedente * (Number(f.porKmCentavos) || 0)) / 50) * 50;
+  // Frete grátis acima de um valor de pedido (opcional): zera a entrega, inclusive adicionais
+  const gratisAcima = Number(f.gratisAcimaCentavos) || 0;
+  if (gratisAcima > 0 && Number(subtotalCentavos) >= gratisAcima) return { configurado: true, freteCentavos: 0, distanciaKm, adicional: null, gratisPorValor: true };
+  let freteCentavos = valorFreteKm(f, km);
   const extra = adicionaisAgora(loja, data);
   freteCentavos += extra.centavos;
   const adicional = extra.texto;

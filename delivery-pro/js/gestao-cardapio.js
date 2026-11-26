@@ -50,7 +50,10 @@ export async function abrirGestaoCardapio() {
   overlay.innerHTML = `
     <div class="gc-janela">
       <header class="gc-topo">
-        <h3>🍕 Produtos e preços</h3>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button class="btn-outline-sm gc-voltar" id="gc-voltar" type="button">← Lista</button>
+          <h3>🍕 Produtos e preços</h3>
+        </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <span id="gc-status" class="gc-status"></span>
           <button class="btn-outline-sm" id="gc-desfazer" title="Voltar o cardápio para como estava antes do último salvamento">↩ Desfazer</button>
@@ -79,6 +82,24 @@ export async function abrirGestaoCardapio() {
     document.body.style.overflow = '';
   };
   $('#gc-fechar').onclick = fechar;
+  $('#gc-lista').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.id === 'gc-nova-cat-nome') { e.preventDefault(); $('#gc-lista [data-acao="nova-categoria"]').click(); }
+  });
+  $('#gc-voltar').onclick = () => { selecionadoId = null; renderLista(); renderEditor(); };
+  const secoesAbertas = new Map(); // seção do formulário aberta/fechada (por produto)
+  $('#gc-editor').addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (d.tagName === 'DETAILS' && d.dataset.secao && selecionadoId) secoesAbertas.set(`${selecionadoId}:${d.dataset.secao}`, d.open);
+  }, true);
+  const aberta = (secao, padrao) => ((secoesAbertas.get(`${selecionadoId}:${secao}`) ?? padrao) ? 'open' : '');
+  // Preço que aparece na lista: o normal, ou "a partir de" quando depende das opções
+  const precoNaLista = (p) => {
+    const base = Number(p.precoCentavos) || 0;
+    const obrig = (p.grupos || []).filter(g => Number(g.minimo) > 0 && (g.opcoes || []).length);
+    const extra = obrig.reduce((a, g) => a + Math.min(...g.opcoes.map(o => Number(o.precoCentavos) || 0)), 0);
+    if (!base && !extra) return (p.grupos || []).length ? 'preço nas opções' : '<em>sem preço</em>';
+    return `${obrig.length ? 'a partir de ' : ''}${formatarCentavos(base + extra)}`;
+  };
 
   // ---------- Lista da esquerda: categorias e produtos ----------
   function renderLista() {
@@ -90,12 +111,15 @@ export async function abrirGestaoCardapio() {
     ];
 
     lista.innerHTML = `
-      <button class="btn-outline-sm gc-largo" data-acao="nova-categoria">+ Nova categoria</button>
-      ${!blocos.length ? '<p class="gc-dica">Comece criando uma categoria (ex: Pizzas, Bebidas).</p>' : ''}
+      <div class="gc-nova-cat">
+        <input id="gc-nova-cat-nome" maxlength="40" placeholder="Nova categoria (ex: Pizzas, Bebidas)" aria-label="Nome da nova categoria" />
+        <button class="btn-primary" type="button" data-acao="nova-categoria">+ Criar</button>
+      </div>
+      ${!blocos.length ? '<p class="gc-dica">Comece criando uma categoria (ex: Pizzas, Bebidas). Depois toque em "+ Produto" dentro dela.</p>' : ''}
       ${blocos.map(b => `
         <div class="gc-cat">
           <div class="gc-cat-topo">
-            <strong>${esc(b.cat.nome)}</strong>
+            <strong>${esc(b.cat.nome)} <small class="gc-cat-qtd">${b.itens.length} ${b.itens.length === 1 ? 'produto' : 'produtos'}</small></strong>
             ${b.ci >= 0 ? `
               <span class="gc-acoes">
                 <button title="Subir" data-acao="cat-subir" data-i="${b.ci}">↑</button>
@@ -106,7 +130,11 @@ export async function abrirGestaoCardapio() {
           </div>
           ${b.itens.map(p => `
             <div class="gc-item${p.id === selecionadoId ? ' ativo' : ''}" data-acao="abrir" data-id="${esc(p.id)}">
-              <span class="gc-item-nome">${esc(p.nome || '(sem nome)')}${p.oferta && p.oferta.precoCentavos ? ' 🔥' : ''}${esgotadoAgora(p, AppState.lojaDados) ? ' <em>· esgotado</em>' : ''}</span>
+              <span class="gc-item-foto">${urlSegura(p.imagemUrl) ? `<img src="${esc(urlSegura(p.imagemUrl))}" alt="" loading="lazy" />` : '🍽️'}</span>
+              <span class="gc-item-info">
+                <span class="gc-item-nome">${esc(p.nome || '(sem nome)')}${p.oferta && p.oferta.precoCentavos ? ' 🔥' : ''}</span>
+                <small class="gc-item-preco">${precoNaLista(p)}</small>
+              </span>
               <span class="gc-acoes">
                 <button title="${esgotadoAgora(p, AppState.lojaDados) ? 'Esgotado: toque para voltar a vender' : 'À venda: toque para marcar esgotado'}" class="gc-venda${esgotadoAgora(p, AppState.lojaDados) ? ' off' : ''}" data-acao="prod-venda" data-id="${esc(p.id)}">${esgotadoAgora(p, AppState.lojaDados) ? '⛔ Esgotado' : '✅ Ativo'}</button>
                 <button title="Subir" data-acao="prod-subir" data-id="${esc(p.id)}">↑</button>
@@ -141,10 +169,13 @@ export async function abrirGestaoCardapio() {
     const cats = rascunho.categorias;
 
     if (acao === 'nova-categoria') {
-      const nome = prompt('Nome da nova categoria (ex: Pizzas, Lanches, Bebidas):');
-      if (!nome || !nome.trim()) return;
+      const campo = $('#gc-nova-cat-nome');
+      const nome = campo ? campo.value : '';
+      if (!nome || !nome.trim()) { showToast('Escreva o nome da categoria (ex: Pizzas).'); if (campo) campo.focus(); return; }
+      if (cats.some(c => c.nome.trim().toLowerCase() === nome.trim().toLowerCase())) { showToast('Já existe uma categoria com esse nome.'); return; }
       cats.push({ id: novoId('cat'), nome: nome.trim().slice(0, 40) });
       marcarAlterado();
+      showToast(`Categoria "${nome.trim()}" criada. Agora toque em "+ Produto em ${nome.trim()}".`);
     } else if (acao === 'cat-renomear') {
       const nome = prompt('Novo nome da categoria:', cats[i].nome);
       if (!nome || !nome.trim()) return;
@@ -169,6 +200,7 @@ export async function abrirGestaoCardapio() {
       marcarAlterado();
     } else if (acao === 'abrir') {
       selecionadoId = alvo.dataset.id;
+      setTimeout(() => { $('#gc-editor').scrollTop = 0; }, 0);
     } else if (acao === 'prod-venda') {
       e.stopPropagation();
       const p = rascunho.produtos.find(x => x.id === alvo.dataset.id);
@@ -192,6 +224,7 @@ export async function abrirGestaoCardapio() {
   function renderEditor() {
     const ed = $('#gc-editor');
     const p = rascunho.produtos.find(x => x.id === selecionadoId);
+    overlay.querySelector('.gc-janela').classList.toggle('editando', Boolean(p)); // celular: lista OU produto
     if (!p) {
       ed.innerHTML = `
         <div class="gc-vazio">
@@ -206,6 +239,8 @@ export async function abrirGestaoCardapio() {
 
     ed.innerHTML = `
       <div class="gc-form">
+        <section class="gc-secao">
+        <h4 class="gc-secao-titulo">📝 Informações</h4>
         <label>Nome do produto</label>
         <input data-campo="nome" value="${esc(p.nome)}" maxlength="80" placeholder="Ex: Pizza Grande" />
 
@@ -226,7 +261,9 @@ export async function abrirGestaoCardapio() {
         </div>
         <p class="gc-dica">${p.grupos.length ? 'Produto com opções: o preço acima é somado ao das opções escolhidas. Para pizza por sabor, deixe 0,00.' : 'Preço final do produto.'}</p>
 
-        <label>Foto</label>
+        </section>
+        <section class="gc-secao">
+        <h4 class="gc-secao-titulo">📷 Foto</h4>
         <div class="gc-foto-linha">
           <div class="gc-foto">${foto ? `<img src="${esc(foto)}" alt="" />` : '🍽️'}</div>
           <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
@@ -235,6 +272,9 @@ export async function abrirGestaoCardapio() {
           </div>
         </div>
 
+        </section>
+        <details class="gc-secao" data-secao="estoque" ${aberta('estoque', esgotado || p.controlarEstoque)}>
+        <summary>📦 Disponibilidade e estoque <small>${esgotado ? '⛔ esgotado' : p.controlarEstoque ? `${esc(estoqueAtual(p, AppState.lojaDados))} em estoque` : 'à venda'}</small></summary>
         <label class="gc-check"><input type="checkbox" data-campo="esgotado" ${esgotado ? 'checked' : ''} /> Esgotado (pausar venda deste produto)</label>
         <div class="gc-linha">
           <div><label>📦 Quantidade em estoque <small>(vazio = sem controle)</small></label>
@@ -244,7 +284,9 @@ export async function abrirGestaoCardapio() {
         </div>
         <p class="gc-dica" style="margin-top:-4px;">Cada venda tira do estoque sozinha. Quando chega a 0, aparece "Esgotado" no cardápio${Number(p.estoqueDiario) > 0 ? ' e volta cheio no dia seguinte' : ''}.</p>
 
-        <h4 class="gc-subtitulo">🔥 Oferta do dia <small>(preço promocional nos dias marcados)</small></h4>
+        </details>
+        <details class="gc-secao" data-secao="oferta" ${aberta('oferta', Boolean(p.oferta && p.oferta.precoCentavos))}>
+        <summary>🔥 Oferta do dia <small>${p.oferta && p.oferta.precoCentavos ? `por ${formatarCentavos(p.oferta.precoCentavos)}` : 'nenhuma'}</small></summary>
         <div class="gc-linha">
           <div>
             <label>De (preço normal)</label>
@@ -260,7 +302,10 @@ export async function abrirGestaoCardapio() {
         </div>
         <p class="gc-dica">Nos dias marcados o cliente vê "de ${formatarCentavos(p.precoCentavos || 0)} por ..." e paga o preço da oferta. Nos outros dias vale o preço normal.</p>
 
-        <h4 class="gc-subtitulo">Grupos de opções <small>(sabores, bordas, adicionais)</small></h4>
+        </details>
+        <details class="gc-secao" data-secao="opcoes" ${aberta('opcoes', p.grupos.length > 0)}>
+        <summary>🧩 Opções: sabores, bordas, adicionais <small>${p.grupos.length ? `${p.grupos.length} grupo(s)` : 'nenhuma'}</small></summary>
+        <p class="gc-dica">Use para o cliente escolher: sabores da pizza, ponto da carne, borda, adicionais. Ex.: grupo "Sabores", escolha de 1 até 2.</p>
         <div id="gc-grupos">
           ${p.grupos.map((g, gi) => `
             <div class="gc-grupo">
@@ -299,6 +344,7 @@ export async function abrirGestaoCardapio() {
           `).join('')}
         </div>
         <button class="btn-outline-sm gc-largo" data-acao="add-grupo">+ Adicionar grupo de opções</button>
+        </details>
 
         <div class="gc-rodape">
           <button class="btn-outline-sm" data-acao="duplicar">📄 Duplicar</button>
