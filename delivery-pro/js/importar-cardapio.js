@@ -13,7 +13,8 @@ const ADICIONAIS_LANCHE = { titulo: 'Adicionais', minimo: 0, maximo: 5, regraDeP
 
 const MODELOS = {
   pizzaria: {
-    nome: '🍕 Pizzaria', layout: 'gastronomia',
+    nome: '🍕 Pizzaria', layout: 'gastronomia', cor: '#c0392b', tempo: '40-60 min',
+    descricao: 'Pizzas no capricho, massa artesanal e entrega rápida. Peça meio a meio!',
     categorias: ['🍕 Pizzas', '🥤 Bebidas', '🍫 Sobremesas'],
     itens: [
       item('🍕 Pizzas', 'Pizza Grande (8 fatias)', 0, 'Escolha 1 ou 2 sabores (meio a meio). Cobra o sabor mais caro.', [
@@ -32,7 +33,8 @@ const MODELOS = {
     ]
   },
   hamburgueria: {
-    nome: '🍔 Hamburgueria', layout: 'gastronomia',
+    nome: '🍔 Hamburgueria', layout: 'gastronomia', cor: '#d35400', tempo: '30-50 min',
+    descricao: 'Hambúrgueres artesanais suculentos, batata crocante e combos que matam a fome.',
     categorias: ['🍔 Lanches', '🍟 Porções', '🎁 Combos', '🥤 Bebidas'],
     itens: [
       item('🍔 Lanches', 'X-Burger', 22, 'Pão, hambúrguer 150g e queijo', [ADICIONAIS_LANCHE]),
@@ -57,7 +59,8 @@ const MODELOS = {
     ]
   },
   adega: {
-    nome: '🍺 Adega', layout: 'varejo',
+    nome: '🍺 Adega', layout: 'varejo', cor: '#7f1d1d', tempo: '20-40 min',
+    descricao: 'Cerveja gelada, destilados, vinhos e gelo na sua porta. Venda proibida para menores de 18 anos.',
     categorias: ['🍺 Cervejas (+18)', '🥃 Destilados (+18)', '🍷 Vinhos (+18)', '🧊 Gelo e conveniência'],
     itens: [
       item('🍺 Cervejas (+18)', 'Heineken long neck 330ml', 9),
@@ -81,8 +84,79 @@ const MODELOS = {
       item('🧊 Gelo e conveniência', 'Copo descartável (50 un.)', 8)
     ]
   },
+  acai: {
+    nome: '🍇 Açaí', layout: 'gastronomia', cor: '#6b21a8', tempo: '20-40 min',
+    descricao: 'Açaí cremoso do seu jeito, com os complementos que você ama.',
+    categorias: ['🍇 Açaí', '🍦 Sorvetes', '🥤 Bebidas'],
+    itens: [
+      item('🍇 Açaí', 'Açaí 300ml', 14, 'Monte do seu jeito', [{ titulo: 'Complementos', minimo: 0, maximo: 5, regraDePreco: 'SOMA', opcoes: ops([['Leite condensado', 2], ['Granola', 2], ['Paçoca', 2], ['Banana', 2], ['Leite em pó', 2], ['Morango', 3], ['Creme de avelã', 5]]) }]),
+      item('🍇 Açaí', 'Açaí 500ml', 19, 'Monte do seu jeito', [{ titulo: 'Complementos', minimo: 0, maximo: 6, regraDePreco: 'SOMA', opcoes: ops([['Leite condensado', 2], ['Granola', 2], ['Paçoca', 2], ['Banana', 2], ['Leite em pó', 2], ['Morango', 3], ['Creme de avelã', 5]]) }]),
+      item('🍇 Açaí', 'Açaí 700ml', 25, 'Monte do seu jeito', [{ titulo: 'Complementos', minimo: 0, maximo: 8, regraDePreco: 'SOMA', opcoes: ops([['Leite condensado', 2], ['Granola', 2], ['Paçoca', 2], ['Banana', 2], ['Leite em pó', 2], ['Morango', 3], ['Creme de avelã', 5]]) }]),
+      item('🍇 Açaí', 'Barca de açaí 1L (para dividir)', 39, 'Vem com 4 complementos à escolha da casa'),
+      item('🍦 Sorvetes', 'Pote de sorvete 1,5L', 28, 'Creme, chocolate ou napolitano'),
+      item('🍦 Sorvetes', 'Milkshake 400ml', 18, 'Chocolate, morango ou ovomaltine'),
+      item('🥤 Bebidas', 'Água sem gás 500ml', 4),
+      item('🥤 Bebidas', 'Refrigerante lata 350ml', 6)
+    ]
+  },
+  marmitaria: {
+    nome: '🍱 Marmitaria', layout: 'gastronomia', cor: '#15803d', tempo: '30-45 min',
+    descricao: 'Comida caseira de verdade, feita no dia e entregue quentinha.',
+    categorias: ['🍱 Marmitas', '🍽 Pratos do dia', '🥤 Bebidas e sobremesas'],
+    itens: [
+      item('🍱 Marmitas', 'Marmita P', 18, 'Arroz, feijão, salada e 1 proteína', [{ titulo: 'Proteína', minimo: 1, maximo: 1, regraDePreco: 'SOMA', opcoes: ops([['Frango grelhado', 0], ['Linguiça', 2], ['Bife acebolado', 3], ['Peixe empanado', 4]]) }]),
+      item('🍱 Marmitas', 'Marmita M', 22, 'Arroz, feijão, salada, farofa e 1 proteína', [{ titulo: 'Proteína', minimo: 1, maximo: 1, regraDePreco: 'SOMA', opcoes: ops([['Frango grelhado', 0], ['Linguiça', 2], ['Bife acebolado', 3], ['Peixe empanado', 4]]) }]),
+      item('🍱 Marmitas', 'Marmita G', 26, 'Tudo da M em tamanho grande', [{ titulo: 'Proteína', minimo: 1, maximo: 2, regraDePreco: 'SOMA', opcoes: ops([['Frango grelhado', 0], ['Linguiça', 2], ['Bife acebolado', 3], ['Peixe empanado', 4]]) }]),
+      item('🍽 Pratos do dia', 'Feijoada completa (sábado)', 32),
+      item('🍽 Pratos do dia', 'Parmegiana com arroz e fritas', 34),
+      item('🍽 Pratos do dia', 'Strogonoff de frango', 28),
+      item('🥤 Bebidas e sobremesas', 'Refrigerante lata 350ml', 6),
+      item('🥤 Bebidas e sobremesas', 'Suco natural 500ml', 8),
+      item('🥤 Bebidas e sobremesas', 'Pudim de leite', 8)
+    ]
+  },
+  petshop: {
+    nome: '🐾 Pet shop', layout: 'varejo', cor: '#1d4ed8', tempo: '40-60 min',
+    descricao: 'Ração, petiscos e cuidados para o seu pet, sem sair de casa.',
+    categorias: ['🐶 Cães', '🐱 Gatos', '🧼 Higiene e acessórios'],
+    itens: [
+      item('🐶 Cães', 'Ração cães adultos 15kg', 159.9),
+      item('🐶 Cães', 'Ração cães filhotes 3kg', 59.9),
+      item('🐶 Cães', 'Petisco bifinho 65g', 12.9),
+      item('🐶 Cães', 'Osso mastigável', 9.9),
+      item('🐱 Gatos', 'Ração gatos adultos 10kg', 139.9),
+      item('🐱 Gatos', 'Sachê para gatos 85g', 3.5),
+      item('🐱 Gatos', 'Areia sanitária 4kg', 24.9),
+      item('🧼 Higiene e acessórios', 'Tapete higiênico (30 un.)', 49.9),
+      item('🧼 Higiene e acessórios', 'Shampoo pet 500ml', 22.9),
+      item('🧼 Higiene e acessórios', 'Brinquedo mordedor', 19.9),
+      item('🧼 Higiene e acessórios', 'Coleira ajustável', 29.9),
+      item('🧼 Higiene e acessórios', 'Comedouro inox', 14.9)
+    ]
+  },
+  mercadinho: {
+    nome: '🛒 Mercadinho', layout: 'varejo', cor: '#15803d', tempo: '40-60 min',
+    descricao: 'As compras do dia a dia entregues rapidinho na sua casa.',
+    categorias: ['🍚 Mercearia', '🥛 Frios e padaria', '🥤 Bebidas', '🧽 Limpeza e higiene'],
+    itens: [
+      item('🍚 Mercearia', 'Arroz 5kg', 27.9),
+      item('🍚 Mercearia', 'Feijão carioca 1kg', 8.9),
+      item('🍚 Mercearia', 'Café 500g', 19.9),
+      item('🍚 Mercearia', 'Óleo de soja 900ml', 7.9),
+      item('🍚 Mercearia', 'Açúcar 1kg', 4.99),
+      item('🥛 Frios e padaria', 'Leite integral 1L', 5.49),
+      item('🥛 Frios e padaria', 'Pão de forma', 9.9),
+      item('🥛 Frios e padaria', 'Ovos (12 un.)', 12.9),
+      item('🥤 Bebidas', 'Refrigerante 2L', 9.9),
+      item('🥤 Bebidas', 'Água mineral 1,5L', 3.5),
+      item('🧽 Limpeza e higiene', 'Papel higiênico (12 rolos)', 21.9),
+      item('🧽 Limpeza e higiene', 'Detergente 500ml', 2.99),
+      item('🧽 Limpeza e higiene', 'Sabão em pó 1kg', 14.9)
+    ]
+  },
   farmacia: {
-    nome: '💊 Farmácia', layout: 'varejo',
+    nome: '💊 Farmácia', layout: 'varejo', cor: '#0f766e', tempo: '30-50 min',
+    descricao: 'Higiene, cuidados e conveniência com entrega rápida perto de você.',
     categorias: ['🪥 Higiene', '👶 Bebê', '🧴 Cuidados', '🥤 Conveniência'],
     itens: [
       item('🪥 Higiene', 'Creme dental 90g', 6.9),
@@ -108,6 +182,13 @@ const MODELOS = {
     ]
   }
 };
+
+// Ramos disponíveis (para o Master criar loja de demonstração com o visual certo)
+export const RAMOS = Object.fromEntries(Object.entries(MODELOS).map(([k, m]) => [k, { nome: m.nome, cor: m.cor, layout: m.layout, descricao: m.descricao, tempo: m.tempo, itens: m.itens.length }]));
+export function cardapioDoRamo(ramo) {
+  const m = MODELOS[ramo];
+  return m ? montarDoModelo(m) : null;
+}
 
 // Modelo → formato do cardápio (categorias + produtos com IDs novos)
 function montarDoModelo(m) {

@@ -1681,7 +1681,7 @@ async function painelMaster(request, env) {
 
     if (corpo.acao === 'listar') {
       const lojas = (await fs.listar('lojas')).map(l => ({
-        id: l.id, nome: l.nome || l.id, slug: l.slug || null, plano: l.plano || null,
+        id: l.id, nome: l.nome || l.id, slug: l.slug || null, plano: l.plano || null, demo: l.demo === true, ramo: l.ramo || null,
         trialAte: l.trialAte || null, pagoAte: l.pagoAte || null, criadoEm: l.criadoEm || null,
         whatsapp: l.whatsapp || null, origemParceiro: l.origemParceiro || null
       }));
@@ -1731,6 +1731,66 @@ async function painelMaster(request, env) {
     }
 
     if (corpo.acao === 'eu') return jsonResponse({ ok: true }); // usado pelo simulador de rota (/demo)
+
+    // "Vitrine pronta": o Master cria a loja do cliente ANTES da visita, com o visual do ramo.
+    // O Master fica como dono provisório (pode montar cardápio, logo, cores) até transferir.
+    if (corpo.acao === 'criarLojaDemo') {
+      const nome = String(corpo.nome || '').trim().slice(0, 60);
+      const slug = String(corpo.slug || '').toLowerCase();
+      const whatsapp = String(corpo.whatsapp || '').replace(/\D/g, '').slice(0, 13);
+      const cor = /^#[0-9a-f]{6}$/i.test(corpo.cor || '') ? corpo.cor : '#ea1d2c';
+      const ramo = String(corpo.ramo || '').replace(/[^a-z]/g, '').slice(0, 20) || null;
+      if (nome.length < 2) throw new ErroPedido('Informe o nome da loja.');
+      if (!/^[a-z0-9]([a-z0-9-]{1,38}[a-z0-9])$/.test(slug) || SLUGS_RESERVADOS.has(slug)) throw new ErroPedido('Endereço inválido ou reservado. Use letras, números e traço.');
+      if (await fs.ler(`slugs/${slug}`)) throw new ErroPedido('Esse endereço já está em uso. Escolha outro.', 409);
+      const lojaId = 'l_' + [...crypto.getRandomValues(new Uint8Array(10))].map(b => b.toString(16).padStart(2, '0')).join('');
+      const ok = await fs.gravarJuntos([
+        { caminho: `slugs/${slug}`, dados: { lojaId, ativo: true }, novo: true },
+        { caminho: `lojas/${lojaId}`, novo: true, horaServidor: ['criadoEm'], dados: {
+          nome, slug, donoUid: usuario.sub, whatsapp: whatsapp || null, corPrimaria: cor,
+          tempoEstimado: String(corpo.tempo || '30-45 min').slice(0, 20),
+          descricao: String(corpo.descricao || '').slice(0, 160) || null,
+          layoutVitrine: corpo.layout === 'varejo' ? 'varejo' : 'gastronomia',
+          ramo, demo: true, ativo: true, plano: 'teste', trialAte: new Date(Date.now() + 30 * DIA_MS), origemParceiro: 'master'
+        } },
+        { caminho: `lojas/${lojaId}/equipe/${usuario.sub}`, dados: { papel: 'dono', nome: 'Master (demonstração)', email: usuario.email || null } }
+      ]);
+      if (!ok) throw new ErroPedido('Esse endereço acabou de ser usado. Escolha outro.', 409);
+      return jsonResponse({ ok: true, lojaId, slug });
+    }
+
+    // Entrega a loja de demonstração ao cliente: cria (ou usa) o login dele, passa a ser o dono
+    // e o teste grátis de 7 dias começa agora. O Master sai da equipe da loja.
+    if (corpo.acao === 'transferirLoja') {
+      const lojaId = String(corpo.lojaId || '');
+      if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId)) throw new ErroPedido('Loja inválida.');
+      const email = String(corpo.email || '').trim().toLowerCase();
+      const nomeDono = String(corpo.nomeDono || '').trim().slice(0, 60) || 'Dono';
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ErroPedido('E-mail do cliente inválido.');
+      const loja = await fs.ler(`lojas/${lojaId}`);
+      if (!loja) throw new ErroPedido('Loja não encontrada.', 404);
+      if (!loja.demo) throw new ErroPedido('Esta loja já pertence a um cliente.');
+      let uid = await fs.buscarLoginPorEmail(email);
+      let senhaProvisoria = null;
+      if (!uid) {
+        const letras = 'abcdefghjkmnpqrstuvwxyz23456789';
+        senhaProvisoria = [...crypto.getRandomValues(new Uint8Array(8))].map(b => letras[b % letras.length]).join('');
+        uid = await fs.criarLogin(email, senhaProvisoria, nomeDono);
+        if (!uid) throw new ErroPedido('Não foi possível criar o login. Tente de novo.');
+      }
+      if (uid === usuario.sub) throw new ErroPedido('Use o e-mail do cliente, não o seu.');
+      const perfil = await fs.ler(`usuarios/${uid}`);
+      const itens = [
+        { caminho: `lojas/${lojaId}/equipe/${uid}`, dados: { papel: 'dono', nome: nomeDono, email } }
+      ];
+      // Perfil do cliente aponta para esta loja (se ele ainda não tiver outra)
+      if (!perfil || !perfil.lojaId) itens.push({ caminho: `usuarios/${uid}`, horaServidor: ['criadoEm'], dados: { nome: nomeDono, email, lojaId, slug: loja.slug || null, roles: ['balcao', 'cliente'] } });
+      await fs.gravarJuntos(itens);
+      await fs.atualizar(`lojas/${lojaId}`, { donoUid: uid, demo: false, plano: 'teste', trialAte: new Date(Date.now() + 7 * DIA_MS), transferidaEm: new Date() });
+      if (usuario.sub !== uid) await fs.apagar([`lojas/${lojaId}/equipe/${usuario.sub}`]);
+      cacheLojas.clear();
+      return jsonResponse({ ok: true, email, senhaProvisoria, jaTinhaLogin: !senhaProvisoria, slug: loja.slug || null });
+    }
 
     // Mercado Pago do DONO do SaaS (recebe as mensalidades das lojas)
     if (corpo.acao === 'mpStatus') {

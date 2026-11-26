@@ -406,3 +406,17 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .moto-marker-wrapper { background: none; border: none; }
 .moto-icone { width: 40px; height: 40px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.35); border: 2px solid var(--primary); display: flex; align-items: center; justify-content: center; }
 .moto-emoji { font-size: 24px; line-height: 1; display: inline-block; transition: transform 0.3s ease; }
+.ms-ramos { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 4px 0 12px; }
+.ms-ramo { border: 2px solid var(--border); border-left: 6px solid var(--cor-ramo); border-radius: 12px; padding: 10px; background: var(--surface); font: inherit; color: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.ms-ramo span { font-size: 12px; color: var(--text-muted); }
+.ms-ramo.ativo { border-color: var(--cor-ramo); background: #f9fafb; box-shadow: 0 0 0 2px var(--cor-ramo) inset; }
+.ms-previa { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-top: 10px; }
+.ms-previa:empty { display: none; }
+.ms-previa-capa { height: 70px; }
+.ms-previa-info { display: flex; gap: 10px; padding: 10px; align-items: center; }
+.ms-previa-info div:last-child { display: flex; flex-direction: column; gap: 2px; }
+.ms-previa-info small { font-size: 12px; color: var(--text-muted); }
+.ms-previa-logo { width: 48px; height: 48px; border-radius: 50%; color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; margin-top: -30px; border: 3px solid #fff; flex-shrink: 0; }
+.ms-links { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ms-demo { background: #fef3c7; color: #92400e; }
+.ms-senha { font-family: monospace; font-size: 18px; letter-spacing: 1px; }

@@ -146,7 +146,7 @@ export async function iniciarBalcao() {
   });
 
   bannerAssinatura(assinatura).then(html => { if (html) root.insertAdjacentHTML('afterbegin', html); });
-  if (ehDono) pedirAceiteTermos();
+  if (ehDono && !AppState.lojaDados.demo) pedirAceiteTermos(); // loja de demonstração: o cliente aceita ao receber
   escutarPedidosEmTempoReal();
   iniciarCaoDeGuarda();
 }

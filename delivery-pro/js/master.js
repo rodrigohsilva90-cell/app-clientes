@@ -1,7 +1,9 @@
 // Painel Master do SaaS (/master): lojas, planos, testes, alerta de loja parada, parceiros e configuração.
 // Tudo passa pelo Worker (/api/master), que confere se o login é de um Master.
-import { auth, formatarCentavos, showToast, esc } from './config.js';
+import { auth, db, formatarCentavos, showToast, esc } from './config.js';
 import { statusAssinatura } from './plano.js';
+import { RAMOS, cardapioDoRamo } from './importar-cardapio.js';
+import { doc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const DIA_MS = 24 * 60 * 60 * 1000;
 let lojas = [];
@@ -95,6 +97,7 @@ function render() {
     </div>
     <div class="ms-barra">
       <input id="ms-busca" type="search" placeholder="🔍 Buscar loja, link ou WhatsApp" value="${esc(busca)}" />
+      <button class="btn-primary" id="ms-criar-loja" style="width:auto;">🏪 Criar loja para cliente</button>
       <a class="btn-outline-sm" href="/demo" target="_blank" rel="noopener" style="text-decoration:none;">🛵 Simulador de rota</a>
       <button class="btn-outline-sm" id="ms-config">⚙ Configurações</button>
     </div>
@@ -112,6 +115,8 @@ function render() {
   const campoBusca = root.querySelector('#ms-busca');
   campoBusca.oninput = () => { busca = campoBusca.value.trim().toLowerCase(); const pos = campoBusca.selectionStart; render(); const novo = document.getElementById('ms-busca'); novo.focus(); novo.setSelectionRange(pos, pos); };
   root.querySelector('#ms-config').onclick = abrirConfig;
+  root.querySelector('#ms-criar-loja').onclick = abrirCriarLoja;
+  root.querySelectorAll('[data-transferir]').forEach(b => b.onclick = () => abrirTransferir(lojas.find(l => l.id === b.dataset.transferir)));
   root.querySelectorAll('[data-acao]').forEach(b => b.onclick = () => executar(b.dataset.loja, b.dataset.acao, b.dataset.dias));
 }
 
@@ -124,7 +129,7 @@ function cartao({ l, ass, st, parada, vencendo }) {
     <div class="card ms-loja${parada || vencendo ? ' alerta' : ''}">
       <div class="ms-topo">
         <div>
-          <strong>${esc(l.nome)}</strong> <span class="badge">${esc(rotuloPlano)}</span>
+          <strong>${esc(l.nome)}</strong> ${l.demo ? '<span class="badge ms-demo">🎬 Demonstração</span>' : `<span class="badge">${esc(rotuloPlano)}</span>`}${l.ramo && RAMOS[l.ramo] ? ` <span class="gc-dica">${esc(RAMOS[l.ramo].nome)}</span>` : ''}
           <div class="gc-dica" style="margin:2px 0 0;">
             <a href="/${esc(l.slug || '')}" target="_blank" rel="noopener">/${esc(l.slug || '—')}</a>
             · criada ${dataBr(l.criadoEm)}${l.origemParceiro ? ` · parceiro: ${esc(l.origemParceiro)}` : ''}
@@ -143,6 +148,7 @@ function cartao({ l, ass, st, parada, vencendo }) {
       <div class="ms-acoes">
         ${zap ? `<a class="btn-outline-sm" href="https://wa.me/55${esc(zap.replace(/^55/, ''))}" target="_blank" rel="noopener">💬 WhatsApp</a>` : ''}
         ${l.slug ? `<a class="btn-outline-sm" href="/demo?loja=${esc(l.slug)}" target="_blank" rel="noopener" title="Simular uma entrega saindo desta loja">🎬 Simular entrega</a>` : ''}
+        ${l.demo ? `<a class="btn-outline-sm" href="/${esc(l.slug || '')}/painel" target="_blank" rel="noopener">🛠 Montar loja</a><button class="btn-primary" style="width:auto; font-size:13px; padding:6px 12px;" data-transferir="${esc(l.id)}">🤝 Entregar ao cliente</button>` : ''}
         <button class="btn-outline-sm" data-loja="${esc(l.id)}" data-acao="teste" data-dias="7">+7 dias de teste</button>
         <button class="btn-outline-sm" data-loja="${esc(l.id)}" data-acao="essencial" data-dias="30">Essencial 30 dias</button>
         <button class="btn-outline-sm" data-loja="${esc(l.id)}" data-acao="pro" data-dias="30">Pro 30 dias</button>
@@ -262,4 +268,146 @@ async function desenharCobrancas(box) {
         <small>${rotulo[c.status] || esc(c.status)} ${c.pagoEm || c.criadoEm ? new Date(c.pagoEm || c.criadoEm).toLocaleDateString('pt-BR') : ''}</small>
       </div>`).join('') : '<p class="gc-dica">Nenhum pagamento ainda.</p>';
   } catch (_) { box.innerHTML = '<p class="gc-dica">Não foi possível carregar.</p>'; }
+}
+
+// ===================== Vitrine pronta: loja de demonstração para um cliente =====================
+const slugDe = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+
+function abrirCriarLoja() {
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  const lista = Object.entries(RAMOS);
+  overlay.innerHTML = `
+    <form class="card gc-form" style="max-width:560px; width:100%; max-height:94vh; overflow-y:auto; margin:0;" novalidate>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>🏪 Criar loja para um cliente</h3><button class="btn-outline-sm" type="button" data-fechar>✕</button>
+      </div>
+      <p class="gc-dica">Monte a loja do cliente <strong>antes da visita</strong>, igual à que ele vai receber. Você fica como dono provisório para ajustar logo, preços e fotos; na visita, toque em "Entregar ao cliente".</p>
+
+      <label>1. Ramo do comércio (define cardápio, cores e visual)</label>
+      <div class="ms-ramos">
+        ${lista.map(([k, r]) => `<button type="button" class="ms-ramo" data-ramo="${k}" style="--cor-ramo:${r.cor};"><strong>${esc(r.nome)}</strong><span>${r.layout === 'varejo' ? 'Grade varejo' : 'Lista com foto'} · ${r.itens} itens</span></button>`).join('')}
+      </div>
+
+      <label>2. Nome do comércio</label>
+      <input name="nome" maxlength="60" placeholder="Ex: Pizzaria do Paulinho" />
+      <label>Endereço do cardápio</label>
+      <div class="cad-slug"><span>${esc(window.location.host)}/</span><input name="slug" maxlength="40" placeholder="pizzaria-do-paulinho" /></div>
+      <div class="gc-linha">
+        <div><label>WhatsApp da loja (opcional)</label><input name="zap" inputmode="tel" placeholder="11999999999" /></div>
+        <div><label>Cor principal</label><input name="cor" type="color" value="#ea1d2c" style="height:42px; padding:2px;" /></div>
+      </div>
+      <label>Frase de apresentação</label>
+      <textarea name="desc" rows="2" maxlength="160"></textarea>
+
+      <div class="ms-previa" id="ms-previa"></div>
+      <button class="btn-primary" type="submit" style="margin-top:12px;">✨ Criar loja de demonstração</button>
+    </form>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  const f = overlay.querySelector('form');
+  let ramo = null;
+  let slugMexido = false;
+
+  const previa = () => {
+    const r = RAMOS[ramo];
+    const nome = f.nome.value.trim() || 'Nome do comércio';
+    overlay.querySelector('#ms-previa').innerHTML = r ? `
+      <div class="ms-previa-capa" style="background:linear-gradient(135deg, ${esc(f.cor.value)}, #111827);"></div>
+      <div class="ms-previa-info"><div class="ms-previa-logo" style="background:${esc(f.cor.value)};">${esc(nome.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase())}</div>
+        <div><strong>${esc(nome)}</strong><small>${esc(f.desc.value || r.descricao)}</small><small>⏱ ${esc(r.tempo)} · ${r.layout === 'varejo' ? 'grade em 2 colunas' : 'lista com foto'}</small></div></div>` : '';
+  };
+  overlay.querySelectorAll('[data-ramo]').forEach(b => {
+    b.onclick = () => {
+      ramo = b.dataset.ramo;
+      overlay.querySelectorAll('[data-ramo]').forEach(x => x.classList.toggle('ativo', x === b));
+      f.cor.value = RAMOS[ramo].cor;
+      f.desc.value = RAMOS[ramo].descricao;
+      previa();
+    };
+  });
+  f.nome.oninput = () => { if (!slugMexido) f.slug.value = slugDe(f.nome.value); previa(); };
+  f.slug.oninput = () => { slugMexido = true; f.slug.value = slugDe(f.slug.value); };
+  f.cor.oninput = previa;
+  f.desc.oninput = previa;
+
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!ramo) return showToast('Escolha o ramo do comércio.');
+    if (f.nome.value.trim().length < 2) return showToast('Informe o nome do comércio.');
+    if (f.slug.value.length < 3) return showToast('O endereço precisa ter pelo menos 3 letras.');
+    const btn = f.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Criando...';
+    try {
+      const r = RAMOS[ramo];
+      const res = await api({ acao: 'criarLojaDemo', nome: f.nome.value.trim(), slug: f.slug.value, whatsapp: f.zap.value, cor: f.cor.value, descricao: f.desc.value.trim(), tempo: r.tempo, layout: r.layout, ramo });
+      // Cardápio do ramo (o Master é dono provisório, então pode gravar)
+      const cardapio = cardapioDoRamo(ramo);
+      await setDoc(doc(db, 'lojas', res.lojaId, 'publico', 'cardapio_completo'), { ...cardapio, atualizadoEm: serverTimestamp() });
+      const link = `${window.location.origin}/${res.slug}`;
+      f.innerHTML = `
+        <h3>✅ Loja criada!</h3>
+        <p class="gc-dica">A vitrine já está no ar com o cardápio de ${esc(r.nome)}. Antes da visita, abra "Montar loja" para colocar o logo (🎨 Aparência), ajustar preços e fotos e, se quiser, o endereço da loja (🛵 Entrega e frete).</p>
+        <div class="ms-links">
+          <a class="btn-primary" style="text-decoration:none; text-align:center;" href="/${esc(res.slug)}" target="_blank" rel="noopener">👀 Ver cardápio</a>
+          <a class="btn-outline-sm" style="text-decoration:none; text-align:center;" href="/${esc(res.slug)}/painel" target="_blank" rel="noopener">🛠 Montar loja (logo, preços, fotos)</a>
+          <a class="btn-outline-sm" style="text-decoration:none; text-align:center;" href="/demo?loja=${esc(res.slug)}" target="_blank" rel="noopener">🎬 Simular entrega desta loja</a>
+          <button class="btn-outline-sm" type="button" id="ms-copiar">📋 Copiar link: ${esc(link)}</button>
+        </div>
+        <button class="btn-outline-sm" type="button" data-fechar style="margin-top:10px;">Fechar</button>`;
+      f.querySelector('#ms-copiar').onclick = async () => { try { await navigator.clipboard.writeText(link); showToast('Link copiado!'); } catch (_) { showToast(link, 8000); } };
+      f.querySelector('[data-fechar]').onclick = () => { overlay.remove(); iniciarMaster(); };
+    } catch (err) {
+      showToast(err.message, 6000);
+      btn.disabled = false; btn.textContent = '✨ Criar loja de demonstração';
+    }
+  };
+}
+
+function abrirTransferir(loja) {
+  if (!loja) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  overlay.innerHTML = `
+    <form class="card gc-form" style="max-width:460px; width:100%; margin:0;" novalidate>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>🤝 Entregar "${esc(loja.nome)}"</h3><button class="btn-outline-sm" type="button" data-fechar>✕</button>
+      </div>
+      <p class="gc-dica">O cliente vira o dono da loja e os <strong>7 dias de teste grátis começam agora</strong>. Se ele ainda não tem login, o sistema cria um com senha provisória. Você sai da equipe da loja.</p>
+      <label>Nome do dono</label>
+      <input name="nome" maxlength="60" placeholder="Ex: Paulo Souza" />
+      <label>E-mail do dono (será o login dele)</label>
+      <input name="email" type="email" placeholder="cliente@email.com" />
+      <button class="btn-primary" type="submit" style="margin-top:12px;">Entregar a loja</button>
+    </form>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  const f = overlay.querySelector('form');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!f.email.value.trim()) return showToast('Informe o e-mail do cliente.');
+    if (!confirm(`Entregar "${loja.nome}" para ${f.email.value.trim()}? Você deixa de ser dono desta loja.`)) return;
+    const btn = f.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Entregando...';
+    try {
+      const r = await api({ acao: 'transferirLoja', lojaId: loja.id, email: f.email.value.trim(), nomeDono: f.nome.value.trim() });
+      const painel = `${window.location.origin}/${r.slug || loja.slug}/painel`;
+      const texto = `Olá${f.nome.value.trim() ? `, ${f.nome.value.trim().split(/\s+/)[0]}` : ''}! Sua loja "${loja.nome}" está pronta 🎉\nCardápio para os clientes: ${window.location.origin}/${r.slug || loja.slug}\nSeu painel: ${painel}\nLogin: ${r.email}${r.senhaProvisoria ? `\nSenha provisória: ${r.senhaProvisoria}\n(Troque em "Entrar" → "Esqueci minha senha".)` : '\nEntre com a senha que você já usa.'}\nSão 7 dias grátis com tudo liberado!`;
+      const zap = String(loja.whatsapp || '').replace(/\D/g, '');
+      f.innerHTML = `
+        <h3>✅ Loja entregue!</h3>
+        <p>Login: <strong>${esc(r.email)}</strong></p>
+        ${r.senhaProvisoria ? `<p>Senha provisória: <strong class="ms-senha">${esc(r.senhaProvisoria)}</strong></p><p class="gc-dica">Mostre ao cliente agora ou mande pelo WhatsApp. Ele pode trocar em "Entrar" → "Esqueci minha senha".</p>` : '<p class="gc-dica">Esse e-mail já tinha login: o cliente entra com a senha que já usa.</p>'}
+        <div class="ms-links">
+          ${zap ? `<a class="btn-primary btn-whats" style="text-decoration:none; text-align:center;" href="https://wa.me/${zap.startsWith('55') ? zap : '55' + zap}?text=${encodeURIComponent(texto)}" target="_blank" rel="noopener">📲 Enviar acesso no WhatsApp</a>` : ''}
+          <button class="btn-outline-sm" type="button" id="ms-copiar-acesso">📋 Copiar mensagem de acesso</button>
+        </div>
+        <button class="btn-outline-sm" type="button" data-fechar style="margin-top:10px;">Fechar</button>`;
+      f.querySelector('#ms-copiar-acesso').onclick = async () => { try { await navigator.clipboard.writeText(texto); showToast('Mensagem copiada!'); } catch (_) { showToast('Não deu para copiar.'); } };
+      f.querySelector('[data-fechar]').onclick = () => { overlay.remove(); iniciarMaster(); };
+    } catch (err) {
+      showToast(err.message, 6000);
+      btn.disabled = false; btn.textContent = 'Entregar a loja';
+    }
+  };
 }
