@@ -109,3 +109,13 @@ export function calcularRepasse(rep, p) {
   if (p.adicionalChuva) v += Number(rep.adicionalChuvaCentavos) || 0;
   return Math.max(0, Math.round(v));
 }
+
+// Estoque (igual ao Worker): com "repor todo dia", o primeiro movimento do dia começa da quantidade cheia
+export function diaDaLoja(loja, data = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: (loja && loja.fusoHorario) || 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(data);
+}
+export function estoqueAtual(prod, loja) {
+  if (Number(prod.estoqueDiario) > 0 && prod.estoqueRepostoEm !== diaDaLoja(loja)) return Number(prod.estoqueDiario);
+  return Number(prod.estoque) || 0;
+}
+export const esgotadoAgora = (prod, loja) => Boolean(prod.controlarEstoque) && estoqueAtual(prod, loja) <= 0;

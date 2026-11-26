@@ -599,3 +599,10 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .mb-saldo.negativo { background: #fee2e2; color: #7f1d1d; }
 .mb-ganho { display: block; color: #15803d; font-weight: 700; font-size: 13px; }
 .pin-campo { font-size: 28px; letter-spacing: 12px; text-align: center; width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 10px; margin: 4px 0 8px; }
+
+/* Tela do Pix: botão grande, barra do tempo e aviso de comprovante */
+.pix-copiar-grande { font-size: 18px; padding: 16px; min-height: 56px; }
+.pix-barra { height: 8px; border-radius: 6px; background: var(--border); overflow: hidden; margin-top: 10px; }
+.pix-barra span { display: block; height: 100%; width: 100%; background: var(--success); transition: width 1s linear, background .3s; }
+.pix-sem-comprovante { font-size: 14px; background: color-mix(in srgb, var(--success) 12%, transparent); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.pix-trote { border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin: 12px 0; }

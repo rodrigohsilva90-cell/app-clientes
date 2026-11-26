@@ -1,6 +1,6 @@
 // Página de acompanhamento do pedido pelo cliente: /{slug}/pedido/{id}
 // O ID do pedido é longo e aleatório, funciona como "senha" do link.
-import { db, formatarCentavos, esc } from './config.js';
+import { db, formatarCentavos, esc, showToast } from './config.js';
 import { AppState } from './router.js';
 import { criarMapaRastreamento, criarMarcadorMoto, criarLinhaRota } from './geo.js';
 import { cartaoNotificacao } from './push-cliente.js';
@@ -148,6 +148,7 @@ function etapasDo(p) {
 
 // ---- Pix automático: QR Code + copia e cola enquanto o pedido aguarda o pagamento ----
 let relogioPix = null;
+let esperavaPix = false; // para avisar (vibrar) quando o Pix for confirmado
 function renderPix(p, box, numero) {
   const expira = p.pix && (p.pix.expiraEm?.toMillis ? p.pix.expiraEm.toMillis() : Date.parse(p.pix.expiraEm));
   if (!p.pix || !p.pix.qrCode) {
@@ -167,11 +168,12 @@ function renderPix(p, box, numero) {
       <span class="pix-valor">${formatarCentavos(p.totalCentavos)}</span>
       ${p.pix.qrBase64 ? `<img class="pix-qr" alt="QR Code Pix" src="data:image/png;base64,${esc(p.pix.qrBase64)}" />` : ''}
       <p class="gc-dica">No celular: toque em <strong>Copiar código</strong>, abra o app do seu banco → Pix → <strong>Pix Copia e Cola</strong>.</p>
-      <button class="btn-primary" type="button" id="pix-copiar">📋 Copiar código Pix</button>
+      <button class="btn-primary pix-copiar-grande" type="button" id="pix-copiar">📋 Copiar código Pix</button>
       <textarea id="pix-codigo" class="pix-codigo" readonly rows="3">${esc(p.pix.qrCode)}</textarea>
+      <div class="pix-barra"><span id="pix-barra"></span></div>
       <p class="pix-tempo" id="pix-tempo"></p>
       <button class="btn-outline-sm" type="button" id="pix-ja-paguei" style="width:100%;">Já paguei</button>
-      <p class="gc-dica">Assim que o banco confirmar, esta tela muda sozinha e a loja recebe o pedido.</p>
+      <p class="pix-sem-comprovante">✅ <strong>Não precisa enviar comprovante.</strong> Esta tela atualiza sozinha assim que o banco confirmar, e a loja recebe o pedido na hora.</p>
     </div>`;
   box.querySelector('#pix-copiar').onclick = async () => {
     const campo = box.querySelector('#pix-codigo');
@@ -194,6 +196,13 @@ function renderPix(p, box, numero) {
     const el = document.getElementById('pix-tempo');
     if (!el) { clearInterval(relogioPix); return; }
     const resta = Math.max(0, (expira || 0) - Date.now());
+    const barra = document.getElementById('pix-barra');
+    if (barra) {
+      const fracao = Math.min(1, resta / (30 * 60000));
+      barra.style.width = `${Math.round(fracao * 100)}%`;
+      barra.style.background = fracao < 0.2 ? 'var(--danger)' : fracao < 0.5 ? 'var(--warning)' : 'var(--success)';
+    }
+    if (!resta) { renderPix(p, box, numero); clearInterval(relogioPix); return; }
     el.textContent = resta ? `⏱ Pague em até ${Math.floor(resta / 60000)}:${String(Math.floor(resta / 1000) % 60).padStart(2, '0')}` : '⌛ Tempo esgotado';
   };
   atualizar();
@@ -204,8 +213,15 @@ function renderStatus(p) {
   const box = document.getElementById('acomp-status');
   if (!box) return;
   const numero = esc(p.numeroPedido || p.id.slice(0, 6).toUpperCase());
-  if (p.status === 'aguardando_pagamento') return renderPix(p, box, numero);
+  if (p.status === 'aguardando_pagamento') { esperavaPix = true; return renderPix(p, box, numero); }
   delete box.dataset.pixDesenhado;
+  if (esperavaPix) {
+    esperavaPix = false;
+    if (p.status !== 'cancelado') {
+      try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (_) {}
+      showToast('✅ Pix confirmado! A loja já recebeu seu pedido.', 5000);
+    }
+  }
   if (relogioPix) { clearInterval(relogioPix); relogioPix = null; }
 
   if (p.status === 'ocorrencia' || p.status === 'cancelado') {

@@ -3,7 +3,7 @@ import { AppState } from './router.js';
 import { montarItem, ofertaDoDia } from './cardapio.js';
 import { abrirGestaoCardapio } from './gestao-cardapio.js';
 import { abrirConfigEntrega } from './config-entrega.js';
-import { escutarEstadoCaixa, abrirCaixa, fecharCaixa, pausarPedidos } from './turno.js';
+import { escutarEstadoCaixa, abrirCaixa, fecharCaixa, pausarPedidos, lancarMovimento } from './turno.js';
 import { iniciarKds } from './kds.js';
 import { abrirEquipe } from './equipe.js';
 import { situacaoLoja } from './horario.js';
@@ -22,7 +22,8 @@ import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { modoOperacaoAtual } from './frete.js';
 import { qrSvg, abrirQrLoja } from './qr.js';
 import { abrirConfigRepasse, abrirAcertos } from './repasse.js';
-import { calcularRepasse } from './frete.js';
+import { calcularRepasse, esgotadoAgora, estoqueAtual } from './frete.js';
+import { baixarBackupLoja } from './backup.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp, Timestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
@@ -71,6 +72,8 @@ export async function iniciarBalcao() {
         <button id="btn-som" class="btn-outline-sm">🔊 Ativar campainha</button>
         <button id="btn-pausa" class="btn-outline-sm">⏸ Pausar pedidos</button>
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
+        <button id="btn-estoque" class="btn-outline-sm">📦 Estoque</button>
+        <button id="btn-despesa" class="btn-outline-sm" hidden>💸 Despesa / Sangria</button>
         ${ehDono ? '<button id="btn-config" class="btn-outline-sm btn-config-loja">⚙ Configurações</button>' : '<button id="btn-carrinhos" class="btn-outline-sm">🛒 Carrinhos abandonados</button>'}
       </div>
     </div>
@@ -103,6 +106,8 @@ export async function iniciarBalcao() {
   if (ehDono) desenharModoOperacao();
   ligarIndicadorRede();
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
+  document.getElementById('btn-estoque').onclick = abrirEstoqueRapido;
+  document.getElementById('btn-despesa').onclick = () => lancarMovimento(estadoCaixa);
   if (ehDono) document.getElementById('btn-config').onclick = abrirMenuConfig;
   else document.getElementById('btn-carrinhos').onclick = abrirCarrinhos;
 
@@ -117,13 +122,15 @@ export async function iniciarBalcao() {
     const btn = document.getElementById('btn-caixa');
     if (!status || !btn) return;
     btn.disabled = false;
+    const btnDesp = document.getElementById('btn-despesa');
+    if (btnDesp) btnDesp.hidden = !estado.caixaAberto;
     if (estado.caixaAberto) {
       const desde = estado.abertoEm?.toDate ? estado.abertoEm.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
       status.innerHTML = `🟢 Caixa aberto${desde ? ` desde ${desde}` : ''} · fundo ${formatarCentavos(estado.fundoTrocoCentavos || 0)}`;
       status.style.color = 'var(--success)';
       btn.textContent = '🔒 Fechar caixa';
       btn.className = 'btn-outline-sm';
-      btn.onclick = () => fecharCaixa(estadoCaixa);
+      btn.onclick = () => fecharCaixa(estadoCaixa, { dono: ehDono });
     } else {
       status.textContent = '🔴 Caixa fechado — abra o caixa para começar o turno';
       status.style.color = 'var(--danger)';
@@ -598,7 +605,7 @@ async function abrirPedidoManualRapido() {
       <h4 style="margin:6px 0;">${esc(g.nome)}</h4>
       <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap:8px; margin-bottom:10px;">
         ${g.itens.map(p => {
-          const esgotado = p.controlarEstoque && p.estoque <= 0;
+          const esgotado = esgotadoAgora(p, AppState.lojaDados);
           return `
             <button class="btn-outline-sm" data-prod="${esc(p.id)}" ${esgotado ? 'disabled' : ''} style="text-align:left; padding:10px; min-height:64px; ${esgotado ? 'opacity:0.5;' : ''}">
               <div>${esc(p.nome)}</div>
@@ -690,7 +697,7 @@ async function abrirPedidoManualRapido() {
     btn.disabled = true;
     btn.textContent = 'Lançando...';
     try {
-      await addDoc(collection(db, 'lojas', AppState.lojaId, 'pedidos'), {
+      const novo = await addDoc(collection(db, 'lojas', AppState.lojaId, 'pedidos'), {
         numeroPedido: Math.floor(100 + Math.random() * 900),
         clienteNome: nome,
         clienteWhatsapp: telefone,
@@ -709,6 +716,11 @@ async function abrirPedidoManualRapido() {
       });
       overlay.remove();
       showToast('Pedido lançado direto na cozinha!');
+      // Dá baixa no estoque dos produtos controlados (no servidor, sem brigar com vendas do site)
+      if (sacola.some(i => produtos.find(x => x.id === i.produtoId)?.controlarEstoque)) {
+        apiEstoque({ acao: 'venda', pedidoId: novo.id, itens: sacola.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade })) })
+          .catch(err => showToast('⚠️ Pedido lançado, mas o estoque não baixou: ' + err.message, 6000));
+      }
     } catch (err) {
       console.error(err);
       showToast('Erro ao lançar o pedido.');
@@ -805,6 +817,85 @@ async function despacharParaEntregador(p) {
   });
 }
 
+// ===================== Estoque rápido (todos da equipe) =====================
+async function apiEstoque(corpo) {
+  const u = auth.currentUser;
+  const r = await fetch('/api/estoque', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await u.getIdToken()}` }, body: JSON.stringify({ lojaId: AppState.lojaId, ...corpo }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.erro || 'Não foi possível mexer no estoque.');
+  return d;
+}
+
+async function abrirEstoqueRapido() {
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  overlay.innerHTML = `
+    <div class="card gc-form" style="max-width:520px; width:100%; max-height:92vh; overflow-y:auto; margin:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>📦 Estoque de hoje</h3><button class="btn-outline-sm" type="button" data-fechar>✕</button>
+      </div>
+      <p class="gc-dica">Caiu, estragou, deu de brinde? Toque em <strong>−1 perda</strong>. Chegou mais? <strong>+1</strong> ou <strong>Definir</strong>. As vendas já descontam sozinhas.</p>
+      <div data-lista><p class="gc-dica">Carregando...</p></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  const lista = overlay.querySelector('[data-lista]');
+  let produtos = [];
+  async function carregar() {
+    try {
+      const snap = await getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo'));
+      produtos = ((snap.exists() && snap.data().produtos) || []).filter(p => p.controlarEstoque);
+    } catch (err) { lista.innerHTML = '<p class="gc-dica">Não foi possível carregar.</p>'; return; }
+    if (!produtos.length) { lista.innerHTML = '<p class="gc-dica">Nenhum produto com controle de estoque. Ligue em ⚙ Configurações → Produtos e preços → produto → "Controlar estoque".</p>'; return; }
+    lista.innerHTML = produtos.map(p => {
+      const q = estoqueAtual(p, AppState.lojaDados);
+      return `<div class="mb-bag-linha" style="align-items:center; gap:6px; flex-wrap:wrap;">
+        <span style="flex:1; min-width:140px;"><strong>${esc(p.nome)}</strong><br/><small style="color:${q <= 0 ? 'var(--danger)' : q <= 3 ? 'var(--warning)' : 'inherit'};">${q <= 0 ? 'Esgotado' : q + ' un.'}${Number(p.estoqueDiario) > 0 ? ` · repõe ${Number(p.estoqueDiario)} todo dia` : ''}</small></span>
+        <button type="button" class="btn-outline-sm" data-perda="${esc(p.id)}" ${q <= 0 ? 'disabled' : ''}>−1 perda</button>
+        <button type="button" class="btn-outline-sm" data-mais="${esc(p.id)}">+1</button>
+        <button type="button" class="btn-outline-sm" data-definir="${esc(p.id)}">Definir</button>
+      </div>`;
+    }).join('');
+    lista.querySelectorAll('[data-perda]').forEach(b => b.onclick = () => escolherMotivo(b.dataset.perda));
+    lista.querySelectorAll('[data-mais]').forEach(b => b.onclick = () => mexer({ produtoId: b.dataset.mais, delta: 1, motivo: 'reposicao' }, b));
+    lista.querySelectorAll('[data-definir]').forEach(b => b.onclick = () => {
+      const p = produtos.find(x => x.id === b.dataset.definir);
+      const t = prompt(`Quantas unidades de "${p.nome}" tem agora?`, String(estoqueAtual(p, AppState.lojaDados)));
+      if (t === null) return;
+      const valor = Math.round(Number(String(t).replace(',', '.')));
+      if (!Number.isFinite(valor) || valor < 0 || valor > 100000) { showToast('Número inválido.'); return; }
+      mexer({ acao: 'definir', produtoId: p.id, valor }, b);
+    });
+  }
+  function escolherMotivo(produtoId) {
+    const p = produtos.find(x => x.id === produtoId);
+    const caixa = document.createElement('div');
+    caixa.className = 'gc-overlay';
+    caixa.innerHTML = `<div class="card gc-form" style="max-width:340px; width:100%; margin:0;">
+      <h3>−1 ${esc(p.nome)}</h3><p class="gc-dica">O que aconteceu?</p>
+      <div style="display:grid; gap:6px;">
+        <button type="button" class="btn-outline-sm" data-m="quebra">💥 Caiu / quebrou / estragou</button>
+        <button type="button" class="btn-outline-sm" data-m="consumo">🍽 Consumo da equipe</button>
+        <button type="button" class="btn-outline-sm" data-m="brinde">🎁 Brinde / cortesia</button>
+        <button type="button" class="btn-outline-sm" data-m="acerto">🔢 Contagem errada</button>
+        <button type="button" class="btn-outline-sm" data-cancelar>Cancelar</button>
+      </div></div>`;
+    document.body.appendChild(caixa);
+    caixa.querySelector('[data-cancelar]').onclick = () => caixa.remove();
+    caixa.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { caixa.remove(); mexer({ produtoId, delta: -1, motivo: b.dataset.m }); });
+  }
+  async function mexer(corpo, botao) {
+    if (botao) botao.disabled = true;
+    try {
+      const d = await apiEstoque(corpo);
+      showToast(d.estoque != null ? `Estoque agora: ${d.estoque} un.` : 'Estoque atualizado.');
+    } catch (err) { showToast(err.message); }
+    await carregar();
+  }
+  carregar();
+}
+
 // ===================== Menu único de configurações do dono =====================
 // Tudo o que é ajuste da loja fica aqui, separado por assunto, para o painel ter poucos botões.
 const MENU_CONFIG = [
@@ -831,6 +922,9 @@ const MENU_CONFIG = [
     { icone: '🎁', nome: 'Cartão fidelidade', dica: 'A cada X pedidos o cliente ganha desconto', abrir: () => abrirConfigFidelidade() },
     { icone: '⭐', nome: 'Avaliações', dica: 'O que os clientes acharam', abrir: () => abrirAvaliacoes() },
     { icone: '🛒', nome: 'Carrinhos abandonados', dica: 'Quem desistiu no meio do pedido', abrir: () => abrirCarrinhos() }
+  ] },
+  { titulo: '🔒 Segurança', itens: [
+    { icone: '📦', nome: 'Baixar backup da loja', dica: 'Arquivo com cardápio, pedidos, clientes e acertos', abrir: () => baixarBackupLoja() }
   ] }
 ];
 

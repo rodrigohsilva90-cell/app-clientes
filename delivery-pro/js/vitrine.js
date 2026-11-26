@@ -2,7 +2,7 @@ import { db, auth, formatarCentavos, showToast, esc, WORKER_API_URL } from './co
 import { AppState } from './router.js';
 import { montarItem, ofertaDoDia } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes, enviarAvaliacao } from './acompanhar.js';
-import { calcularFrete, coordsValidas, adicionaisAgora, modoOperacaoAtual } from './frete.js';
+import { calcularFrete, coordsValidas, adicionaisAgora, modoOperacaoAtual, esgotadoAgora } from './frete.js';
 import { situacaoLoja } from './horario.js';
 import { statusAssinatura } from './plano.js';
 import { configPublica } from './push-cliente.js';
@@ -246,7 +246,7 @@ function renderizarProdutos(dados, modoLayout) {
   }
 
   const idsCategorias = new Set(categorias.map(c => c.id));
-  const emOferta = ativos.filter(p => ofertaDoDia(p, AppState.lojaDados) && !(p.controlarEstoque && p.estoque <= 0));
+  const emOferta = ativos.filter(p => ofertaDoDia(p, AppState.lojaDados) && !esgotadoAgora(p, AppState.lojaDados));
   const secoes = [
     ...(emOferta.length ? [{ id: '_ofertas', nome: '🔥 Ofertas de hoje', itens: emOferta }] : []),
     ...categorias.map(c => ({ id: c.id, nome: c.nome, itens: ativos.filter(p => p.categoriaId === c.id) })),
@@ -262,7 +262,7 @@ function renderizarProdutos(dados, modoLayout) {
       <h2 class="vt-secao-titulo">${esc(s.nome)}</h2>
       <div class="vt-grade${modoLayout === 'varejo' ? ' varejo' : ''}">
         ${s.itens.map(prod => {
-          const esgotado = prod.controlarEstoque && (prod.estoque <= 0);
+          const esgotado = esgotadoAgora(prod, AppState.lojaDados);
           const temOpcoes = prod.grupos && prod.grupos.length;
           const foto = urlSegura(prod.imagemUrl);
           const oferta = ofertaDoDia(prod, AppState.lojaDados);
@@ -426,7 +426,7 @@ function remontarUltimoPedido(dados) {
   let salvo = null;
   try { salvo = JSON.parse(localStorage.getItem(CHAVE_ULTIMO(AppState.lojaId)) || 'null'); } catch (_) {}
   if (!salvo || !Array.isArray(salvo.itens)) return [];
-  const produtos = (dados.produtos || []).filter(p => !p.excluido && !(p.controlarEstoque && p.estoque <= 0));
+  const produtos = (dados.produtos || []).filter(p => !p.excluido && !esgotadoAgora(p, AppState.lojaDados));
   const itens = [];
   for (const it of salvo.itens) {
     const prod = produtos.find(p => p.id === it.produtoId);

@@ -3,6 +3,7 @@
 import { db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { enviarFoto } from './fotos.js';
+import { diaDaLoja, esgotadoAgora, estoqueAtual } from './frete.js';
 import { doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const REGRAS = [
@@ -41,6 +42,7 @@ export async function abrirGestaoCardapio() {
   rascunho.produtos = rascunho.produtos.filter(p => !p.excluido);
 
   let selecionadoId = null;  // produto aberto no formulário
+  const estoqueEditado = new Set(); // produtos cujo estoque foi mexido aqui (os outros mantêm o valor do servidor ao salvar)
   let alterado = false;
 
   const overlay = document.createElement('div');
@@ -51,6 +53,7 @@ export async function abrirGestaoCardapio() {
         <h3>🍕 Produtos e preços</h3>
         <div style="display:flex; gap:8px; align-items:center;">
           <span id="gc-status" class="gc-status"></span>
+          <button class="btn-outline-sm" id="gc-desfazer" title="Voltar o cardápio para como estava antes do último salvamento">↩ Desfazer</button>
           <button class="btn-primary" id="gc-salvar" style="width:auto;">💾 Salvar</button>
           <button class="btn-outline-sm" id="gc-fechar">✕</button>
         </div>
@@ -103,9 +106,9 @@ export async function abrirGestaoCardapio() {
           </div>
           ${b.itens.map(p => `
             <div class="gc-item${p.id === selecionadoId ? ' ativo' : ''}" data-acao="abrir" data-id="${esc(p.id)}">
-              <span class="gc-item-nome">${esc(p.nome || '(sem nome)')}${p.oferta && p.oferta.precoCentavos ? ' 🔥' : ''}${p.controlarEstoque && p.estoque <= 0 ? ' <em>· esgotado</em>' : ''}</span>
+              <span class="gc-item-nome">${esc(p.nome || '(sem nome)')}${p.oferta && p.oferta.precoCentavos ? ' 🔥' : ''}${esgotadoAgora(p, AppState.lojaDados) ? ' <em>· esgotado</em>' : ''}</span>
               <span class="gc-acoes">
-                <button title="${p.controlarEstoque && p.estoque <= 0 ? 'Esgotado: toque para voltar a vender' : 'À venda: toque para marcar esgotado'}" class="gc-venda${p.controlarEstoque && p.estoque <= 0 ? ' off' : ''}" data-acao="prod-venda" data-id="${esc(p.id)}">${p.controlarEstoque && p.estoque <= 0 ? '⛔ Esgotado' : '✅ Ativo'}</button>
+                <button title="${esgotadoAgora(p, AppState.lojaDados) ? 'Esgotado: toque para voltar a vender' : 'À venda: toque para marcar esgotado'}" class="gc-venda${esgotadoAgora(p, AppState.lojaDados) ? ' off' : ''}" data-acao="prod-venda" data-id="${esc(p.id)}">${esgotadoAgora(p, AppState.lojaDados) ? '⛔ Esgotado' : '✅ Ativo'}</button>
                 <button title="Subir" data-acao="prod-subir" data-id="${esc(p.id)}">↑</button>
                 <button title="Descer" data-acao="prod-descer" data-id="${esc(p.id)}">↓</button>
               </span>
@@ -170,8 +173,11 @@ export async function abrirGestaoCardapio() {
       e.stopPropagation();
       const p = rascunho.produtos.find(x => x.id === alvo.dataset.id);
       if (!p) return;
-      if (p.controlarEstoque && p.estoque <= 0) { delete p.controlarEstoque; delete p.estoque; }
-      else { p.controlarEstoque = true; p.estoque = 0; }
+      estoqueEditado.add(p.id);
+      if (esgotadoAgora(p, AppState.lojaDados)) {
+        if (Number(p.estoqueDiario) > 0) { p.estoque = Number(p.estoqueDiario); p.estoqueRepostoEm = diaDaLoja(AppState.lojaDados); }
+        else { delete p.controlarEstoque; delete p.estoque; }
+      } else { p.controlarEstoque = true; p.estoque = 0; p.estoqueRepostoEm = diaDaLoja(AppState.lojaDados); }
       marcarAlterado();
       showToast('Toque em 💾 Salvar para os clientes verem a mudança.');
     } else if (acao === 'prod-subir' || acao === 'prod-descer') {
@@ -194,7 +200,7 @@ export async function abrirGestaoCardapio() {
         </div>`;
       return;
     }
-    const esgotado = Boolean(p.controlarEstoque && p.estoque <= 0);
+    const esgotado = Boolean(esgotadoAgora(p, AppState.lojaDados));
     const foto = urlSegura(p.imagemUrl);
     p.grupos = p.grupos || [];
 
@@ -230,6 +236,13 @@ export async function abrirGestaoCardapio() {
         </div>
 
         <label class="gc-check"><input type="checkbox" data-campo="esgotado" ${esgotado ? 'checked' : ''} /> Esgotado (pausar venda deste produto)</label>
+        <div class="gc-linha">
+          <div><label>📦 Quantidade em estoque <small>(vazio = sem controle)</small></label>
+            <input data-campo="estoqueQtd" type="number" min="0" inputmode="numeric" placeholder="ex: 24" value="${p.controlarEstoque ? esc(estoqueAtual(p, AppState.lojaDados)) : ''}" /></div>
+          <div><label>🔁 Repor todo dia para <small>(opcional)</small></label>
+            <input data-campo="estoqueDiario" type="number" min="0" inputmode="numeric" placeholder="ex: 30" value="${Number(p.estoqueDiario) > 0 ? esc(p.estoqueDiario) : ''}" /></div>
+        </div>
+        <p class="gc-dica" style="margin-top:-4px;">Cada venda tira do estoque sozinha. Quando chega a 0, aparece "Esgotado" no cardápio${Number(p.estoqueDiario) > 0 ? ' e volta cheio no dia seguinte' : ''}.</p>
 
         <h4 class="gc-subtitulo">🔥 Oferta do dia <small>(preço promocional nos dias marcados)</small></h4>
         <div class="gc-linha">
@@ -303,6 +316,16 @@ export async function abrirGestaoCardapio() {
     const campo = el.dataset.campo;
     if (campo === 'nome' || campo === 'descricao') p[campo] = el.value;
     else if (campo === 'imagemUrl') p.imagemUrl = el.value.trim();
+    else if (campo === 'estoqueQtd') {
+      estoqueEditado.add(p.id);
+      if (el.value.trim() === '' && !(Number(p.estoqueDiario) > 0)) { delete p.controlarEstoque; delete p.estoque; }
+      else { p.controlarEstoque = true; p.estoque = Math.max(0, Math.round(Number(el.value) || 0)); p.estoqueRepostoEm = diaDaLoja(AppState.lojaDados); }
+    } else if (campo === 'estoqueDiario') {
+      estoqueEditado.add(p.id);
+      const n = Math.max(0, Math.round(Number(el.value) || 0));
+      if (n > 0) { p.estoqueDiario = n; if (!p.controlarEstoque) { p.controlarEstoque = true; p.estoque = n; } p.estoqueRepostoEm = diaDaLoja(AppState.lojaDados); }
+      else delete p.estoqueDiario;
+    }
     else if (campo === 'preco') p.precoCentavos = reaisParaCentavos(el.value);
     else if (campo === 'ofertaPreco') {
       p.oferta = p.oferta || { dias: [] };
@@ -333,7 +356,9 @@ export async function abrirGestaoCardapio() {
     }
     if (el.dataset.campo === 'categoriaId') p.categoriaId = el.value;
     else if (el.dataset.campo === 'esgotado') {
-      if (el.checked) { p.controlarEstoque = true; p.estoque = 0; }
+      estoqueEditado.add(p.id);
+      if (el.checked) { p.controlarEstoque = true; p.estoque = 0; p.estoqueRepostoEm = diaDaLoja(AppState.lojaDados); }
+      else if (Number(p.estoqueDiario) > 0) { p.estoque = Number(p.estoqueDiario); p.estoqueRepostoEm = diaDaLoja(AppState.lojaDados); }
       else { delete p.controlarEstoque; delete p.estoque; }
     } else if (el.dataset.gcampo === 'regraDePreco') {
       p.grupos[Number(el.dataset.g)].regraDePreco = el.value;
@@ -439,6 +464,7 @@ export async function abrirGestaoCardapio() {
     // Crédito do fotógrafo (fotos de exemplo do Unsplash): só vale enquanto a foto for a do Unsplash
     if (foto && p.imagemCredito && /^https:\/\/images\.unsplash\.com\//.test(foto)) out.imagemCredito = { autor: String(p.imagemCredito.autor || '').slice(0, 80), link: String(p.imagemCredito.link || '').slice(0, 300) };
     if (p.controlarEstoque) { out.controlarEstoque = true; out.estoque = Number(p.estoque) || 0; }
+    if (p.controlarEstoque && Number(p.estoqueDiario) > 0) { out.estoqueDiario = Number(p.estoqueDiario); if (p.estoqueRepostoEm) out.estoqueRepostoEm = String(p.estoqueRepostoEm); }
     if (p.oferta && p.oferta.precoCentavos > 0 && (p.oferta.dias || []).length) out.oferta = { precoCentavos: p.oferta.precoCentavos, dias: [...p.oferta.dias] };
     if (p.grupos?.length) {
       out.grupos = p.grupos.map(g => ({
@@ -452,6 +478,31 @@ export async function abrirGestaoCardapio() {
     return out;
   }
 
+  // ↩ Desfazer: volta o cardápio para a versão salva antes da última alteração (o estoque atual é mantido)
+  $('#gc-desfazer').onclick = async () => {
+    try {
+      const refAtual = doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo');
+      const refBackup = doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_backup');
+      const b = await getDoc(refBackup);
+      if (!b.exists()) { showToast('Ainda não há uma versão anterior para voltar.'); return; }
+      const anterior = b.data();
+      const quando = anterior.salvoEm?.toDate ? anterior.salvoEm.toDate().toLocaleString('pt-BR') : 'antes do último salvamento';
+      if (!confirm(`Voltar o cardápio para como estava em ${quando}?\n\nA versão de agora fica guardada: se mudar de ideia, toque em ↩ Desfazer de novo.`)) return;
+      const atual = (await getDoc(refAtual)).data() || {};
+      const estoqueAgora = new Map((atual.produtos || []).map(x => [x.id, x]));
+      const produtos = (anterior.produtos || []).map(x => {
+        const ag = estoqueAgora.get(x.id);
+        return ag && ag.controlarEstoque && x.controlarEstoque ? { ...x, estoque: ag.estoque, ...(ag.estoqueRepostoEm ? { estoqueRepostoEm: ag.estoqueRepostoEm } : {}) } : x;
+      });
+      await setDoc(refBackup, { categorias: atual.categorias || [], produtos: atual.produtos || [], salvoEm: serverTimestamp() });
+      await setDoc(refAtual, { categorias: anterior.categorias || [], produtos, atualizadoEm: serverTimestamp() });
+      alterado = false;
+      overlay.remove();
+      showToast('↩ Cardápio restaurado!');
+      abrirGestaoCardapio();
+    } catch (err) { console.error(err); showToast('Não foi possível desfazer agora.'); }
+  };
+
   $('#gc-salvar').onclick = async () => {
     const erro = validar();
     if (erro) { showToast(erro, 5000); return; }
@@ -459,11 +510,24 @@ export async function abrirGestaoCardapio() {
     btn.disabled = true;
     btn.textContent = 'Salvando...';
     try {
-      await setDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo'), {
+      const ref = doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo');
+      const atual = await getDoc(ref);
+      const doServidor = atual.exists() ? atual.data() : null;
+      // Backup da versão anterior (para "↩ Desfazer última alteração")
+      if (doServidor) await setDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_backup'), { categorias: doServidor.categorias || [], produtos: doServidor.produtos || [], salvoEm: serverTimestamp() });
+      // Estoque que mudou com vendas enquanto você editava: mantém o número do servidor
+      const estoqueServidor = new Map((doServidor && doServidor.produtos || []).map(x => [x.id, x]));
+      const produtosFinais = rascunho.produtos.map(limpar).map(x => {
+        const sv = estoqueServidor.get(x.id);
+        if (estoqueEditado.has(x.id) || !sv || !x.controlarEstoque) return x;
+        return { ...x, estoque: Number(sv.estoque) || 0, ...(sv.estoqueRepostoEm ? { estoqueRepostoEm: sv.estoqueRepostoEm } : {}) };
+      });
+      await setDoc(ref, {
         categorias: rascunho.categorias.map(c => ({ id: c.id, nome: c.nome })),
-        produtos: rascunho.produtos.map(limpar),
+        produtos: produtosFinais,
         atualizadoEm: serverTimestamp()
       });
+      estoqueEditado.clear();
       alterado = false;
       $('#gc-status').textContent = '✓ Salvo';
       showToast('Cardápio salvo! Os clientes já veem a versão nova.');

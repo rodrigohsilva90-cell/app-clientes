@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 874ea135e0a53a70e21f63306f2334d220a4210a259721e1b5ede2988e6ee63c).
+worker.js = cópia EXATA do que está no ar (sha256 85f130888a86891b54314f04e8ce60a60a0a2eb68184085322d080df1f98b713).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
@@ -25,3 +25,7 @@ Motoboy: até 3 entregas, ordem por vizinho mais próximo + urgência (35 min), 
 Modos de operação: lojas/{id}.modoOperacao {modo, ate} (temporário) e modoPadrao; Worker bloqueia entrega no modo retirada. Retirada: /api/cheguei grava clienteChegouEm. Tema: corPrimaria + modoEscuro + avisoTopo + instagram (js/tema.js).
 Motoboy: lojas/{id}.repasse (regra), turnosMotoboy/{uid} (troco inicial, status), acertos_motoboy (histórico); pedidos recebem repasseMotoboyCentavos na conclusão e acertoId no acerto. APIs: /api/motoboy/turno e /api/acertos.
 PIN do dono: hash com sal em lojas/{id}/segredos/pinDono (/api/pin). Funcionário precisa do PIN para cancelar pedido aceito/em rota e tirar a taxa de entrega.
+Estoque vivo: venda (site e balcão) baixa produtos com controlarEstoque no servidor (trava de versão em publico/cardapio_completo). estoqueDiario + estoqueRepostoEm (AAAA-MM-DD no fuso) = reposição diária. /api/estoque: venda {pedidoId, itens} (1 vez por pedido), delta (−1 quebra/consumo/brinde/acerto, +1 reposicao), definir {valor}. Log em estoqueAjustes. Pedido cancelado NÃO devolve estoque.
+Cardápio: ao salvar, a versão anterior vai para publico/cardapio_backup; "↩ Desfazer" troca as duas (mantém o estoque atual).
+Anti-trote: lojas/{id}.antiTrote {ativo, limiteCentavos}: 1ª compra (sem totalPedidos na ficha) de entrega >= limite só com Pix automático.
+Caixa: turnos/{id}.movimentos [{tipo despesa|sangria, valorCentavos, descricao}] descontam do dinheiro esperado; dono vê lucro operacional (faturamento − corridas − diárias/bônus acertados − despesas). Backup: js/backup.js (JSON + CSV).

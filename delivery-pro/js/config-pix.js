@@ -1,6 +1,7 @@
 // Painel do dono: conectar a conta Mercado Pago da loja para o Pix automático.
 // O Access Token vai direto para o Worker (guardado criptografado); o navegador nunca o lê de volta.
-import { auth, showToast, esc } from './config.js';
+import { auth, db, showToast, esc } from './config.js';
+import { doc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import { AppState } from './router.js';
 
 async function chamar(corpo) {
@@ -31,12 +32,30 @@ export async function abrirConfigPix() {
   const box = overlay.querySelector('#pix-conteudo');
 
   const desenhar = (st) => {
+    const at = AppState.lojaDados.antiTrote || { ativo: false, limiteCentavos: 8000 };
     if (st.conectado) {
       box.innerHTML = `
         <div class="pix-ok">✅ <strong>Pix automático ligado</strong><span>Conta: ${esc(st.conta || 'Mercado Pago')}</span></div>
         <p class="gc-dica">O cliente que escolhe Pix recebe o QR Code na hora. O pedido só aparece no balcão (com campainha) <strong>depois de pago</strong>, e o dinheiro cai na sua conta Mercado Pago. Se o cliente não pagar em 30 minutos, o pedido é cancelado sozinho.</p>
+        <div class="pix-trote">
+          <h4 class="gc-subtitulo">🛡️ Proteção contra trote</h4>
+          <label style="display:flex; gap:8px; align-items:flex-start;"><input type="checkbox" id="at-ativo" ${at.ativo ? 'checked' : ''}/>
+            <span>Na <strong>primeira compra</strong> de um WhatsApp novo, pedidos de entrega a partir do valor abaixo só podem ser pagos <strong>pelo Pix antes</strong>.</span></label>
+          <label style="display:block; margin-top:6px;">A partir de (R$)<input type="text" inputmode="decimal" id="at-limite" value="${((Number(at.limiteCentavos) || 8000) / 100).toFixed(2).replace('.', ',')}" style="width:120px; margin-left:6px;"/></label>
+          <p class="gc-dica">Cliente que já comprou antes continua podendo pagar na entrega. Retirada no balcão não é afetada.</p>
+          <button class="btn-outline-sm" type="button" id="at-salvar">Salvar proteção</button>
+        </div>
         <button class="btn-outline-sm" type="button" id="pix-trocar">🔁 Trocar conta / token</button>
         <button class="btn-outline-sm gc-perigo" type="button" id="pix-desligar" style="margin-left:6px;">Desligar Pix automático</button>`;
+      box.querySelector('#at-salvar').onclick = async (e) => {
+        const n = Number(String(box.querySelector('#at-limite').value).replace(/R\$|\s/g, '').replace(/\./g, '').replace(',', '.'));
+        if (!Number.isFinite(n) || n < 1 || n > 100000) { showToast('Valor inválido. Ex.: 80,00'); return; }
+        const antiTrote = { ativo: box.querySelector('#at-ativo').checked, limiteCentavos: Math.round(n * 100) };
+        e.target.disabled = true;
+        try { await updateDoc(doc(db, 'lojas', AppState.lojaId), { antiTrote }); AppState.lojaDados.antiTrote = antiTrote; showToast(antiTrote.ativo ? '🛡️ Proteção contra trote ligada.' : 'Proteção contra trote desligada.'); }
+        catch (err) { console.error(err); showToast('Não foi possível salvar.'); }
+        e.target.disabled = false;
+      };
       box.querySelector('#pix-trocar').onclick = () => desenhar({ conectado: false, trocando: true });
       box.querySelector('#pix-desligar').onclick = async () => {
         if (!confirm('Desligar o Pix automático? O Pix volta a ser combinado na entrega.')) return;

@@ -94,6 +94,9 @@ export default {
       if (url.pathname === '/api/acertos' && request.method === 'POST') {
         return acertosMotoboy(request, env);
       }
+      if (url.pathname === '/api/estoque' && request.method === 'POST') {
+        return ajustarEstoque(request, env);
+      }
       if (url.pathname === '/api/pin' && request.method === 'POST') {
         return pinDono(request, env);
       }
@@ -265,10 +268,17 @@ async function criarPedidoSeguro(request, env) {
     }
 
     // ---- Recalcula cada item com o cardápio oficial ----
+    const hojeLoja = diaDaLoja(loja);
+    const pedidoPorProduto = {};
+    itensPedidos.forEach(i => { pedidoPorProduto[i.produtoId] = (pedidoPorProduto[i.produtoId] || 0) + (Number(i.quantidade) || 0); });
     const itens = itensPedidos.map(pedido => {
       const prod = produtos.find(p => p.id === pedido.produtoId);
       if (!prod) throw new ErroPedido('Um item da sua sacola não está mais no cardápio. Remova-o e adicione de novo.');
-      if (prod.controlarEstoque && Number(prod.estoque) <= 0) throw new ErroPedido(`"${prod.nome}" está esgotado.`);
+      if (prod.controlarEstoque) {
+        const tem = estoqueAtual(prod, hojeLoja);
+        if (tem <= 0) throw new ErroPedido(`"${prod.nome}" está esgotado.`);
+        if (pedidoPorProduto[prod.id] > tem) throw new ErroPedido(`Só temos ${tem} unidade(s) de "${prod.nome}". Diminua a quantidade.`);
+      }
       const quantidade = Number(pedido.quantidade);
       if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 50) throw new ErroPedido(`Quantidade inválida em "${prod.nome}".`);
       const { unitarioCentavos, detalhes } = calcularItemOficial(prod, pedido.selecoes || {}, loja);
@@ -308,6 +318,12 @@ async function criarPedidoSeguro(request, env) {
       throw new ErroPedido('Para este WhatsApp, a loja pede o pagamento pelo Pix antes da entrega. Escolha "Pix" e pague pelo QR Code.', 409);
     }
     const clienteVip = Boolean(fichaCliente && Number(fichaCliente.totalPedidos) >= 5);
+    // Anti-trote: primeira compra alta (WhatsApp sem pedido concluído na loja) só com Pix antecipado
+    const at = loja.antiTrote;
+    if (at && at.ativo && tipoEntrega === 'entrega' && loja.pixOnline === true && env.MP_CHAVE && !pixOnline
+      && !(fichaCliente && Number(fichaCliente.totalPedidos) > 0) && subtotalCentavos >= (Number(at.limiteCentavos) || 8000)) {
+      throw new ErroPedido(`Na primeira compra acima de ${reais(Number(at.limiteCentavos) || 8000)}, a loja pede o pagamento pelo Pix antes da entrega. Escolha "Pix" e pague pelo QR Code.`, 409);
+    }
 
     // Prêmio do cartão fidelidade (desconto). Reserva o prêmio de forma atômica antes de gravar.
     const fid = loja.fidelidade && loja.fidelidade.ativo ? loja.fidelidade : null;
@@ -371,6 +387,8 @@ async function criarPedidoSeguro(request, env) {
       }
     }
     if (criado) { try { await fs.apagar([`lojas/${lojaId}/carrinhos/${whatsapp}`]); } catch (_) {} }
+    // Estoque vivo: dá baixa do que foi vendido (com trava de versão para dois pedidos ao mesmo tempo)
+    if (criado) { try { await baixarEstoque(fs, lojaId, loja, itens.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade }))); } catch (err) { console.error('estoque', err && err.message); } }
     // Ficha do cliente (CRM da loja): só dados do último pedido + contadores, sem histórico duplicado
     if (criado) {
       try {
@@ -1026,6 +1044,91 @@ async function acertosMotoboy(request, env) {
     if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
     console.error('acertosMotoboy', err && err.stack || err);
     return jsonResponse({ erro: 'Não foi possível carregar.' }, 500);
+  }
+}
+
+// =====================================================================
+// ESTOQUE VIVO: baixa automática na venda, reposição diária e ajuste de perda (−1 quebra/consumo)
+// produto: { controlarEstoque, estoque, estoqueDiario?, estoqueRepostoEm? ('AAAA-MM-DD' no fuso da loja) }
+// =====================================================================
+function diaDaLoja(loja, data = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: (loja && loja.fusoHorario) || 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(data);
+}
+// Com reposição diária, o primeiro movimento do dia começa da quantidade cheia
+function estoqueAtual(prod, hoje) {
+  if (Number(prod.estoqueDiario) > 0 && prod.estoqueRepostoEm !== hoje) return Number(prod.estoqueDiario);
+  return Number(prod.estoque) || 0;
+}
+// Aplica uma mudança no estoque de vários produtos; tenta de novo se outro pedido gravou no meio
+async function mexerNoEstoque(fs, lojaId, loja, mudar) {
+  const caminho = `lojas/${lojaId}/publico/cardapio_completo`;
+  const hoje = diaDaLoja(loja);
+  for (let tentativa = 0; tentativa < 4; tentativa++) {
+    const lido = await fs.lerComVersao(caminho);
+    if (!lido) return null;
+    const produtos = (lido.dados.produtos || []).map(p => ({ ...p }));
+    let mexeu = false;
+    const resultado = {};
+    for (const p of produtos) {
+      if (!p.controlarEstoque && !mudar.forcar?.includes(p.id)) continue;
+      const novo = mudar.calc(p, estoqueAtual(p, hoje));
+      if (novo === undefined) continue;
+      p.estoque = Math.max(0, Math.round(novo));
+      p.controlarEstoque = true;
+      if (Number(p.estoqueDiario) > 0) p.estoqueRepostoEm = hoje;
+      resultado[p.id] = p.estoque;
+      mexeu = true;
+    }
+    if (!mexeu) return resultado;
+    if (await fs.atualizarSeVersao(caminho, { produtos }, lido.versao)) return resultado;
+  }
+  throw new Error('estoque: muitas gravações ao mesmo tempo');
+}
+async function baixarEstoque(fs, lojaId, loja, itens) {
+  const qtd = {};
+  itens.forEach(i => { qtd[i.produtoId] = (qtd[i.produtoId] || 0) + (Number(i.quantidade) || 0); });
+  return mexerNoEstoque(fs, lojaId, loja, { calc: (p, atual) => (qtd[p.id] ? atual - qtd[p.id] : undefined) });
+}
+
+// Balcão: −1 por quebra/consumo/brinde, +1, repor tudo, ou baixa de venda feita no balcão
+async function ajustarEstoque(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const { fs, uid } = await usuarioDaEquipe(request, env, lojaId, ['dono', 'balcao']);
+    const loja = await fs.ler(`lojas/${lojaId}`);
+    if (corpo.acao === 'venda') {
+      const itens = (Array.isArray(corpo.itens) ? corpo.itens : []).slice(0, 50).map(i => ({ produtoId: String(i.produtoId || ''), quantidade: Math.max(0, Math.min(50, Math.round(Number(i.quantidade) || 0))) }));
+      const pedidoId = String(corpo.pedidoId || '');
+      if (!/^[A-Za-z0-9]{6,64}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+      // Uma baixa só por pedido (se o botão for tocado duas vezes ou a internet repetir o envio)
+      if (!(await fs.criarSeNaoExiste(`lojas/${lojaId}/estoqueAjustes/venda_${pedidoId}`, { acao: 'venda', pedidoId, por: uid, em: new Date(), itens }))) return jsonResponse({ ok: true, repetido: true });
+      return jsonResponse({ ok: true, estoque: await baixarEstoque(fs, lojaId, loja, itens) });
+    }
+    const produtoId = String(corpo.produtoId || '');
+    if (!/^[A-Za-z0-9_-]{1,60}$/.test(produtoId)) throw new ErroPedido('Produto inválido.');
+    const motivo = ['quebra', 'consumo', 'brinde', 'acerto', 'reposicao'].includes(corpo.motivo) ? corpo.motivo : 'acerto';
+    let calc;
+    if (corpo.acao === 'definir') {
+      const v = Math.round(Number(corpo.valor));
+      if (!Number.isFinite(v) || v < 0 || v > 100000) throw new ErroPedido('Quantidade inválida.');
+      calc = (p) => (p.id === produtoId ? v : undefined);
+    } else {
+      const d = Math.round(Number(corpo.delta) || 0);
+      if (!d || Math.abs(d) > 1000) throw new ErroPedido('Quantidade inválida.');
+      calc = (p, atual) => (p.id === produtoId ? atual + d : undefined);
+    }
+    const r = await mexerNoEstoque(fs, lojaId, loja, { calc, forcar: corpo.acao === 'definir' ? [produtoId] : [] });
+    if (!r || r[produtoId] === undefined) throw new ErroPedido('Este produto não controla estoque.', 409);
+    // Registro do ajuste (quem, quando, motivo) para o dono conferir perdas
+    try { await fs.criarSeNaoExiste(`lojas/${lojaId}/estoqueAjustes/${Date.now()}_${uid.slice(0, 8)}`, { produtoId, acao: corpo.acao || 'delta', delta: Number(corpo.delta) || null, valor: corpo.acao === 'definir' ? Number(corpo.valor) : null, motivo, por: uid, em: new Date(), resultado: r[produtoId] }); } catch (_) {}
+    return jsonResponse({ ok: true, estoque: r[produtoId] });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('ajustarEstoque', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível ajustar o estoque.' }, 500);
   }
 }
 

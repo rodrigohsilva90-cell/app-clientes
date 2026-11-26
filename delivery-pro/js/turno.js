@@ -3,8 +3,9 @@
 // Estado atual: lojas/{lojaId}/publico/estado  |  Histórico: lojas/{lojaId}/turnos/{turnoId}
 import { db, auth, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
+import { calcularRepasse } from './frete.js';
 import {
-  doc, setDoc, addDoc, updateDoc, collection, query, where, getDocs, onSnapshot, serverTimestamp
+  doc, setDoc, addDoc, updateDoc, getDoc, collection, query, where, getDocs, onSnapshot, serverTimestamp, arrayUnion, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const NOMES_PAGAMENTO = { dinheiro: 'Dinheiro', cartao: 'Cartão', cartao_entrega: 'Cartão', pix: 'Pix', balcao: 'Balcão (antigo)' };
@@ -47,6 +48,55 @@ export async function abrirCaixa() {
   }
 }
 
+// Despesa (gás, gelo, troco pago a fornecedor...) ou sangria (dinheiro retirado da gaveta) no turno aberto
+export function lancarMovimento(estado) {
+  if (!estado?.caixaAberto || !estado.turnoId) { showToast('Abra o caixa primeiro.'); return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  overlay.innerHTML = `
+    <div class="card gc-form" style="max-width:400px; width:100%; margin:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>💸 Despesa ou sangria</h3><button class="btn-outline-sm" type="button" data-fechar>✕</button>
+      </div>
+      <div class="rl-periodos" style="margin:8px 0;">
+        <button type="button" class="rl-chip ativo" data-tipo="despesa">🧾 Despesa</button>
+        <button type="button" class="rl-chip" data-tipo="sangria">💵 Sangria</button>
+      </div>
+      <p class="gc-dica" data-explica>Algo que foi pago com o dinheiro da gaveta (gás, gelo, embalagem...).</p>
+      <label>Valor (R$)<input type="text" inputmode="decimal" data-valor placeholder="0,00"/></label>
+      <label>O que foi?<input type="text" maxlength="80" data-desc placeholder="Ex.: botijão de gás"/></label>
+      <button class="btn-primary" type="button" data-salvar style="margin-top:10px;">Lançar</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const $ = (q) => overlay.querySelector(q);
+  let tipo = 'despesa';
+  $('[data-fechar]').onclick = () => overlay.remove();
+  overlay.querySelectorAll('[data-tipo]').forEach(b => b.onclick = () => {
+    tipo = b.dataset.tipo;
+    overlay.querySelectorAll('[data-tipo]').forEach(x => x.classList.toggle('ativo', x === b));
+    $('[data-explica]').textContent = tipo === 'sangria' ? 'Dinheiro tirado da gaveta para guardar (cofre, banco, dono levou).' : 'Algo que foi pago com o dinheiro da gaveta (gás, gelo, embalagem...).';
+    $('[data-desc]').placeholder = tipo === 'sangria' ? 'Ex.: levado para o cofre' : 'Ex.: botijão de gás';
+  });
+  $('[data-salvar]').onclick = async (e) => {
+    const valorCentavos = reaisParaCentavos($('[data-valor]').value);
+    const descricao = $('[data-desc]').value.trim().slice(0, 80);
+    if (!valorCentavos) { showToast('Informe o valor. Ex.: 25,00'); return; }
+    if (!descricao) { showToast('Escreva o que foi.'); return; }
+    e.target.disabled = true;
+    try {
+      await updateDoc(doc(db, 'lojas', AppState.lojaId, 'turnos', estado.turnoId), {
+        movimentos: arrayUnion({ tipo, valorCentavos, descricao, em: Timestamp.now(), por: auth.currentUser?.uid || null })
+      });
+      overlay.remove();
+      showToast(tipo === 'sangria' ? 'Sangria lançada.' : 'Despesa lançada.');
+    } catch (err) {
+      console.error(err);
+      e.target.disabled = false;
+      showToast('Não foi possível lançar agora.');
+    }
+  };
+}
+
 function calcularResumo(pedidos, estado) {
   const r = {
     quantidade: 0, totalCentavos: 0, freteCentavos: 0,
@@ -67,7 +117,15 @@ function calcularResumo(pedidos, estado) {
   }
   r.ticketMedioCentavos = r.quantidade ? Math.round(r.totalCentavos / r.quantidade) : 0;
   r.fundoTrocoCentavos = Number(estado.fundoTrocoCentavos) || 0;
-  r.dinheiroEsperadoCentavos = r.fundoTrocoCentavos + (r.porPagamento.Dinheiro || 0);
+  const movs = Array.isArray(estado.movimentos) ? estado.movimentos : [];
+  r.despesasCentavos = movs.filter(m => m.tipo === 'despesa').reduce((a, m) => a + (Number(m.valorCentavos) || 0), 0);
+  r.sangriasCentavos = movs.filter(m => m.tipo === 'sangria').reduce((a, m) => a + (Number(m.valorCentavos) || 0), 0);
+  r.movimentos = movs.map(m => ({ tipo: m.tipo, valorCentavos: Number(m.valorCentavos) || 0, descricao: String(m.descricao || '') }));
+  r.dinheiroEsperadoCentavos = r.fundoTrocoCentavos + (r.porPagamento.Dinheiro || 0) - r.despesasCentavos - r.sangriasCentavos;
+  // Repasse das corridas dos motoboys deste turno (o que a loja paga por entrega)
+  const rep = AppState.lojaDados && AppState.lojaDados.repasse;
+  r.corridasMotoboyCentavos = pedidos.filter(p => p.motoboyId && p.status === 'concluido')
+    .reduce((a, p) => a + (p.repasseMotoboyCentavos != null ? Number(p.repasseMotoboyCentavos) || 0 : (rep ? calcularRepasse(rep, p) : 0)), 0);
   return r;
 }
 
@@ -88,24 +146,51 @@ function htmlResumo(r, estado, paraImpressao = false) {
     ${Object.entries(r.porPagamento).map(([forma, v]) => linha(esc(forma), formatarCentavos(v))).join('') || linha('Vendas', 'nenhuma')}
     ${paraImpressao ? '<br/>' : '<hr/>'}
     ${linha('Fundo de troco', formatarCentavos(r.fundoTrocoCentavos))}
+    ${r.despesasCentavos ? linha('Despesas pagas da gaveta', '− ' + formatarCentavos(r.despesasCentavos)) : ''}
+    ${r.sangriasCentavos ? linha('Sangrias (dinheiro retirado)', '− ' + formatarCentavos(r.sangriasCentavos)) : ''}
     ${linha('Dinheiro esperado na gaveta', formatarCentavos(r.dinheiroEsperadoCentavos))}
     ${linha('Cancelados', r.cancelados)}
     ${linha('Com ocorrência', r.ocorrencias)}
+    ${r.movimentos.length ? (paraImpressao ? '<br/>' : '<hr/>') + r.movimentos.map(m => linha(`${m.tipo === 'sangria' ? '💵 Sangria' : '🧾 Despesa'}: ${esc(m.descricao)}`, formatarCentavos(m.valorCentavos))).join('') : ''}
+    ${r.lucro ? (paraImpressao ? '<br/>' : '<hr/>') + `
+      ${linha('Faturamento', formatarCentavos(r.totalCentavos))}
+      ${linha('− Corridas dos motoboys', formatarCentavos(r.lucro.corridasCentavos))}
+      ${linha('− Diárias e bônus acertados', formatarCentavos(r.lucro.diariasBonusCentavos))}
+      ${linha('− Despesas do turno', formatarCentavos(r.despesasCentavos))}
+      ${linha('= Lucro operacional', formatarCentavos(r.lucro.lucroCentavos))}
+      ${paraImpressao ? '' : '<p class="gc-dica">Antes de descontar o custo dos produtos (ingredientes, mercadoria). Diárias e bônus entram quando o acerto do motoboy é confirmado.</p>'}` : ''}
   `;
 }
 
-export async function fecharCaixa(estado) {
+export async function fecharCaixa(estado, { dono = false } = {}) {
   if (!estado?.turnoId) return;
   let pedidos;
   try {
     const snap = await getDocs(query(collection(db, 'lojas', AppState.lojaId, 'pedidos'), where('turnoId', '==', estado.turnoId)));
     pedidos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const t = await getDoc(doc(db, 'lojas', AppState.lojaId, 'turnos', estado.turnoId));
+    if (t.exists()) estado = { ...estado, movimentos: t.data().movimentos || [] };
   } catch (err) {
     console.error(err);
     showToast('Erro ao carregar os pedidos do turno.');
     return;
   }
   const r = calcularResumo(pedidos, estado);
+  // Só o dono vê o lucro do dia (o funcionário não vê o total do dia)
+  if (dono) {
+    let diariasBonusCentavos = 0;
+    try {
+      const desde = estado.abertoEm?.toMillis ? estado.abertoEm.toMillis() : 0;
+      const u = auth.currentUser;
+      const resp = await fetch('/api/acertos', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await u.getIdToken()}` }, body: JSON.stringify({ lojaId: AppState.lojaId, acao: 'historico' }) });
+      const d = await resp.json().catch(() => ({}));
+      for (const a of (resp.ok && d.acertos) || []) {
+        if (a.confirmadoEm && new Date(a.confirmadoEm).getTime() >= desde) diariasBonusCentavos += (Number(a.diariaCentavos) || 0) + (Number(a.bonusCentavos) || 0);
+      }
+    } catch (_) { /* sem internet: mostra sem as diárias */ }
+    r.lucro = { corridasCentavos: r.corridasMotoboyCentavos, diariasBonusCentavos,
+      lucroCentavos: r.totalCentavos - r.corridasMotoboyCentavos - diariasBonusCentavos - r.despesasCentavos };
+  }
 
   const overlay = document.createElement('div');
   overlay.className = 'gc-overlay';
@@ -140,7 +225,7 @@ export async function fecharCaixa(estado) {
     e.target.disabled = true;
     try {
       await updateDoc(doc(db, 'lojas', AppState.lojaId, 'turnos', estado.turnoId), {
-        status: 'fechado', fechadoEm: serverTimestamp(), fechadoPor: auth.currentUser?.uid || null, resumo: r
+        status: 'fechado', fechadoEm: serverTimestamp(), fechadoPor: auth.currentUser?.uid || null, resumo: (({ lucro, ...resto }) => resto)(r)
       });
       await setDoc(refEstado(), { caixaAberto: false, turnoId: null, ultimoTurnoId: estado.turnoId, fechadoEm: serverTimestamp() }, { merge: true });
       overlay.remove();
