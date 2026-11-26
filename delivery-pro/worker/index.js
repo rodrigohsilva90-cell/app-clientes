@@ -188,8 +188,13 @@ async function criarPedidoSeguro(request, env) {
     const pinoConfirmado = Boolean(destino && corpo.destinoCoords.confirmado === true);
     const partes = corpo.enderecoPartes && typeof corpo.enderecoPartes === 'object' ? corpo.enderecoPartes : {};
     const enderecoPartes = tipoEntrega === 'entrega'
-      ? Object.fromEntries(['rua', 'numero', 'bairro', 'compl', 'cep'].map(k => [k, String(partes[k] || '').trim().slice(0, 120)]))
+      ? Object.fromEntries(['rua', 'numero', 'bairro', 'compl', 'cep', 'apelido'].map(k => [k, String(partes[k] || '').trim().slice(0, 120)]))
       : null;
+    // Tipo do local (muda a tolerância do GPS na baixa) e quem vai receber (pedido para outra pessoa)
+    const tipoLocal = ['casa', 'condominio', 'rural'].includes(corpo.tipoLocal) ? corpo.tipoLocal : 'casa';
+    const recebedorNome = tipoEntrega === 'entrega' ? String(corpo.recebedorNome || '').trim().slice(0, 60) : '';
+    const recebedorWhats = tipoEntrega === 'entrega' ? String(corpo.recebedorWhats || '').replace(/\D/g, '').slice(0, 13) : '';
+    const optInMarketing = corpo.optInMarketing === true;
     const formaPagamento = String(corpo.formaPagamento || '');
     const trocoParaCentavos = Number(corpo.trocoParaCentavos) || 0;
     const origem = String(corpo.origem || 'direto').replace(/[^a-z0-9_-]/gi, '').slice(0, 30) || 'direto';
@@ -277,10 +282,18 @@ async function criarPedidoSeguro(request, env) {
       throw new ErroPedido(`O troco precisa ser para um valor maior que o total (${reais(totalCentavos)}).`);
     }
 
+    const caminhoCliente = `lojas/${lojaId}/clientes/${whatsapp}`;
+    const fichaCliente = await fs.ler(caminhoCliente);
+    // Cliente com 2 ausências seguidas (confirmadas pelo balcão): só com Pix antecipado, se a loja tiver Pix automático
+    const restrito = Boolean(fichaCliente && Number(fichaCliente.ausenciasSeguidas) >= 2);
+    if (restrito && tipoEntrega === 'entrega' && loja.pixOnline === true && env.MP_CHAVE && !pixOnline) {
+      throw new ErroPedido('Para este WhatsApp, a loja pede o pagamento pelo Pix antes da entrega. Escolha "Pix" e pague pelo QR Code.', 409);
+    }
+    const clienteVip = Boolean(fichaCliente && Number(fichaCliente.totalPedidos) >= 5);
+
     // Prêmio do cartão fidelidade (desconto). Reserva o prêmio de forma atômica antes de gravar.
     const fid = loja.fidelidade && loja.fidelidade.ativo ? loja.fidelidade : null;
     let descontoFidelidadeCentavos = 0;
-    const caminhoCliente = `lojas/${lojaId}/clientes/${whatsapp}`;
     if (fid && corpo.usarPremio === true && Number(fid.premioCentavos) > 0) {
       const meta = Math.max(1, Number(fid.meta) || 10);
       const r = await fs.incrementar(caminhoCliente, { premiosUsados: 1, carimbos: 0 });
@@ -304,6 +317,12 @@ async function criarPedidoSeguro(request, env) {
       pinoManual: tipoEntrega === 'entrega' ? pinoManual : false,
       pinoConfirmado: tipoEntrega === 'entrega' ? pinoConfirmado : false,
       enderecoPartes,
+      tipoLocal: tipoEntrega === 'entrega' ? tipoLocal : null,
+      recebedorNome: recebedorNome || null,
+      recebedorWhats: recebedorWhats.length >= 10 ? recebedorWhats : null,
+      clienteVip,
+      clientePedidosAntes: Number(fichaCliente && fichaCliente.totalPedidos) || 0,
+      clienteRestrito: restrito,
       descontoFidelidadeCentavos,
       itens,
       subtotalCentavos,
@@ -337,7 +356,7 @@ async function criarPedidoSeguro(request, env) {
     if (criado) {
       try {
         await fs.incrementar(caminhoCliente, { pedidosFeitos: 1 }, {
-          nome, whatsapp, ultimoPedidoEm: new Date(),
+          nome, whatsapp, ultimoPedidoEm: new Date(), optInMarketing,
           ...(tipoEntrega === 'entrega' ? { ultimoEnderecoTexto: endereco } : {})
         });
       } catch (err) { console.error('crm', err && err.message); }
@@ -825,9 +844,12 @@ async function carimbarPedido(request, env) {
     const fid = loja && loja.fidelidade && loja.fidelidade.ativo ? loja.fidelidade : null;
     const valor = Number(p.totalCentavos) || 0;
     const ganhaCarimbo = Boolean(fid) && (Number(p.subtotalCentavos) || valor) >= (Number(fid.minimoCentavos) || 0);
+    // Dia da semana e hora do pedido (horário da loja): para saber quando cada cliente costuma pedir
+    const quando = agoraNoFuso((loja && loja.fusoHorario) || 'America/Sao_Paulo', p.criadoEm ? new Date(p.criadoEm) : new Date());
     const r = await fs.incrementar(`lojas/${lojaId}/clientes/${whatsapp}`,
-      { totalPedidos: 1, totalGastoCentavos: valor, carimbos: ganhaCarimbo ? 1 : 0, premiosUsados: 0 },
-      { whatsapp, nome: String(p.clienteNome || 'Cliente').slice(0, 80), ultimaCompraEm: new Date(),
+      { totalPedidos: 1, totalGastoCentavos: valor, carimbos: ganhaCarimbo ? 1 : 0, premiosUsados: 0, [`dias.d${quando.dia}`]: 1, [`horas.h${Math.floor(quando.min / 60)}`]: 1 },
+      // Entrega concluída: zera a contagem de ausências (tira a exigência de Pix antecipado)
+      { ausenciasSeguidas: 0, whatsapp, nome: String(p.clienteNome || 'Cliente').slice(0, 80), ultimaCompraEm: new Date(),
         ...(p.tipoEntrega === 'entrega' && p.enderecoTexto ? { ultimoEnderecoTexto: String(p.enderecoTexto).slice(0, 250) } : {}) });
     return jsonResponse({ ok: true, contado: true, carimbo: ganhaCarimbo, fidelidade: fid ? resumoFidelidade(fid, r) : null });
   } catch (err) {
@@ -835,6 +857,14 @@ async function carimbarPedido(request, env) {
     console.error('carimbarPedido', err && err.stack || err);
     return jsonResponse({ erro: 'Não foi possível registrar.' }, 500);
   }
+}
+
+// Chave com o maior número num mapa de contagem ({ sex: 5, sab: 2 } → 'sex'); null se vazio
+function maiorChave(m) {
+  if (!m || typeof m !== 'object') return null;
+  let melhor = null, n = 0;
+  for (const [k, v] of Object.entries(m)) if (Number(v) > n) { n = Number(v); melhor = k; }
+  return melhor;
 }
 
 // Painel: lista de clientes (dono e balcão) e anonimização a pedido do cliente (LGPD, só o dono)
@@ -847,6 +877,28 @@ async function painelClientes(request, env) {
     const { fs, papel } = await usuarioDaEquipe(request, env, lojaId, ['dono', 'balcao']);
     const loja = await fs.ler(`lojas/${lojaId}`);
     const fid = loja && loja.fidelidade && loja.fidelidade.ativo ? loja.fidelidade : null;
+    // Ocorrência do motoboy: o balcão decide se foi culpa do cliente (ausente / endereço inexistente)
+    if (corpo.acao === 'ocorrencia') {
+      const pedidoId = String(corpo.pedidoId || '');
+      if (!/^[A-Za-z0-9_-]{6,100}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+      const caminho = `lojas/${lojaId}/pedidos/${pedidoId}`;
+      const lido = await fs.lerComVersao(caminho);
+      if (!lido || lido.dados.status !== 'ocorrencia') throw new ErroPedido('Este pedido não está com ocorrência.', 409);
+      if (lido.dados.ocorrenciaRevisada) return jsonResponse({ ok: true, jaRevisado: true });
+      const culpa = corpo.culpaCliente === true;
+      if (!(await fs.atualizarSeVersao(caminho, { ocorrenciaRevisada: culpa ? 'cliente' : 'loja' }, lido.versao))) return jsonResponse({ ok: true, jaRevisado: true });
+      const wa = String(lido.dados.clienteWhatsapp || '').replace(/\D/g, '');
+      let ausencias = 0;
+      if (culpa && wa.length >= 10) ausencias = (await fs.incrementar(`lojas/${lojaId}/clientes/${wa}`, { ausenciasSeguidas: 1, ausenciasTotal: 1 }, { whatsapp: wa })).ausenciasSeguidas;
+      return jsonResponse({ ok: true, ausencias, restrito: ausencias >= 2 });
+    }
+    if (corpo.acao === 'liberarCliente') {
+      if (papel !== 'dono') throw new ErroPedido('Só o dono pode liberar.', 403);
+      const wa = String(corpo.whatsapp || '').replace(/\D/g, '');
+      if (wa.length < 10 || wa.length > 13) throw new ErroPedido('WhatsApp inválido.');
+      await fs.incrementar(`lojas/${lojaId}/clientes/${wa}`, {}, { ausenciasSeguidas: 0 });
+      return jsonResponse({ ok: true });
+    }
     if (corpo.acao === 'anonimizar') {
       if (papel !== 'dono') throw new ErroPedido('Só o dono pode apagar os dados de um cliente.', 403);
       const wa = String(corpo.whatsapp || '').replace(/\D/g, '');
@@ -855,7 +907,7 @@ async function painelClientes(request, env) {
       const emAndamento = pedidos.filter(x => ['novo', 'preparo', 'entrega', 'aguardando_pagamento'].includes(x.status));
       if (emAndamento.length) throw new ErroPedido('Este cliente tem um pedido em andamento. Conclua antes de apagar os dados.', 409);
       // Pedidos continuam no histórico (valores), mas sem nome, telefone e endereço
-      await fs.atualizarVarios(pedidos.map(x => ({ caminho: `lojas/${lojaId}/pedidos/${x.id}`, dados: { clienteNome: 'Cliente anonimizado', clienteWhatsapp: '', enderecoTexto: x.tipoEntrega === 'entrega' ? 'Endereço removido (LGPD)' : (x.enderecoTexto || ''), destinoCoords: null, enderecoPartes: null, coordsBaixa: null, motoboyCoords: null, anonimizadoEm: new Date() } })));
+      await fs.atualizarVarios(pedidos.map(x => ({ caminho: `lojas/${lojaId}/pedidos/${x.id}`, dados: { clienteNome: 'Cliente anonimizado', clienteWhatsapp: '', enderecoTexto: x.tipoEntrega === 'entrega' ? 'Endereço removido (LGPD)' : (x.enderecoTexto || ''), destinoCoords: null, enderecoPartes: null, coordsBaixa: null, motoboyCoords: null, recebedorNome: null, recebedorWhats: null, anonimizadoEm: new Date() } })));
       await fs.apagar([`lojas/${lojaId}/clientes/${wa}`, `lojas/${lojaId}/carrinhos/${wa}`]);
       return jsonResponse({ ok: true, pedidos: pedidos.length });
     }
@@ -864,10 +916,13 @@ async function painelClientes(request, env) {
       .map(c => ({
         nome: c.nome || 'Cliente', whatsapp: c.whatsapp, totalPedidos: Number(c.totalPedidos) || 0, pedidosFeitos: Number(c.pedidosFeitos) || 0,
         totalGastoCentavos: Number(c.totalGastoCentavos) || 0, ultimaCompraEm: c.ultimaCompraEm || c.ultimoPedidoEm || null,
-        ultimoEnderecoTexto: c.ultimoEnderecoTexto || '', fidelidade: fid ? resumoFidelidade(fid, c) : null
+        ultimoEnderecoTexto: c.ultimoEnderecoTexto || '', fidelidade: fid ? resumoFidelidade(fid, c) : null,
+        optInMarketing: c.optInMarketing === true, ausenciasSeguidas: Number(c.ausenciasSeguidas) || 0,
+        diaFavorito: maiorChave(c.dias), horaFavorita: maiorChave(c.horas)
       }))
       .sort((a, b) => b.totalGastoCentavos - a.totalGastoCentavos);
-    return jsonResponse({ clientes, fidelidade: fid ? { meta: Number(fid.meta) || 10 } : null });
+    const hoje = agoraNoFuso((loja && loja.fusoHorario) || 'America/Sao_Paulo', new Date()).dia;
+    return jsonResponse({ clientes, hoje, fidelidade: fid ? { meta: Number(fid.meta) || 10 } : null });
   } catch (err) {
     if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
     console.error('painelClientes', err && err.stack || err);

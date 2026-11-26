@@ -113,8 +113,10 @@ export async function iniciarVitrine() {
     loja.taxaEntregaTexto ? `🛵 ${esc(loja.taxaEntregaTexto)}`
       : (loja.frete && coordsValidas(loja.localizacao) ? `🛵 a partir de ${formatarCentavos((loja.frete.baseCentavos || 0) + adicionaisAgora(loja).centavos)}` : ''),
     `⏱️ ${esc(tempoEstimado)}`,
-    loja.pedidoMinimoCentavos ? `💲 Mín. ${formatarCentavos(loja.pedidoMinimoCentavos)}` : ''
+    loja.pedidoMinimoCentavos ? `💲 Mín. ${formatarCentavos(loja.pedidoMinimoCentavos)}` : '',
+    loja.fidelidade && loja.fidelidade.ativo ? `🎁 A cada ${esc(loja.fidelidade.meta || 10)} pedidos, ${formatarCentavos(loja.fidelidade.premioCentavos || 0)} de desconto` : ''
   ].filter(Boolean);
+  const podeSimular = Boolean(loja.frete && coordsValidas(loja.localizacao));
 
   root.innerHTML = `
     <section class="vt-capa" style="${banner ? `background-image:url('${banner}');` : ''}"></section>
@@ -126,6 +128,15 @@ export async function iniciarVitrine() {
         <div class="vt-chips">${chips.map(c => `<span class="vt-chip">${c}</span>`).join('')}</div>
       </div>
     </div>
+    ${podeSimular ? `
+      <div class="vt-simular">
+        <span>🛵 Quanto fica a entrega para você?</span>
+        <form id="vt-simular-form" class="vt-simular-form">
+          <input id="vt-simular-cep" type="tel" inputmode="numeric" maxlength="9" placeholder="Seu CEP" aria-label="Seu CEP" />
+          <button class="btn-outline-sm" type="submit">Calcular</button>
+        </form>
+        <small id="vt-simular-res" class="hidden"></small>
+      </div>` : ''}
 
     ${situacao.aberta ? '' : `
       <div class="vt-fechado-aviso">🔒 <strong>${situacao.pausada ? 'A loja pausou os pedidos por alguns minutos.' : 'A loja está fechada agora.'}</strong>
@@ -176,6 +187,7 @@ export async function iniciarVitrine() {
   renderizarProdutos(dadosCardapio, modoLayout);
   atualizarBarraCarrinho();
   ouvirSaidaDaPagina();
+  ligarSimuladorFrete(loja);
   mostrarPedirDeNovo(dadosCardapio);
 
   // Avaliação de 1 toque dos pedidos já entregues
@@ -531,6 +543,30 @@ async function consultarFidelidade(whatsapp) {
   } catch (_) { return null; }
 }
 
+// Modo visitante: estimar a entrega só com o CEP, antes de preencher nome ou WhatsApp
+function ligarSimuladorFrete(loja) {
+  const form = document.getElementById('vt-simular-form');
+  if (!form) return;
+  const campo = document.getElementById('vt-simular-cep');
+  const res = document.getElementById('vt-simular-res');
+  campo.addEventListener('input', () => { const n = soDigitos(campo.value).slice(0, 8); campo.value = n.length > 5 ? `${n.slice(0, 5)}-${n.slice(5)}` : n; });
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const mostrar = (t) => { res.classList.remove('hidden'); res.innerHTML = t; };
+    if (soDigitos(campo.value).length !== 8) { mostrar('Digite os 8 números do CEP.'); return; }
+    mostrar('🔎 Calculando...');
+    const end = await buscarCep(campo.value);
+    if (!end) { mostrar('CEP não encontrado. Confira os números.'); return; }
+    const p = end.rua ? await localizarEndereco({ ...end, cep: campo.value }, loja.localizacao) : null;
+    if (!p) { mostrar(`📍 ${esc([end.bairro, end.cidade].filter(Boolean).join(', '))}: não deu para estimar pelo CEP. O valor exato aparece ao finalizar o pedido.`); return; }
+    const f = calcularFrete(loja, p);
+    const onde = esc([end.rua, end.bairro].filter(Boolean).join(' – '));
+    if (f.fora) mostrar(`📍 ${onde}: fica a ${f.distanciaKm} km, <strong>fora da área de entrega</strong>. Você pode pedir e retirar na loja.`);
+    else if (f.bloqueado) mostrar(`📍 ${onde}: a loja não entrega nessa região ${f.area.sempre ? 'no momento' : `das ${esc(f.area.inicio)} às ${esc(f.area.fim)}`}. Você pode retirar na loja.`);
+    else mostrar(`📍 ${onde}: entrega por volta de <strong>${formatarCentavos(f.freteCentavos)}</strong> (${f.distanciaKm} km). O valor exato sai quando você marcar sua casa no mapa.`);
+  };
+}
+
 // ---- Endereço em partes (CEP, rua, número, bairro, complemento) ----
 const soDigitos = (t) => String(t || '').replace(/\D/g, '');
 function montarEnderecoTexto(c) {
@@ -657,7 +693,7 @@ function abrirModalCheckout() {
       ${enderecos.length ? `
         <label style="${rotulo}">Seus endereços</label>
         <div class="chk-enderecos">
-          ${enderecos.map(e => `<div class="chk-end-wrap"><button type="button" class="chk-end" data-end="${esc(e.apelido)}"><strong>${e.apelido === 'Casa' ? '🏠' : e.apelido === 'Trabalho' ? '💼' : '📍'} ${esc(e.apelido)}${e.gpsVerificado ? ' <span title="Local confirmado pelo entregador">✔</span>' : ''}</strong><small>${esc(e.endereco)}</small></button><button type="button" class="chk-end-del" data-del="${esc(e.apelido)}" aria-label="Apagar endereço ${esc(e.apelido)}">✕</button></div>`).join('')}
+          ${enderecos.map(e => `<div class="chk-end-wrap"><button type="button" class="chk-end" data-end="${esc(e.apelido)}"><strong>${e.apelido === 'Casa' ? '🏠' : e.apelido === 'Trabalho' ? '💼' : '📍'} ${esc(e.apelido)}</strong><small>${esc(e.endereco)}</small>${e.gpsVerificado ? '<span class="chk-selo-gps">📍 Pino GPS confirmado</span>' : ''}</button><button type="button" class="chk-end-del" data-del="${esc(e.apelido)}" aria-label="Apagar endereço ${esc(e.apelido)}">✕</button></div>`).join('')}
           <button type="button" class="chk-end" data-end="_novo"><strong>＋ Novo</strong><small>outro endereço</small></button>
         </div>` : ''}
       <div class="chk-end-grade">
@@ -671,6 +707,17 @@ function abrirModalCheckout() {
           <input id="chk-bairro" type="text" placeholder="Centro" value="${esc(c0.bairro || '')}" style="${campo}" /></div>
         <div class="compl"><label style="${rotulo}">Complemento / referência</label>
           <input id="chk-compl" type="text" placeholder="Apto 12, portão azul, perto da padaria" value="${esc(c0.compl || '')}" style="${campo}" /></div>
+      </div>
+      <label style="${rotulo}">Tipo de local</label>
+      <div class="chk-tipo chk-tipo-local">
+        ${[['casa', '🏠 Casa / prédio'], ['condominio', '🏢 Condomínio fechado'], ['rural', '🌳 Sítio / chácara']].map(([v, t]) => `<label><input type="radio" name="chk-local" value="${v}" ${(c0.tipoLocal || 'casa') === v ? 'checked' : ''} /> ${t}</label>`).join('')}
+      </div>
+      <label class="chk-lembrar" style="margin-top:2px;"><input type="checkbox" id="chk-outro" ${c0.recebedorNome ? 'checked' : ''} /> <span>Outra pessoa vai receber <small>Ex.: pedido para seus pais ou para o trabalho.</small></span></label>
+      <div id="chk-box-recebedor" class="chk-end-grade${c0.recebedorNome ? '' : ' hidden'}">
+        <div class="bairro"><label style="${rotulo}">Nome de quem recebe</label>
+          <input id="chk-rec-nome" type="text" placeholder="Ex.: Dona Maria" value="${esc(c0.recebedorNome || '')}" style="${campo}" /></div>
+        <div class="bairro"><label style="${rotulo}">WhatsApp de quem recebe</label>
+          <input id="chk-rec-whats" type="tel" inputmode="numeric" placeholder="(opcional)" value="${esc(mascaraWhats(c0.recebedorWhats || ''))}" style="${campo}" /></div>
       </div>
       ${temFrete ? `
         <div class="chk-mapa-topo">
@@ -690,6 +737,8 @@ function abrirModalCheckout() {
 
     ${daLoja ? '<p class="gc-dica">🔒 Você está logado na loja: os dados deste cliente não ficam salvos neste aparelho.</p>' : `
     <label class="chk-lembrar"><input type="checkbox" id="chk-lembrar" ${rascunho.lembrar ? 'checked' : ''} /> <span>Lembrar meus dados neste aparelho <small>Desmarque se o celular não for seu.</small></span></label>`}
+
+    <label class="chk-lembrar"><input type="checkbox" id="chk-optin" ${!daLoja && salvo.optInMarketing ? 'checked' : ''} /> <span>Aceito receber promoções desta loja no WhatsApp <small>Opcional. Você pode pedir para parar a qualquer momento.</small></span></label>
 
     <label style="${rotulo}">Forma de Pagamento</label>
     <select id="chk-pagamento" style="${campo}">
@@ -746,7 +795,10 @@ function abrirModalCheckout() {
     numero: document.getElementById('chk-numero').value.trim(),
     bairro: document.getElementById('chk-bairro').value.trim(),
     compl: document.getElementById('chk-compl').value.trim(),
-    cidade: cidadeUf.cidade, uf: cidadeUf.uf
+    cidade: cidadeUf.cidade, uf: cidadeUf.uf,
+    tipoLocal: content.querySelector('input[name="chk-local"]:checked')?.value || 'casa',
+    recebedorNome: document.getElementById('chk-outro').checked ? document.getElementById('chk-rec-nome').value.trim() : '',
+    recebedorWhats: document.getElementById('chk-outro').checked ? soDigitos(document.getElementById('chk-rec-whats').value) : ''
   });
   let cidadeUf = { cidade: c0.cidade || '', uf: c0.uf || '' };
   const lembrar = () => !daLoja && Boolean(document.getElementById('chk-lembrar')?.checked);
@@ -759,6 +811,7 @@ function abrirModalCheckout() {
       campos,
       tipo: tipoAtual(),
       apelido: content.querySelector('input[name="chk-apelido"]:checked')?.value || 'Casa',
+      optInMarketing: Boolean(document.getElementById('chk-optin')?.checked),
       destino
     };
     rascunho = { ...rascunho, ...dados, lembrar: lembrar() };
@@ -769,6 +822,12 @@ function abrirModalCheckout() {
   function preencherCampos(c) {
     ['cep', 'rua', 'numero', 'bairro', 'compl'].forEach(k => { document.getElementById(`chk-${k}`).value = c[k] || ''; });
     cidadeUf = { cidade: c.cidade || '', uf: c.uf || '' };
+    const local = content.querySelector(`input[name="chk-local"][value="${['casa', 'condominio', 'rural'].includes(c.tipoLocal) ? c.tipoLocal : 'casa'}"]`);
+    if (local) local.checked = true;
+    document.getElementById('chk-outro').checked = Boolean(c.recebedorNome);
+    document.getElementById('chk-rec-nome').value = c.recebedorNome || '';
+    document.getElementById('chk-rec-whats').value = mascaraWhats(c.recebedorWhats || '');
+    document.getElementById('chk-box-recebedor').classList.toggle('hidden', !c.recebedorNome);
   }
   function marcarEnderecoAtivo() {
     const texto = montarEnderecoTexto(lerCampos());
@@ -812,6 +871,12 @@ function abrirModalCheckout() {
       abrirModalCheckout();
     };
   });
+
+  document.getElementById('chk-outro').onchange = (e) => {
+    document.getElementById('chk-box-recebedor').classList.toggle('hidden', !e.target.checked);
+    if (e.target.checked) document.getElementById('chk-rec-nome').focus();
+  };
+  document.getElementById('chk-rec-whats').addEventListener('input', (e) => { e.target.value = mascaraWhats(e.target.value); });
 
   // WhatsApp: máscara, confirmação em destaque e cartão fidelidade
   const campoWhats = document.getElementById('chk-whats');
@@ -1048,7 +1113,7 @@ function abrirModalCheckout() {
 
   document.getElementById('chk-gps')?.addEventListener('click', () => {
     if (!navigator.geolocation) { showToast('Localização indisponível neste aparelho. Marque no mapa.'); return; }
-    showToast('Buscando sua localização...');
+    statusMapa('📡 Buscando sua localização... (o navegador pode pedir permissão)');
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
@@ -1066,7 +1131,14 @@ function abrirModalCheckout() {
           });
         }
       },
-      () => showToast('Não conseguimos sua localização. Toque no mapa para marcar.'),
+      (erro) => {
+        // Sem GPS o pedido continua: CEP/rua + arrastar o mapa
+        const msg = erro && erro.code === 1
+          ? '📵 GPS desativado no navegador. Sem problema: digite sua rua e arraste o mapa até a sua casa.'
+          : 'Não conseguimos sua localização agora. Digite sua rua e arraste o mapa até a sua casa.';
+        statusMapa(msg);
+        document.getElementById('chk-rua').focus();
+      },
       { enableHighAccuracy: true, timeout: 15000 }
     );
   });
@@ -1125,7 +1197,11 @@ function abrirModalCheckout() {
           tipoEntrega,
           enderecoTexto: tipoEntrega === 'entrega' ? endereco : '',
           destinoCoords: tipoEntrega === 'entrega' && destino ? { ...destino, pinoManual, confirmado: pinoConfirmado } : null,
-          enderecoPartes: tipoEntrega === 'entrega' ? { rua: campos.rua, numero: campos.numero, bairro: campos.bairro, compl: campos.compl, cep: campos.cep } : null,
+          enderecoPartes: tipoEntrega === 'entrega' ? { rua: campos.rua, numero: campos.numero, bairro: campos.bairro, compl: campos.compl, cep: campos.cep, apelido: content.querySelector('input[name="chk-apelido"]:checked')?.value || '' } : null,
+          tipoLocal: campos.tipoLocal,
+          recebedorNome: campos.recebedorNome,
+          recebedorWhats: campos.recebedorWhats,
+          optInMarketing: Boolean(document.getElementById('chk-optin')?.checked),
           usarPremio: usarPremio && descontoPremio > 0,
           formaPagamento: pagamento,
           trocoParaCentavos,
@@ -1136,7 +1212,8 @@ function abrirModalCheckout() {
       const resultado = await resp.json().catch(() => ({}));
       renovarTurnstile();
       if (!resp.ok) {
-        showToast(resultado.erro || 'Erro ao enviar pedido. Tente novamente.', 6000);
+        showToast(resultado.erro || 'Erro ao enviar pedido. Tente novamente.', 8000);
+        if (/Pix antes da entrega/.test(resultado.erro || '')) { selPag.value = 'pix'; selPag.onchange(); }
         btn.disabled = false;
         btn.textContent = 'Enviar Pedido Agora';
         return;

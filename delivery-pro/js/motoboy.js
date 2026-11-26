@@ -71,7 +71,9 @@ async function enviarPosicaoParaRota(coords) {
     if (chegou && chegadaAvisada.has(p.id)) return;
     try {
       await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
-        motoboyCoords: chegou ? { chegou: true } : { ...coords, antes: indice },
+        // Entregas depois da primeira: o cliente NÃO vê onde a moto está (ela pode estar na rua de outro
+        // cliente); vê só "parada no caminho". O mapa dele liga quando a entrega dele vira a atual.
+        motoboyCoords: chegou ? { chegou: true } : indice === 0 ? { ...coords, antes: 0 } : { antes: indice },
         gpsAtualizadoEm: serverTimestamp()
       });
       if (chegou) { chegadaAvisada.add(p.id); avisarCliente(p.id); }
@@ -203,10 +205,16 @@ function escutarEntregas(motoboyUid) {
 }
 
 // 3. Transação Atômica para Assumir Entrega sem Concorrência
+// Reservar exige internet confirmada pelo servidor (nunca fica na fila offline): sem resposta em 8 s,
+// o pedido continua disponível e o motoboy é avisado para não sair com a bag.
 async function assumirEntregaAtomica(pedidoId, motoboyUid) {
   const pedidoRef = doc(db, 'lojas', AppState.lojaId, 'pedidos', pedidoId);
+  if (!navigator.onLine) { showToast('📵 Sem internet para reservar a entrega. Conecte antes de sair com o pedido.', 6000); return false; }
+  let tempoEsgotado = null;
+  let tx = null;
   try {
-    await runTransaction(db, async (transaction) => {
+    const limite = new Promise((_, rej) => { tempoEsgotado = setTimeout(() => rej(new Error('SEM_SINAL')), 8000); });
+    tx = runTransaction(db, async (transaction) => {
       const snap = await transaction.get(pedidoRef);
       if (!snap.exists()) throw new Error('Pedido não encontrado.');
       const dados = snap.data();
@@ -222,10 +230,21 @@ async function assumirEntregaAtomica(pedidoId, motoboyUid) {
         motoboyCoords: ultimaPosicao || null
       });
     });
+    await Promise.race([limite, tx]);
+    clearTimeout(tempoEsgotado);
     avisarCliente(pedidoId);
     showToast('Entrega assumida! Boa viagem 🛵');
+    return true;
   } catch (err) {
-    showToast(err.message || 'Não foi possível assumir a entrega.');
+    clearTimeout(tempoEsgotado);
+    if (err && err.message === 'SEM_SINAL') {
+      showToast('📵 Sinal fraco: a reserva não foi confirmada. NÃO saia com a bag; tente de novo ou peça ao balcão para atribuir a entrega a você.', 8000);
+      // Se a internet voltar e a reserva passar, avisa (a entrega aparece em "Em rota")
+      if (tx) tx.then(() => { avisarCliente(pedidoId); showToast('✅ Conexão voltou: a entrega foi reservada para você.', 6000); }).catch(() => {});
+    }
+    else if (err && /assumir este pedido/.test(err.message)) showToast('Ops! Outro entregador acabou de assumir este pedido.', 5000);
+    else showToast((err && err.message) || 'Não foi possível assumir a entrega.');
+    return false;
   }
 }
 
@@ -273,11 +292,14 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
         </div>
       ` : ''}
 
-      <p style="margin-top:8px;"><strong>Cliente:</strong> ${esc(pedido.clienteNome)}</p>
+      <p style="margin-top:8px;"><strong>Cliente:</strong> ${esc(pedido.clienteNome)}${pedido.clienteVip ? ' <span class="badge-vip">⭐ VIP</span>' : ''}</p>
+      ${pedido.recebedorNome ? `<div class="mb-recebedor">👤 Quem recebe: <strong>${esc(pedido.recebedorNome)}</strong>${pedido.recebedorWhats ? ` · <a href="https://wa.me/55${esc(String(pedido.recebedorWhats).replace(/^55/, ''))}" target="_blank" rel="noopener">💬 chamar</a>` : ''}</div>` : ''}
+      ${pedido.tipoLocal === 'condominio' ? '<div class="mb-alerta-pino">🏢 Condomínio: entregue na portaria se não puder subir.</div>' : pedido.tipoLocal === 'rural' ? '<div class="mb-alerta-pino">🌳 Sítio / área rural: siga o pino; a referência ajuda na entrada.</div>' : ''}
       ${ep && ep.rua ? `
+        ${ep.bairro ? `<p class="mb-bairro">${esc(ep.bairro.toUpperCase())}</p>` : ''}
         <p style="font-size:15px; margin:4px 0;"><strong>📍 ${esc(ep.rua)}${ep.numero ? `, ${esc(ep.numero)}` : ''}</strong></p>
-        ${ep.bairro ? `<p style="font-size:15px; margin:2px 0;"><strong>Bairro: ${esc(ep.bairro)}</strong></p>` : ''}
-        ${ep.compl ? `<p class="mb-referencia">🏠 <strong>${esc(ep.compl)}</strong></p>` : ''}`
+        ${ep.compl ? `<p class="mb-referencia">🏠 <strong>${esc(ep.compl)}</strong></p>` : ''}
+        ${ep.apelido ? `<p class="gc-dica" style="margin:2px 0;">Endereço salvo como: ${esc(ep.apelido)}</p>` : ''}`
         : `<p style="font-size:14px; color:var(--text-muted); margin:4px 0;"><strong>Endereço:</strong> ${esc(pedido.enderecoTexto)}</p>`}
       ${pedido.pinoManual ? `<div class="mb-alerta-pino">⚠ O cliente ajustou o pino no mapa à mão. Confira a referência${zapCliente ? ` ou <a href="https://wa.me/55${esc(zapCliente.replace(/^55/, ''))}" target="_blank" rel="noopener">chame no WhatsApp</a>` : ''} se não achar.</div>` : ''}
       ${!pedido.destinoCoords && pedido.tipoEntrega === 'entrega' ? '<div class="mb-alerta-pino">⚠ Sem pino no mapa: o GPS vai pelo nome da rua. Confira a referência.</div>' : ''}
@@ -351,7 +373,9 @@ async function tentarFinalizarEntrega(pedido, tipoAcao) {
   let justificativa = '';
 
   if (pedido.destinoCoords && ultimaPosicao) {
-    const validacao = validarCercaEntrega(ultimaPosicao, pedido.destinoCoords, 100);
+    // Condomínio (portaria) e sítio/rural: tolerância maior para não travar a baixa
+    const raio = pedido.tipoLocal === 'condominio' || pedido.tipoLocal === 'rural' ? 150 : 100;
+    const validacao = validarCercaEntrega(ultimaPosicao, pedido.destinoCoords, raio);
     if (!validacao.permitido) {
       const motivo = prompt(
         `Você está a ${validacao.distanciaMetros}m do destino (limite: ${validacao.limiteEfetivo}m).\n` +
@@ -419,7 +443,12 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
   `).join('');
 
   lista.querySelectorAll('button[data-assumir]').forEach(btn => {
-    btn.onclick = () => assumirEntregaAtomica(btn.dataset.assumir, motoboyUid);
+    btn.onclick = async () => {
+      const texto = btn.textContent;
+      btn.disabled = true; btn.textContent = '⏳ Reservando...';
+      const ok = await assumirEntregaAtomica(btn.dataset.assumir, motoboyUid);
+      if (!ok && document.body.contains(btn)) { btn.disabled = false; btn.textContent = texto; }
+    };
   });
 }
 

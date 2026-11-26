@@ -276,7 +276,37 @@ function renderizarConcluidos() {
           <small>${p.status === 'ocorrencia' ? '⚠ ocorrência' : p.tipoEntrega === 'retirada' ? '🏪 retirou' : `🛵 ${esc(p.motoboyNome || 'entregue')}`}${p.entregueEm?.toDate ? ` · ${p.entregueEm.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : ''}${p.avaliacaoNota ? ` · ${'★'.repeat(p.avaliacaoNota)}` : ''}</small>
         </div>
         <span>${formatarCentavos(p.totalCentavos)}</span>
+        ${p.status === 'ocorrencia' ? `
+          <div class="conc-ocorrencia">
+            ${p.justificativaBaixa ? `<small>Motoboy: "${esc(p.justificativaBaixa)}"</small>` : ''}
+            ${p.ocorrenciaRevisada
+              ? `<small>${p.ocorrenciaRevisada === 'cliente' ? '✔ Marcado como culpa do cliente' : '✔ Marcado como problema da loja/entrega'}</small>`
+              : `<small>Foi culpa do cliente (ausente / endereço não existe)?</small>
+                 <div class="conc-ocorrencia-botoes">
+                   <button class="btn-outline-sm" type="button" data-ocorr="${esc(p.id)}" data-culpa="1">Sim, do cliente</button>
+                   <button class="btn-outline-sm" type="button" data-ocorr="${esc(p.id)}" data-culpa="0">Não</button>
+                 </div>`}
+          </div>` : ''}
       </div>`).join('') || '<p class="gc-dica">Nenhum pedido concluído ainda hoje.</p>'}`;
+  // Ocorrência só conta contra o cliente depois que o balcão confirma (evita punir por erro do motoboy/GPS).
+  // Com 2 ausências seguidas confirmadas, o cliente passa a pagar pelo Pix antes (se a loja tiver Pix automático).
+  col.querySelectorAll('[data-ocorr]').forEach(b => {
+    b.onclick = async () => {
+      const culpa = b.dataset.culpa === '1';
+      if (culpa && !confirm('Confirmar que o cliente estava ausente ou o endereço não existe?\n\nCom 2 ocorrências seguidas confirmadas, os próximos pedidos desse WhatsApp só poderão ser pagos pelo Pix antecipado. Uma entrega concluída libera de novo.')) return;
+      b.disabled = true;
+      try {
+        const u = auth.currentUser;
+        const r = await fetch('/api/clientes', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await u.getIdToken()}` }, body: JSON.stringify({ lojaId: AppState.lojaId, acao: 'ocorrencia', pedidoId: b.dataset.ocorr, culpaCliente: culpa }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.erro || 'Não foi possível registrar.');
+        const p = concluidosHoje.find(x => x.id === b.dataset.ocorr);
+        if (p) p.ocorrenciaRevisada = culpa ? 'cliente' : 'loja';
+        showToast(d.restrito ? '⚠ 2ª ausência seguida: os próximos pedidos desse cliente serão pagos pelo Pix antecipado.' : 'Registrado.', 6000);
+        renderizarConcluidos();
+      } catch (err) { showToast(err.message, 5000); b.disabled = false; }
+    };
+  });
 }
 
 function criarCardPedidoBalcao(p) {
@@ -309,7 +339,10 @@ function criarCardPedidoBalcao(p) {
         <button class="btn-outline-sm" style="padding:2px 8px;" data-print="1" title="Imprimir Comanda">🖨️</button>
       </span>
     </div>
-    <p style="font-size:14px; margin:4px 0;"><strong>${esc(p.clienteNome)}</strong> ${p.clienteWhatsapp ? `(${esc(p.clienteWhatsapp)})` : ''}</p>
+    <p style="font-size:14px; margin:4px 0;"><strong>${esc(p.clienteNome)}</strong> ${p.clienteWhatsapp ? `(${esc(p.clienteWhatsapp)})` : ''}${p.clienteVip ? ` <span class="badge-vip" title="${esc(p.clientePedidosAntes)} pedidos concluídos">⭐ VIP</span>` : ''}</p>
+    ${p.clienteVip ? `<p class="gc-dica" style="margin:0 0 4px;">Cliente fiel (${esc(p.clientePedidosAntes)} pedidos): que tal um mimo ou prioridade no preparo?</p>` : ''}
+    ${p.recebedorNome ? `<p style="font-size:13px; margin:2px 0;">👤 Quem recebe: <strong>${esc(p.recebedorNome)}</strong>${p.recebedorWhats ? ` (${esc(p.recebedorWhats)})` : ''}</p>` : ''}
+    ${p.clienteRestrito ? '<p style="font-size:12px; color:#9a3412; margin:2px 0;">⚠ Cliente com 2 ausências seguidas</p>' : ''}
     <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
     ${p.pinoManual ? '<p style="font-size:12px; color:#92400e; margin:2px 0;">📍 Pino ajustado à mão pelo cliente</p>' : ''}
     ${p.descontoFidelidadeCentavos ? `<div class="pedido-premio">🎁 Prêmio fidelidade usado: −${formatarCentavos(p.descontoFidelidadeCentavos)} (já descontado do total)</div>` : ''}
@@ -385,10 +418,11 @@ function imprimirComandaTermica(p) {
       ${new Date().toLocaleString('pt-BR')}
     </div>
     <div style="padding:6px 0; border-bottom:1px dashed #000;">
-      Cliente: ${esc(p.clienteNome)}<br/>
+      Cliente: ${esc(p.clienteNome)}${p.clienteVip ? ' *VIP*' : ''}<br/>
       Tel: ${esc(p.clienteWhatsapp)}<br/>
+      ${p.recebedorNome ? `Recebe: ${esc(p.recebedorNome)}${p.recebedorWhats ? ' ' + esc(p.recebedorWhats) : ''}<br/>` : ''}
       ${p.enderecoPartes && p.enderecoPartes.rua
-        ? `End: ${esc(p.enderecoPartes.rua)}${p.enderecoPartes.numero ? ', ' + esc(p.enderecoPartes.numero) : ''}<br/>${p.enderecoPartes.bairro ? `<strong>BAIRRO: ${esc(p.enderecoPartes.bairro.toUpperCase())}</strong><br/>` : ''}${p.enderecoPartes.compl ? `<strong>REF: ${esc(p.enderecoPartes.compl)}</strong>` : ''}`
+        ? `${p.enderecoPartes.bairro ? `<strong style="font-size:15px;">${esc(p.enderecoPartes.bairro.toUpperCase())}</strong><br/>` : ''}${esc(p.enderecoPartes.rua)}${p.enderecoPartes.numero ? ', ' + esc(p.enderecoPartes.numero) : ''}<br/>${p.enderecoPartes.compl ? `<strong>REF: ${esc(p.enderecoPartes.compl)}</strong><br/>` : ''}${p.enderecoPartes.apelido ? `(${esc(p.enderecoPartes.apelido)})` : ''}${p.tipoLocal === 'condominio' ? ' [CONDOMINIO]' : p.tipoLocal === 'rural' ? ' [RURAL]' : ''}`
         : `End: ${esc(p.enderecoTexto)}`}
     </div>
     <div style="padding:6px 0; border-bottom:1px dashed #000;">

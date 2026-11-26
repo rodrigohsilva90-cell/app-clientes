@@ -74,6 +74,7 @@ export function iniciarAcompanhamento(pedidoId) {
     <a href="/${esc(AppState.slug)}" class="btn-outline-sm" style="text-decoration:none; display:inline-block; margin-bottom:12px;">← Voltar ao cardápio</a>
     <div class="card" id="acomp-status"><p>Carregando seu pedido...</p></div>
     <div class="card hidden acomp-chegando" id="acomp-chegando">🏁 <strong>O entregador está chegando ao seu endereço!</strong><span>Fique de olho no portão ou no interfone.</span></div>
+    <div class="card hidden acomp-parada" id="acomp-parada"></div>
     <div class="card hidden" id="acomp-mapa-card">
       <strong>🛵 Entregador a caminho</strong>
       <p class="acomp-antes hidden" id="acomp-antes"></p>
@@ -335,6 +336,14 @@ function renderMapa(p) {
   if (!card) return;
   const coords = p.motoboyCoords;
   const aviso = document.getElementById('acomp-chegando');
+  // Entregador fazendo outra entrega antes desta: não mostra onde ele está (privacidade do outro cliente)
+  const parada = document.getElementById('acomp-parada');
+  const emParada = p.status === 'entrega' && coords && !coords.chegou && Number(coords.antes) >= 1 && !Number.isFinite(coords.lat);
+  if (parada) {
+    parada.classList.toggle('hidden', !emParada);
+    if (emParada) parada.innerHTML = `🛵 <strong>Seu pedido já saiu!</strong><span>O entregador está fazendo ${Number(coords.antes) === 1 ? '1 parada rápida' : `${Number(coords.antes)} paradas rápidas`} no caminho antes de seguir para você. O mapa ao vivo aparece quando ele estiver vindo direto.</span>`;
+  }
+  if (emParada) { card.classList.add('hidden'); if (aviso) aviso.classList.add('hidden'); return; }
   // Privacidade: a 50 m do destino o mapa ao vivo é encerrado
   const perto = coords && (coords.chegou || (p.destinoCoords && Number.isFinite(coords.lat) && distanciaMetros(coords, p.destinoCoords) <= 50));
   if (aviso) aviso.classList.toggle('hidden', !(p.status === 'entrega' && perto));

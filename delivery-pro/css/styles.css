@@ -506,3 +506,17 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .cl-acoes { display: flex; gap: 6px; flex-wrap: wrap; }
 .chk-enderecos { padding-top: 8px; }
 .acomp-fid { border: 1px solid #fde68a; background: #fefce8; } .acomp-carimbos { font-size: 22px; letter-spacing: 3px; color: var(--primary); margin: 4px 0; }
+.badge-vip { display: inline-block; font-size: 11px; font-weight: 800; background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; border-radius: 99px; padding: 1px 7px; vertical-align: middle; }
+.mb-recebedor { font-size: 14px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 6px 8px; margin: 6px 0; }
+.mb-bairro { font-size: 17px; font-weight: 800; letter-spacing: .5px; margin: 8px 0 0; }
+.acomp-parada { display: flex; gap: 8px; flex-direction: column; border: 1px solid #bfdbfe; background: #eff6ff; }
+.acomp-parada span { font-size: 14px; color: var(--text-muted); }
+.conc-ocorrencia { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.conc-ocorrencia-botoes { display: flex; gap: 6px; }
+.conc-item { flex-wrap: wrap; }
+.chk-tipo-local { flex-wrap: wrap; }
+.chk-selo-gps { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 700; color: #15803d; background: #dcfce7; border-radius: 99px; padding: 1px 6px; }
+.vt-simular { margin: 10px 0; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 12px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.vt-simular-form { display: flex; gap: 6px; }
+.vt-simular-form input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; }
+.vt-simular small { font-size: 13px; color: var(--text-muted); }

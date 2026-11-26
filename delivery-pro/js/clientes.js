@@ -25,6 +25,8 @@ export function formatarWhats(n) {
 }
 
 const dataBr = (iso) => (iso ? new Date(iso).toLocaleDateString('pt-BR') : '—');
+const NOME_DIA = { d0: 'domingo', d1: 'segunda', d2: 'terça', d3: 'quarta', d4: 'quinta', d5: 'sexta', d6: 'sábado' };
+const pediuHoje = (iso) => iso && new Date(iso).toDateString() === new Date().toDateString();
 
 export async function abrirClientes() {
   const ehDono = true; // esta tela só abre pelo menu ⚙ Configurações, que é exclusivo do dono (o Worker confere de novo)
@@ -37,6 +39,13 @@ export async function abrirClientes() {
       </div>
       <p class="gc-dica">Todo cliente que pede com WhatsApp (pelo link ou no balcão) entra aqui sozinho. Os números contam quando o pedido é concluído.</p>
       <input id="cl-busca" type="search" placeholder="Buscar por nome ou telefone" class="cl-busca" />
+      <div class="rl-periodos" id="cl-filtros">
+        <button type="button" class="rl-chip ativo" data-filtro="todos">Todos</button>
+        <button type="button" class="rl-chip" data-filtro="campanha">📣 Oferta de hoje</button>
+        <button type="button" class="rl-chip" data-filtro="vip">⭐ VIP</button>
+        <button type="button" class="rl-chip" data-filtro="sumidos">💤 Sumidos (30+ dias)</button>
+      </div>
+      <p class="gc-dica hidden" id="cl-dica-filtro"></p>
       <div id="cl-lista"><p class="gc-dica">Carregando...</p></div>
     </div>`;
   document.body.appendChild(overlay);
@@ -46,31 +55,63 @@ export async function abrirClientes() {
   let dados;
   try { dados = await api({ acao: 'listar' }); } catch (err) { lista.innerHTML = `<p class="gc-dica">${esc(err.message)}</p>`; return; }
 
+  let filtro = 'todos';
+  const hoje = `d${dados.hoje}`;
   const desenhar = () => {
     const termo = overlay.querySelector('#cl-busca').value.trim().toLowerCase();
     const soNum = termo.replace(/\D/g, '');
-    const filtrados = dados.clientes.filter(c => !termo || String(c.nome).toLowerCase().includes(termo) || (soNum && c.whatsapp.includes(soNum)));
+    const dica = overlay.querySelector('#cl-dica-filtro');
+    const textos = {
+      campanha: `Clientes que <strong>aceitaram receber promoções</strong>, costumam pedir na ${NOME_DIA[hoje] || 'hoje'} e ainda não pediram hoje. Mande uma mensagem por vez (envio em massa pode bloquear seu WhatsApp).`,
+      vip: 'Clientes com 5 ou mais pedidos concluídos.',
+      sumidos: 'Clientes que não pedem há mais de 30 dias. Só mande oferta para quem aceitou receber promoções.'
+    };
+    dica.classList.toggle('hidden', filtro === 'todos');
+    dica.innerHTML = textos[filtro] || '';
+    const filtrados = dados.clientes.filter(c => !termo || String(c.nome).toLowerCase().includes(termo) || (soNum && c.whatsapp.includes(soNum)))
+      .filter(c => filtro === 'todos'
+        || (filtro === 'campanha' && c.optInMarketing && c.diaFavorito === hoje && !pediuHoje(c.ultimaCompraEm))
+        || (filtro === 'vip' && c.totalPedidos >= 5)
+        || (filtro === 'sumidos' && c.ultimaCompraEm && Date.now() - Date.parse(c.ultimaCompraEm) > 30 * 864e5));
     if (!dados.clientes.length) { lista.innerHTML = '<p class="gc-dica">Ainda não há clientes. Eles aparecem aqui depois do primeiro pedido com WhatsApp.</p>'; return; }
     lista.innerHTML = `<p class="gc-dica">${filtrados.length} de ${dados.clientes.length} cliente(s)</p>` + filtrados.slice(0, 200).map(c => {
       const f = c.fidelidade;
       const zap = c.whatsapp.length <= 11 ? '55' + c.whatsapp : c.whatsapp;
+      const primeiroNome = String(c.nome).split(/\s+/)[0];
+      const oferta = `Olá, ${primeiroNome}! Aqui é da ${AppState.lojaDados.nome || 'loja'} 😊 Hoje tem novidade no cardápio: ${window.location.origin}/${AppState.lojaDados.slug || ''}\n(Se não quiser mais receber, é só responder SAIR.)`;
+      const podeOferta = c.optInMarketing && (filtro === 'campanha' || filtro === 'sumidos');
       return `<div class="cl-item">
         <div class="cl-topo">
-          <div><strong>${esc(c.nome)}</strong><small>${esc(formatarWhats(c.whatsapp))}</small></div>
+          <div><strong>${esc(c.nome)}</strong>${c.totalPedidos >= 5 ? ' <span class="badge-vip">⭐ VIP</span>' : ''}<small>${esc(formatarWhats(c.whatsapp))}${c.optInMarketing ? ' · 📣 aceita promoções' : ''}</small></div>
           <strong>${formatarCentavos(c.totalGastoCentavos)}</strong>
         </div>
         <div class="cl-dados">
           <span>📦 ${c.totalPedidos} pedido(s) concluído(s)</span>
           <span>🕒 Última: ${dataBr(c.ultimaCompraEm)}</span>
+          ${c.totalPedidos ? `<span>🎟 Ticket médio: ${formatarCentavos(Math.round(c.totalGastoCentavos / c.totalPedidos))}</span>` : ''}
+          ${c.diaFavorito ? `<span>📅 Costuma pedir: ${NOME_DIA[c.diaFavorito] || '—'}${c.horaFavorita ? `, por volta das ${String(c.horaFavorita).replace('h', '')}h` : ''}</span>` : ''}
           ${f ? `<span>🎁 ${f.carimbos}/${f.meta} carimbos${f.premios ? ` · <strong>${f.premios} prêmio(s)</strong>` : ''}</span>` : ''}
         </div>
         ${c.ultimoEnderecoTexto ? `<div class="cl-end">📍 ${esc(c.ultimoEnderecoTexto)}</div>` : ''}
+        ${c.ausenciasSeguidas >= 2 ? `<div class="mb-alerta-pino">⚠ ${c.ausenciasSeguidas} ausências seguidas: os pedidos desse cliente pedem Pix antecipado. <button class="btn-outline-sm" type="button" data-liberar="${esc(c.whatsapp)}">Liberar</button></div>` : ''}
         <div class="cl-acoes">
-          <a class="btn-outline-sm btn-whats" href="https://wa.me/${esc(zap)}" target="_blank" rel="noopener">💬 WhatsApp</a>
+          <a class="btn-outline-sm btn-whats" href="https://wa.me/${esc(zap)}${podeOferta ? `?text=${encodeURIComponent(oferta)}` : ''}" target="_blank" rel="noopener">${podeOferta ? '📣 Enviar oferta' : '💬 WhatsApp'}</a>
           ${ehDono ? `<button class="btn-outline-sm gc-perigo" type="button" data-anonimizar="${esc(c.whatsapp)}">🗑 Apagar dados (LGPD)</button>` : ''}
         </div>
       </div>`;
     }).join('');
+    lista.querySelectorAll('[data-liberar]').forEach(b => {
+      b.onclick = async () => {
+        b.disabled = true;
+        try {
+          await api({ acao: 'liberarCliente', whatsapp: b.dataset.liberar });
+          const c = dados.clientes.find(x => x.whatsapp === b.dataset.liberar);
+          if (c) c.ausenciasSeguidas = 0;
+          showToast('Cliente liberado: pode pagar na entrega de novo.');
+          desenhar();
+        } catch (err) { showToast(err.message, 5000); b.disabled = false; }
+      };
+    });
     lista.querySelectorAll('[data-anonimizar]').forEach(b => {
       b.onclick = async () => {
         const c = dados.clientes.find(x => x.whatsapp === b.dataset.anonimizar);
@@ -86,6 +127,13 @@ export async function abrirClientes() {
     });
   };
   overlay.querySelector('#cl-busca').oninput = desenhar;
+  overlay.querySelectorAll('[data-filtro]').forEach(b => {
+    b.onclick = () => {
+      filtro = b.dataset.filtro;
+      overlay.querySelectorAll('[data-filtro]').forEach(x => x.classList.toggle('ativo', x === b));
+      desenhar();
+    };
+  });
   desenhar();
 }
 
