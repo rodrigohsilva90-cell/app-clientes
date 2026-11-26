@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 69f3d927b66ef4a38f6aced38c384f63523b67b56d822ea6f96522b2c76641fa).
+worker.js = cópia EXATA do que está no ar (sha256 c7de6f2ad1d009f297542b31df5cb760feafa37d851c6cb09f3918039f4a1453).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
@@ -30,3 +30,4 @@ Cardápio: ao salvar, a versão anterior vai para publico/cardapio_backup; "↩ 
 Anti-trote: lojas/{id}.antiTrote {ativo, limiteCentavos}: 1ª compra (sem totalPedidos na ficha) de entrega >= limite só com Pix automático.
 Caixa: turnos/{id}.movimentos [{tipo despesa|sangria, valorCentavos, descricao}] descontam do dinheiro esperado; dono vê lucro operacional (faturamento − corridas − diárias/bônus acertados − despesas). Backup: js/backup.js (JSON + CSV).
 Celular: vitrine com gavetas de baixo (.vt-gaveta, botão "Adicionar • R$" com preço ao vivo), área segura (viewport-fit=cover + env(safe-area-inset-bottom)), vibração 40ms. Balcão no celular: abas com contador (#bc-abas) e barra fixa de baixo (#bc-nav), botões de 48px. Aparência: botão "👁️ Ver a loja ao vivo" (iframe da loja salva). Motoboy: deslizar para confirmar (.mb-deslizar), atalhos Rota/WhatsApp/Ligar, letras 19px, modo noite 18h-6h (mb-noite), tela acesa só com entrega na mão.
+Motoboy: abas Disponíveis / Minha rota (#mb-abas), Modo Piloto (.mb-piloto esconde .mb-detalhe; "Detalhes" lembra a escolha em localStorage motoboy_detalhes), selo PAGO ONLINE. Baixa sem sinal (ou envio que passa de 8 s): guarda em motoboy_offline_actions_v1 com coordsBaixa {semSinal, registradoEm}, tira da rota na hora e mostra a próxima; reenvia a cada 30 s e no "online", com a hora real (Timestamp). Anti-flood: máx. 2 Pix aguardando por WhatsApp (35 min). Tela do Pix confere /api/mp/verificar a cada 10 s (limite 90/10 min por IP). Balcão: caixa "Pix aguardando pagamento" com 🔄 Verificar no banco.

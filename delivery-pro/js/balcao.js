@@ -78,6 +78,9 @@ export async function iniciarBalcao() {
       </div>
     </div>
 
+    <!-- Pix gerado e ainda não confirmado (o pedido só entra na fila depois de pago) -->
+    <div id="pix-pendentes" class="card pix-pendentes hidden"></div>
+
     <!-- Kanban de Pedidos (no celular vira abas com contador) -->
     <nav class="bc-abas" id="bc-abas">
       <button type="button" class="ativa" data-aba="novo">🔔 Novos <b data-cont="novo">0</b></button>
@@ -117,6 +120,7 @@ export async function iniciarBalcao() {
   `;
 
   document.getElementById('btn-som').onclick = ativarSomEWakeLock;
+  if (AppState.lojaDados.pixOnline) escutarPixPendentes();
   // Abas do celular: mostra uma coluna por vez
   const mostrarAba = (aba) => {
     document.querySelectorAll('#bc-abas [data-aba]').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
@@ -231,6 +235,39 @@ function tocarBipeCampainha() {
   gain.connect(audioCtx.destination);
   osc.start();
   osc.stop(audioCtx.currentTime + 0.5);
+}
+
+// Cliente diz que pagou, mas o pedido não chegou? O balcão confere direto no Mercado Pago
+function escutarPixPendentes() {
+  const q = query(collection(db, 'lojas', AppState.lojaId, 'pedidos'), where('status', '==', 'aguardando_pagamento'));
+  onSnapshot(q, (snap) => {
+    const box = document.getElementById('pix-pendentes');
+    if (!box) return;
+    const limite = Date.now() - 40 * 60000;
+    const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(p => (p.criadoEm?.toMillis ? p.criadoEm.toMillis() : 0) > limite)
+      .sort((a, b) => (b.criadoEm?.toMillis?.() || 0) - (a.criadoEm?.toMillis?.() || 0));
+    box.classList.toggle('hidden', !lista.length);
+    if (!lista.length) { box.innerHTML = ''; return; }
+    box.innerHTML = `<strong>⏳ Pix aguardando pagamento (${lista.length})</strong>
+      <p class="gc-dica">Entram na fila sozinhos quando o banco confirma. Se o cliente disser que já pagou, toque em verificar.</p>
+      ${lista.map(p => `<div class="mb-bag-linha" style="align-items:center;">
+        <span>#${esc(p.numeroPedido || p.id.slice(0, 4))} · ${esc(String(p.clienteNome || '').split(/\s+/)[0])} · ${formatarCentavos(p.totalCentavos)} <small>· há ${Math.max(0, Math.round((Date.now() - (p.criadoEm?.toMillis?.() || Date.now())) / 60000))} min</small></span>
+        <button type="button" class="btn-outline-sm" data-verificar-pix="${esc(p.id)}">🔄 Verificar no banco</button>
+      </div>`).join('')}`;
+    box.querySelectorAll('[data-verificar-pix]').forEach(b => {
+      b.onclick = async () => {
+        b.disabled = true; b.textContent = 'Conferindo...';
+        try {
+          const r = await fetch('/api/mp/verificar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: AppState.lojaDados.slug || AppState.slug, pedidoId: b.dataset.verificarPix }) });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(d.erro || 'Não foi possível conferir.');
+          showToast(d.pago || d.status === 'novo' ? '✅ Pago! O pedido entrou na fila.' : d.status === 'cancelado' ? 'O Pix expirou ou foi cancelado.' : 'Ainda não consta pagamento no banco.', 6000);
+        } catch (err) { showToast(err.message); }
+        b.disabled = false; b.textContent = '🔄 Verificar no banco';
+      };
+    });
+  }, (err) => console.error('pix pendentes', err));
 }
 
 function escutarPedidosEmTempoReal() {

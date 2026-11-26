@@ -148,6 +148,7 @@ function etapasDo(p) {
 
 // ---- Pix automático: QR Code + copia e cola enquanto o pedido aguarda o pagamento ----
 let relogioPix = null;
+let conferirPixTimer = null; // confere no banco a cada 10 s, caso o aviso do Mercado Pago atrase
 let esperavaPix = false; // para avisar (vibrar) quando o Pix for confirmado
 function renderPix(p, box, numero) {
   const expira = p.pix && (p.pix.expiraEm?.toMillis ? p.pix.expiraEm.toMillis() : Date.parse(p.pix.expiraEm));
@@ -207,6 +208,13 @@ function renderPix(p, box, numero) {
   };
   atualizar();
   relogioPix = setInterval(atualizar, 1000);
+  if (conferirPixTimer) clearInterval(conferirPixTimer);
+  conferirPixTimer = setInterval(() => {
+    if (!document.getElementById('pix-tempo')) { clearInterval(conferirPixTimer); conferirPixTimer = null; return; }
+    if (document.visibilityState !== 'visible' || !navigator.onLine) return;
+    // Se aprovado, o servidor muda o pedido e esta tela troca sozinha (pelo aviso em tempo real)
+    fetch('/api/mp/verificar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: AppState.slug, pedidoId: p.id }) }).catch(() => {});
+  }, 10000);
 }
 
 function renderStatus(p) {
@@ -223,6 +231,7 @@ function renderStatus(p) {
     }
   }
   if (relogioPix) { clearInterval(relogioPix); relogioPix = null; }
+  if (conferirPixTimer) { clearInterval(conferirPixTimer); conferirPixTimer = null; }
 
   if (p.status === 'ocorrencia' || p.status === 'cancelado') {
     box.innerHTML = `

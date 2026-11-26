@@ -4,7 +4,7 @@ import { avisarCliente, carimbarPedido } from './notificar.js';
 import { calcularRepasse } from './frete.js';
 import { validarCercaEntrega, criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros, criarLinhaRota } from './geo.js';
 import {
-  collection, query, where, onSnapshot, doc, runTransaction, updateDoc, serverTimestamp
+  collection, query, where, onSnapshot, doc, runTransaction, updateDoc, serverTimestamp, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let watchId = null;
@@ -29,6 +29,9 @@ const SLA_URGENTE_MS = 35 * 60 * 1000; // pedido esperando há 35+ min passa na 
 const FOLGA_URGENTE_M = 1500;
 let ligarGps = null;            // liga o GPS (fica desligado quando não há entrega, para poupar bateria)
 let ultimoAtualId = null;
+let ultimoSnap = null;          // última leitura da fila (para redesenhar na hora após baixa sem sinal)
+let qtdRotaAnterior = 0;
+const baixasGuardadas = () => new Set(lerJson(OFFLINE_QUEUE_KEY, []).map(i => i.pedidoId));
 const lerJson = (k, padrao) => { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? padrao; } catch (_) { return padrao; } };
 const gravarJson = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} };
 const pago = (p) => p.pagamentoStatus === 'aprovado';
@@ -58,18 +61,31 @@ export function iniciarMotoboy() {
       </div>
     </div>
 
-    <!-- Placar de ganhos do turno -->
-    <div id="mb-placar" class="card mb-placar"><p class="gc-dica">Carregando seus ganhos...</p></div>
+    <!-- Duas abas grandes: o que pegar / a rota que está fazendo -->
+    <nav class="mb-abas" id="mb-abas">
+      <button type="button" class="ativa" data-aba="fila">📦 Disponíveis <b id="mb-cont-fila">0</b></button>
+      <button type="button" data-aba="rota">🛵 Minha rota <b id="mb-cont-rota">0</b></button>
+    </nav>
+    <div id="mb-sem-sinal" class="mb-sem-sinal hidden"></div>
 
-    <!-- Container da Entrega Ativa (Visível apenas quando há rota assumida) -->
-    <div id="box-entrega-ativa" class="hidden"></div>
+    <div data-painel="fila">
+      <!-- Placar de ganhos do turno -->
+      <div id="mb-placar" class="card mb-placar"><p class="gc-dica">Carregando seus ganhos...</p></div>
+      <!-- Fila de Pedidos Prontos Disponíveis na Loja -->
+      <div id="box-fila-disponivel">
+        <div id="lista-entregas-disponiveis"></div>
+      </div>
+    </div>
 
-    <!-- Fila de Pedidos Prontos Disponíveis na Loja -->
-    <div id="box-fila-disponivel">
-      <h3 style="margin: 12px 0 8px;">📦 Entregas Disponíveis para Retirada</h3>
-      <div id="lista-entregas-disponiveis"></div>
+    <div data-painel="rota" class="hidden">
+      <!-- Container da Entrega Ativa (Visível apenas quando há rota assumida) -->
+      <div id="box-entrega-ativa" class="hidden"></div>
+      <div id="mb-rota-vazia" class="card"><p style="color:var(--text-muted);">Nenhuma entrega na sua mão. Pegue uma na aba 📦 Disponíveis.</p></div>
     </div>
   `;
+  document.querySelectorAll('#mb-abas [data-aba]').forEach(b => { b.onclick = () => mostrarAbaMotoboy(b.dataset.aba); });
+  avisarBaixasGuardadas();
+  setInterval(sincronizarFilaOffline, 30000); // o "online" do celular nem sempre avisa quando o sinal volta
 
   carregarExtrato();
   setInterval(carregarExtrato, 3 * 60 * 1000);
@@ -267,21 +283,40 @@ function atualizarCerca() {
   btn.classList.toggle('mb-na-cerca', v.permitido);
 }
 
-// 2. Escuta Entregas Prontas e Entrega Ativa do Próprio Motoboy (LGPD)
-function escutarEntregas(motoboyUid) {
-  const q = query(
-    collection(db, 'lojas', AppState.lojaId, 'pedidos'),
-    where('status', 'in', ['preparo', 'entrega'])
-  );
+function mostrarAbaMotoboy(aba) {
+  document.querySelectorAll('#mb-abas [data-aba]').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
+  document.querySelectorAll('[data-painel]').forEach(p => p.classList.toggle('hidden', p.dataset.painel !== aba));
+  if (aba === 'rota' && mapaMotoboy) setTimeout(() => mapaMotoboy.invalidateSize(), 50);
+}
+function atualizarAbasMotoboy(qtdDisponiveis) {
+  const cf = document.getElementById('mb-cont-fila'); if (cf) cf.textContent = qtdDisponiveis;
+  const cr = document.getElementById('mb-cont-rota'); if (cr) cr.textContent = minhasEntregas.length;
+  const vazia = document.getElementById('mb-rota-vazia'); if (vazia) vazia.classList.toggle('hidden', minhasEntregas.length > 0);
+  // Pegou entrega: vai direto para a rota. Terminou tudo: volta para as disponíveis
+  if (minhasEntregas.length > qtdRotaAnterior) mostrarAbaMotoboy('rota');
+  else if (!minhasEntregas.length && qtdRotaAnterior) mostrarAbaMotoboy('fila');
+  qtdRotaAnterior = minhasEntregas.length;
+}
+function avisarBaixasGuardadas() {
+  const el = document.getElementById('mb-sem-sinal');
+  if (!el) return;
+  const n = lerJson(OFFLINE_QUEUE_KEY, []).length;
+  el.classList.toggle('hidden', !n);
+  el.textContent = n ? `📤 ${n} baixa(s) guardada(s) no celular. Envia sozinho quando o sinal voltar — pode seguir viagem.` : '';
+}
 
-  onSnapshot(q, (snapshot) => {
+// 2. Escuta Entregas Prontas e Entrega Ativa do Próprio Motoboy (LGPD)
+function processarEntregas(motoboyUid) {
+    if (!ultimoSnap) return;
+    const guardadas = baixasGuardadas();
     const disponiveis = [];
     const minhas = [];
     let trocoTotalCentavos = 0;
 
-    snapshot.forEach((docSnap) => {
+    ultimoSnap.forEach((docSnap) => {
       const p = { id: docSnap.id, ...docSnap.data() };
       if (p.status === 'entrega' && p.motoboyId === motoboyUid) {
+        if (guardadas.has(p.id)) return; // baixa feita sem sinal: já saiu da rota (sincroniza depois)
         minhas.push(p);
         if (p.formaPagamento === 'dinheiro' && p.trocoParaCentavos > p.totalCentavos) {
           trocoTotalCentavos += (p.trocoParaCentavos - p.totalCentavos);
@@ -304,11 +339,20 @@ function escutarEntregas(motoboyUid) {
 
     // Só redesenha a tela se mudou algo além do GPS (senão o mapa piscaria a cada 8 s)
     const assinatura = JSON.stringify([minhasEntregas.map(p => [p.id, p.status, p.enderecoTexto, p.totalCentavos]), disponiveis.map(p => p.id)]);
+    atualizarAbasMotoboy(disponiveis.length);
     if (assinatura === assinaturaTela) return;
     assinaturaTela = assinatura;
     renderizarEntregaAtiva(pedidoEmRotaAtual, motoboyUid);
     renderizarFilaDisponivel(disponiveis, motoboyUid, minhasEntregas.length >= MAX_ENTREGAS_ROTA);
-  }, (err) => {
+}
+
+function escutarEntregas(motoboyUid) {
+  const q = query(
+    collection(db, 'lojas', AppState.lojaId, 'pedidos'),
+    where('status', 'in', ['preparo', 'entrega'])
+  );
+
+  onSnapshot(q, (snapshot) => { ultimoSnap = snapshot; processarEntregas(motoboyUid); }, (err) => {
     console.error(err);
     document.getElementById('lista-entregas-disponiveis').innerHTML = err.code === 'permission-denied'
       ? '<div class="card">🔒 Sua conta não está cadastrada como entregador desta loja.</div>'
@@ -372,6 +416,7 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
   }
 
   box.classList.remove('hidden');
+  box.classList.toggle('mb-piloto', !lerJson('motoboy_detalhes', false)); // Modo Piloto: só o essencial
   mapaMotoboy = null; // o HTML é recriado abaixo, então o mapa também
   marcadorMoto = null;
   linhaRotaMoto = null;
@@ -407,7 +452,7 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
 
   box.innerHTML = `
     ${minhasEntregas.length > 1 ? `
-      <div class="card mb-bag">
+      <div class="card mb-bag mb-detalhe">
         <strong>🎒 Sua bag: ${minhasEntregas.length} entregas</strong>
         ${minhasEntregas.map((p, i) => `<div class="mb-bag-linha"><span>${i + 1}ª · #${esc(p.numeroPedido || p.id.slice(0, 4))} ${esc(String(p.clienteNome || '').split(/\s+/)[0])}${p.criadoEm && p.criadoEm.toMillis && Date.now() - p.criadoEm.toMillis() >= SLA_URGENTE_MS ? ` <span class="mb-cobrar">⏰ ${Math.round((Date.now() - p.criadoEm.toMillis()) / 60000)} min</span>` : ''}</span>${linhaCobranca(p)}</div>`).join('')}
         <div class="mb-bag-total"><span>Total a cobrar na rua</span><strong>${formatarCentavos(totalCobrar)}</strong></div>
@@ -437,15 +482,15 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
         : `<p class="mb-endereco"><strong>📍 ${esc(pedido.enderecoTexto)}</strong></p>`}
       ${pedido.pinoManual ? `<div class="mb-alerta-pino">⚠ O cliente ajustou o pino no mapa à mão. Confira a referência${zapCliente ? ` ou <a href="https://wa.me/55${esc(zapCliente.replace(/^55/, ''))}" target="_blank" rel="noopener">chame no WhatsApp</a>` : ''} se não achar.</div>` : ''}
       ${!pedido.destinoCoords && pedido.tipoEntrega === 'entrega' ? '<div class="mb-alerta-pino">⚠ Sem pino no mapa: o GPS vai pelo nome da rua. Confira a referência.</div>' : ''}
-      <p class="mb-valor">${linhaCobranca(pedido)}</p>
+      ${pago(pedido) ? '<div class="mb-selo-pago">✅ PAGO ONLINE <small>não cobrar nada</small></div>' : `<p class="mb-valor">${linhaCobranca(pedido)}</p>`}
 
-      <div style="margin:10px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
+      <div class="mb-detalhe" style="margin:10px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
         <strong>Conferência de Itens:</strong>
         ${(pedido.itens || []).map(i => `<div>• ${esc(i.quantidade)}x ${esc(i.nome)}</div>`).join('')}
       </div>
 
       <!-- Mapa Leaflet ao Vivo -->
-      <div id="mapa-motoboy" style="height:220px; border-radius:8px; margin:10px 0; z-index:1;"></div>
+      <div id="mapa-motoboy" class="mb-detalhe" style="height:220px; border-radius:8px; margin:10px 0; z-index:1;"></div>
 
       <p class="mb-distancia" id="mb-distancia">${pedido.destinoCoords ? '📍 Calculando a distância até o cliente...' : ''}</p>
       <div class="mb-atalhos">
@@ -458,14 +503,15 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
         <span class="mb-deslizar-texto">Deslize para confirmar entrega →</span>
         <span class="mb-deslizar-bola">✅</span>
       </div>
-      ${proximas.length ? '<button id="btn-pular-entrega" class="btn-outline-sm" type="button" style="width:100%; margin-top:8px;">⏭️ Cliente não atende — ir para a próxima e voltar depois</button>' : ''}
+      <button id="btn-detalhes" class="btn-outline-sm mb-btn-detalhes" type="button">☰ Detalhes: mapa, itens, cliente não atende</button>
+      ${proximas.length ? '<button id="btn-pular-entrega" class="btn-outline-sm mb-detalhe" type="button" style="width:100%; margin-top:8px;">⏭️ Cliente não atende — ir para a próxima e voltar depois</button>' : ''}
 
-      <button id="btn-ocorrencia-entrega" class="btn-outline-sm" style="width:100%; margin-top:8px; color:var(--danger); border-color:var(--danger);">
+      <button id="btn-ocorrencia-entrega" class="btn-outline-sm mb-detalhe" style="width:100%; margin-top:8px; color:var(--danger); border-color:var(--danger);">
         ⚠️ Reportar Problema / Cliente Ausente
       </button>
     </div>
     ${proximas.length ? `
-      <div class="card rota-proximas">
+      <div class="card rota-proximas mb-detalhe">
         <strong>🗺 Próximas na rota (${proximas.length})</strong>
         <p class="gc-dica">Cada cliente vê só quantas entregas vêm antes da dele.</p>
         <p class="gc-dica">A ordem é a sugerida pelo app (mais perto primeiro). Conhece um caminho melhor? Use as setas.</p>
@@ -512,6 +558,13 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
     }
   }, 100);
 
+  document.getElementById('btn-detalhes').onclick = () => {
+    const piloto = box.classList.toggle('mb-piloto');
+    gravarJson('motoboy_detalhes', !piloto);
+    document.getElementById('btn-detalhes').textContent = piloto ? '☰ Detalhes: mapa, itens, cliente não atende' : '🛵 Voltar ao Modo Piloto';
+    if (!piloto && mapaMotoboy) setTimeout(() => mapaMotoboy.invalidateSize(), 50);
+  };
+  if (!box.classList.contains('mb-piloto')) document.getElementById('btn-detalhes').textContent = '🛵 Voltar ao Modo Piloto';
   ligarDeslizar(document.getElementById('btn-concluir-entrega'), () => tentarFinalizarEntrega(pedido, 'concluido'));
   document.getElementById('btn-ocorrencia-entrega').onclick = () => tentarFinalizarEntrega(pedido, 'ocorrencia');
 }
@@ -593,18 +646,26 @@ async function tentarFinalizarEntrega(pedido, tipoAcao) {
     justificativaBaixa: justificativa || null
   };
 
-  if (!navigator.onLine) {
-    salvarAcaoOffline({ lojaId: AppState.lojaId, pedidoId: pedido.id, payload });
+  // Sem sinal (elevador, zona rural): guarda no celular com hora e GPS, libera a próxima parada e envia depois
+  const guardarSemSinal = () => {
+    salvarAcaoOffline({ lojaId: AppState.lojaId, pedidoId: pedido.id, payload: { ...payload, coordsBaixa: ultimaPosicao ? { ...ultimaPosicao, semSinal: true, registradoEm: payload.entregueEm } : { semSinal: true, registradoEm: payload.entregueEm } } });
     registrarNaViagem(pedido, tipoAcao);
-    showToast('Sem internet: entrega salva na fila e será sincronizada ao reconectar!');
-    return;
-  }
+    avisarBaixasGuardadas();
+    assinaturaTela = '';
+    if (auth.currentUser) processarEntregas(auth.currentUser.uid);
+    aposBaixa(pedido);
+    showToast('📤 Sem sinal: baixa guardada no celular com hora e GPS. Siga para a próxima — envia sozinho quando o sinal voltar.', 6000);
+  };
+  if (!navigator.onLine) { guardarSemSinal(); return; }
 
   try {
-    await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', pedido.id), {
+    // Sinal fraco: o envio pode ficar "pendurado". Depois de 8 s, segue viagem e o envio continua por trás
+    const gravacao = updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', pedido.id), {
       ...payload,
       entregueEm: serverTimestamp()
     });
+    const resultado = await Promise.race([gravacao.then(() => 'ok'), new Promise(r => setTimeout(() => r('lento'), 8000))]);
+    if (resultado === 'lento') { guardarSemSinal(); return; }
     avisarCliente(pedido.id);
     if (tipoAcao === 'concluido') carimbarPedido(pedido.id);
     showToast(tipoAcao === 'concluido' ? 'Entrega concluída com sucesso!' : 'Ocorrência registrada no balcão.');
@@ -612,8 +673,7 @@ async function tentarFinalizarEntrega(pedido, tipoAcao) {
     aposBaixa(pedido);
     setTimeout(carregarExtrato, 3000);
   } catch (err) {
-    salvarAcaoOffline({ lojaId: AppState.lojaId, pedidoId: pedido.id, payload });
-    showToast('Oscilação de rede: baixa enfileirada para envio automático.');
+    guardarSemSinal();
   }
 }
 
@@ -656,6 +716,7 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
 }
 
 // 5. Persistência Local (Offline Queue)
+let sincronizando = false;
 function salvarAcaoOffline(item) {
   const fila = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]');
   fila.push(item);
@@ -667,17 +728,29 @@ async function sincronizarFilaOffline() {
   const fila = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]');
   if (!fila.length) return;
 
+  if (sincronizando) return;
+  sincronizando = true;
   const restantes = [];
   for (const item of fila) {
     try {
-      await updateDoc(doc(db, 'lojas', item.lojaId, 'pedidos', item.pedidoId), item.payload);
+      const dados = { ...item.payload };
+      if (typeof dados.entregueEm === 'string') dados.entregueEm = Timestamp.fromDate(new Date(dados.entregueEm)); // hora real da entrega
+      await Promise.race([
+        updateDoc(doc(db, 'lojas', item.lojaId, 'pedidos', item.pedidoId), dados),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('SEM_SINAL')), 15000))
+      ]);
       if (item.payload && item.payload.status === 'concluido') carimbarPedido(item.pedidoId, item.lojaId);
-    } catch (_) {
+      avisarCliente(item.pedidoId);
+    } catch (err) {
+      // Já baixado (pelo envio que ficou pendurado ou pelo balcão): não tenta de novo para sempre
+      if (err && (err.code === 'permission-denied' || err.code === 'not-found')) continue;
       restantes.push(item);
     }
   }
+  sincronizando = false;
   localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(restantes));
-  if (restantes.length === 0) showToast('Entregas offline sincronizadas com o servidor!');
+  avisarBaixasGuardadas();
+  if (restantes.length === 0) { showToast('✅ Baixas guardadas enviadas para a loja!'); setTimeout(carregarExtrato, 2000); }
 }
 
 

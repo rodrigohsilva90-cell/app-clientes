@@ -169,11 +169,11 @@ const FORMAS_PAGAMENTO = ['pix', 'cartao_entrega', 'dinheiro'];
 
 // Limite simples por IP (por instância do Worker): no máximo 8 pedidos a cada 10 minutos
 const tentativasPorIp = new Map();
-function dentroDoLimite(ip) {
+function dentroDoLimite(ip, maximo = 8) {
   const agora = Date.now();
   const janela = 10 * 60 * 1000;
   const lista = (tentativasPorIp.get(ip) || []).filter(t => agora - t < janela);
-  if (lista.length >= 8) return false;
+  if (lista.length >= maximo) return false;
   lista.push(agora);
   tentativasPorIp.set(ip, lista);
   if (tentativasPorIp.size > 5000) tentativasPorIp.clear();
@@ -306,6 +306,13 @@ async function criarPedidoSeguro(request, env) {
     let totalCentavos = subtotalCentavos + freteCentavos;
     // Pix automático (Mercado Pago da própria loja): o pedido só vai para a cozinha depois de pago
     const pixOnline = formaPagamento === 'pix' && loja.pixOnline === true && Boolean(env.MP_CHAVE);
+    // Anti-flood: no máximo 2 Pix esperando pagamento ao mesmo tempo por WhatsApp
+    if (pixOnline) {
+      const recentes = await fs.consultarIgual(`lojas/${lojaId}`, 'pedidos', 'clienteWhatsapp', whatsapp, 20);
+      const desde = Date.now() - 35 * 60 * 1000;
+      const esperando = recentes.filter(p => p.id !== token && p.status === 'aguardando_pagamento' && (Date.parse(p.criadoEm) || 0) > desde);
+      if (esperando.length >= 2) throw new ErroPedido('Você já tem 2 Pix esperando pagamento. Pague um deles ou espere 30 minutos para fazer outro pedido.', 429);
+    }
     if (formaPagamento === 'dinheiro' && trocoParaCentavos && trocoParaCentavos < totalCentavos) {
       throw new ErroPedido(`O troco precisa ser para um valor maior que o total (${reais(totalCentavos)}).`);
     }
@@ -567,7 +574,8 @@ async function verificarPix(request, env) {
   try {
     if (!env.FIREBASE_SERVICE_ACCOUNT || !env.MP_CHAVE) throw new ErroPedido('Indisponível.', 503);
     const ip = request.headers.get('CF-Connecting-IP') || 'local';
-    if (!dentroDoLimite(`pix:${ip}`)) throw new ErroPedido('Aguarde um pouco e tente de novo.', 429);
+    // A tela do Pix confere sozinha a cada 10 s (caso o aviso do Mercado Pago atrase): limite maior aqui
+    if (!dentroDoLimite(`pix:${ip}`, 90)) throw new ErroPedido('Aguarde um pouco e tente de novo.', 429);
     let corpo;
     try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
     const pedidoId = String(corpo.pedidoId || '');
