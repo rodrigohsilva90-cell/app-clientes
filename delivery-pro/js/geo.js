@@ -56,26 +56,28 @@ export function criarMapaRastreamento(elementId, centroCoords, zoom = 15) {
   return map;
 }
 
-// Cria marcador customizado da moto com suporte a rotação e deslizamento suave (interpolação)
+// Cria o marcador da moto com deslizamento suave (interpolação).
+// O desenho 🛵 olha para a esquerda: em vez de girar (ficaria de cabeça para baixo), ele é
+// espelhado para olhar para o lado em que está indo — sempre de pé, como num app de entrega.
 export function criarMarcadorMoto(map, coordsIniciais) {
   const motoIcon = L.divIcon({
     className: 'moto-marker-wrapper',
-    html: `<div id="moto-icon-rotor" style="font-size:28px; transition: transform 0.5s ease; transform-origin: center;">🛵</div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16]
+    html: '<div class="moto-icone"><span class="moto-emoji">🛵</span></div>',
+    iconSize: [40, 40],
+    iconAnchor: [20, 20]
   });
 
-  const marker = L.marker([coordsIniciais.lat, coordsIniciais.lng], { icon: motoIcon }).addTo(map);
+  const marker = L.marker([coordsIniciais.lat, coordsIniciais.lng], { icon: motoIcon, zIndexOffset: 1000 }).addTo(map);
   let posAtual = { ...coordsIniciais };
   let animFrame = null;
 
   function moverSuavemente(novasCoords, duracaoMs = 2000) {
     if (animFrame) cancelAnimationFrame(animFrame);
-
-    const angulo = calcularAnguloDirecao(posAtual.lat, posAtual.lng, novasCoords.lat, novasCoords.lng);
-    const rotor = document.getElementById('moto-icon-rotor');
-    if (rotor && (posAtual.lat !== novasCoords.lat || posAtual.lng !== novasCoords.lng)) {
-      rotor.style.transform = `rotate(${angulo}deg)`;
+    const andou = calcularDistanciaMetros(posAtual.lat, posAtual.lng, novasCoords.lat, novasCoords.lng) > 2;
+    const emoji = marker.getElement() && marker.getElement().querySelector('.moto-emoji');
+    if (emoji && andou) {
+      const angulo = calcularAnguloDirecao(posAtual.lat, posAtual.lng, novasCoords.lat, novasCoords.lng);
+      emoji.style.transform = angulo < 180 ? 'scaleX(-1)' : 'scaleX(1)'; // indo para leste: vira para a direita
     }
 
     const inicioLat = posAtual.lat;
@@ -86,19 +88,69 @@ export function criarMarcadorMoto(map, coordsIniciais) {
 
     function step(agora) {
       const progresso = Math.min((agora - inicioTempo) / duracaoMs, 1);
-      const lat = inicioLat + deltaLat * progresso;
-      const lng = inicioLng + deltaLng * progresso;
-      marker.setLatLng([lat, lng]);
-
-      if (progresso < 1) {
-        animFrame = requestAnimationFrame(step);
-      } else {
-        posAtual = { ...novasCoords };
-      }
+      marker.setLatLng([inicioLat + deltaLat * progresso, inicioLng + deltaLng * progresso]);
+      if (progresso < 1) animFrame = requestAnimationFrame(step);
+      else posAtual = { ...novasCoords };
     }
-
     animFrame = requestAnimationFrame(step);
   }
 
   return { marker, moverSuavemente };
+}
+
+// Caminho pelas ruas (OSRM / OpenStreetMap, gratuito). Devolve [{lat,lng}...] ou null.
+export async function buscarRota(a, b) {
+  try {
+    const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const pts = d.routes && d.routes[0] && d.routes[0].geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
+    return pts && pts.length > 1 ? pts : null;
+  } catch (_) { return null; }
+}
+
+// Índice do trecho (pontos[i] → pontos[i+1]) mais perto da posição (projeção num plano local)
+function segmentoMaisPerto(pontos, pos) {
+  const kx = 111320 * Math.cos((pos.lat * Math.PI) / 180), ky = 110540;
+  let melhor = 0, menor = Infinity;
+  for (let i = 0; i < pontos.length - 1; i++) {
+    const ax = (pontos[i].lng - pos.lng) * kx, ay = (pontos[i].lat - pos.lat) * ky;
+    const bx = (pontos[i + 1].lng - pos.lng) * kx, by = (pontos[i + 1].lat - pos.lat) * ky;
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    const t = l2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / l2)) : 0;
+    const px = ax + t * dx, py = ay + t * dy, d = px * px + py * py;
+    if (d < menor) { menor = d; melhor = i; }
+  }
+  return melhor;
+}
+
+// Linha azul do caminho que FALTA até o cliente. Busca a rota de novo a cada ~1 min
+// (ou se a moto sair do caminho) e vai "comendo" o trecho já percorrido.
+export function criarLinhaRota(map) {
+  const contorno = L.polyline([], { color: '#ffffff', weight: 9, opacity: 0.9, interactive: false }).addTo(map);
+  const linha = L.polyline([], { color: '#2563eb', weight: 5, opacity: 0.95, interactive: false }).addTo(map);
+  let pontos = null;
+  let buscadaEm = 0;
+  let destinoUsado = null;
+
+  async function atualizar(pos, destino) {
+    if (!pos || !destino) return;
+    const longeDoCaminho = pontos && Math.min(...pontos.map(p => calcularDistanciaMetros(p.lat, p.lng, pos.lat, pos.lng))) > 120;
+    const destinoMudou = !destinoUsado || destinoUsado.lat !== destino.lat || destinoUsado.lng !== destino.lng;
+    if (!pontos || destinoMudou || longeDoCaminho || Date.now() - buscadaEm > 60000) {
+      buscadaEm = Date.now();
+      destinoUsado = destino;
+      pontos = (await buscarRota(pos, destino)) || [pos, destino];
+    }
+    // Corta o trecho já percorrido: acha o pedaço de rua em que a moto está e começa dali
+    const resto = [[pos.lat, pos.lng], ...pontos.slice(segmentoMaisPerto(pontos, pos) + 1).map(p => [p.lat, p.lng])];
+    contorno.setLatLngs(resto);
+    linha.setLatLngs(resto);
+  }
+
+  // Para o simulador: usa um caminho já conhecido
+  function definir(caminho) { pontos = caminho; buscadaEm = Date.now(); destinoUsado = caminho[caminho.length - 1]; }
+  function remover() { contorno.remove(); linha.remove(); }
+
+  return { atualizar, definir, remover };
 }

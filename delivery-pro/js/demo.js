@@ -3,7 +3,7 @@
 // pelas ruas reais até onde o vendedor está. Não cria pedido nenhum.
 // ?loja=slug usa o endereço e o nome dessa loja como ponto de saída.
 import { db, auth, esc } from './config.js';
-import { criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros } from './geo.js';
+import { criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros, buscarRota, criarLinhaRota } from './geo.js';
 import { doc, getDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const PADRAO = { lat: -23.5505, lng: -46.6333 }; // centro de São Paulo, se não houver GPS
@@ -39,13 +39,7 @@ function deslocar(p, metros, graus) {
 
 // Rota pelas ruas (OSRM / OpenStreetMap, gratuito). Se falhar, segue em linha reta.
 async function rotaPelasRuas(a, b) {
-  try {
-    const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`);
-    const d = await r.json();
-    const pts = d.routes && d.routes[0] && d.routes[0].geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
-    if (pts && pts.length > 1) return pts;
-  } catch (_) {}
-  return Array.from({ length: 30 }, (_, i) => ({ lat: a.lat + ((b.lat - a.lat) * i) / 29, lng: a.lng + ((b.lng - a.lng) * i) / 29 }));
+  return (await buscarRota(a, b)) || Array.from({ length: 30 }, (_, i) => ({ lat: a.lat + ((b.lat - a.lat) * i) / 29, lng: a.lng + ((b.lng - a.lng) * i) / 29 }));
 }
 
 // Divide a rota em ~N pontos com distâncias iguais (a moto anda num ritmo constante)
@@ -154,6 +148,9 @@ export async function iniciarDemo(root) {
     L.marker([destino.lat, destino.lng]).addTo(mapa).bindPopup('Seu endereço');
     L.circleMarker([origem.lat, origem.lng], { radius: 7, color: '#ea1d2c' }).addTo(mapa).bindTooltip(`🏪 ${nomeLoja}`);
     mapa.fitBounds(L.latLngBounds([origem, destino].map(p => [p.lat, p.lng])).pad(0.25));
+    const linha = criarLinhaRota(mapa); // linha azul do caminho que falta até o cliente
+    linha.definir(rota);
+    linha.atualizar(pontos[0], destino);
     const moto = criarMarcadorMoto(mapa, pontos[0]);
     mapaCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const eta = root.querySelector('#demo-eta');
@@ -162,6 +159,7 @@ export async function iniciarDemo(root) {
       const resta = calcularDistanciaMetros(pontos[k].lat, pontos[k].lng, destino.lat, destino.lng);
       if (resta <= 50) break; // privacidade: a 50 m o mapa some, igual ao app real
       moto.moverSuavemente(pontos[k], 1000);
+      linha.atualizar(pontos[k], destino);
       const minutos = Math.max(1, Math.round(((pontos.length - k) / pontos.length) * (totalMetros / 1000) * 3));
       eta.textContent = `· chega em ~${minutos} min`;
       if (k % 5 === 0) mapa.panTo([pontos[k].lat, pontos[k].lng]);

@@ -403,3 +403,6 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .imp-modelo.ativo { border-color: var(--primary); background: #fff7ed; }
 .imp-previa { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
 .imp-previa ul { margin: 6px 0 6px 18px; font-size: 14px; }
+.moto-marker-wrapper { background: none; border: none; }
+.moto-icone { width: 40px; height: 40px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.35); border: 2px solid var(--primary); display: flex; align-items: center; justify-content: center; }
+.moto-emoji { font-size: 24px; line-height: 1; display: inline-block; transition: transform 0.3s ease; }

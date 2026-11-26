@@ -2,7 +2,7 @@
 // O ID do pedido é longo e aleatório, funciona como "senha" do link.
 import { db, formatarCentavos, esc } from './config.js';
 import { AppState } from './router.js';
-import { criarMapaRastreamento, criarMarcadorMoto } from './geo.js';
+import { criarMapaRastreamento, criarMarcadorMoto, criarLinhaRota } from './geo.js';
 import { cartaoNotificacao } from './push-cliente.js';
 import { doc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
@@ -61,12 +61,14 @@ function removerPedidoLocal(lojaId, pedidoId) {
 let pararEscuta = null;
 let mapa = null;
 let marcadorMoto = null;
+let linhaRota = null;
 
 export function iniciarAcompanhamento(pedidoId) {
   const root = document.getElementById('app-root');
   if (pararEscuta) { pararEscuta(); pararEscuta = null; }
   mapa = null;
   marcadorMoto = null;
+  linhaRota = null;
 
   root.innerHTML = `
     <a href="/${esc(AppState.slug)}" class="btn-outline-sm" style="text-decoration:none; display:inline-block; margin-bottom:12px;">← Voltar ao cardápio</a>
@@ -306,10 +308,16 @@ function renderMapa(p) {
   }
   if (!mapa) {
     mapa = criarMapaRastreamento('acomp-mapa', coords, 15);
-    if (p.destinoCoords) L.marker([p.destinoCoords.lat, p.destinoCoords.lng]).addTo(mapa).bindPopup('Seu endereço');
+    if (p.destinoCoords) {
+      L.marker([p.destinoCoords.lat, p.destinoCoords.lng]).addTo(mapa).bindPopup('Seu endereço');
+      mapa.fitBounds(L.latLngBounds([[coords.lat, coords.lng], [p.destinoCoords.lat, p.destinoCoords.lng]]).pad(0.3));
+      linhaRota = criarLinhaRota(mapa); // linha azul do caminho que falta
+      linhaRota.atualizar(coords, p.destinoCoords);
+    }
     marcadorMoto = criarMarcadorMoto(mapa, coords);
   } else {
     marcadorMoto.moverSuavemente(coords, 2000);
+    if (linhaRota && p.destinoCoords) linhaRota.atualizar(coords, p.destinoCoords);
     mapa.panTo([coords.lat, coords.lng]);
   }
 }

@@ -1,7 +1,7 @@
 import { auth, db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { avisarCliente } from './notificar.js';
-import { validarCercaEntrega, criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros } from './geo.js';
+import { validarCercaEntrega, criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros, criarLinhaRota } from './geo.js';
 import {
   collection, query, where, onSnapshot, doc, runTransaction, updateDoc, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
@@ -18,6 +18,7 @@ let assinaturaTela = '';
 const MAX_ENTREGAS_ROTA = 4;
 let mapaMotoboy = null;
 let marcadorMoto = null;
+let linhaRotaMoto = null;
 
 const OFFLINE_QUEUE_KEY = 'motoboy_offline_actions_v1';
 
@@ -133,6 +134,10 @@ async function iniciarTelemetriaGPS(motoboyUid) {
       }
 
       if (marcadorMoto) marcadorMoto.moverSuavemente(coords, 1500);
+      if (mapaMotoboy && pedidoEmRotaAtual && pedidoEmRotaAtual.destinoCoords) {
+        if (!linhaRotaMoto) linhaRotaMoto = criarLinhaRota(mapaMotoboy); // GPS chegou depois do mapa
+        linhaRotaMoto.atualizar(coords, pedidoEmRotaAtual.destinoCoords);
+      }
 
       if (agora - ultimoEnvioTimestamp >= intervaloMinimo) {
         ultimoEnvioTimestamp = agora;
@@ -232,12 +237,14 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
     box.innerHTML = '';
     mapaMotoboy = null;
     marcadorMoto = null;
+    linhaRotaMoto = null;
     return;
   }
 
   box.classList.remove('hidden');
   mapaMotoboy = null; // o HTML é recriado abaixo, então o mapa também
   marcadorMoto = null;
+  linhaRotaMoto = null;
   const proximas = minhasEntregas.slice(1);
   const trocoNecessario = (pedido.formaPagamento === 'dinheiro' && pedido.trocoParaCentavos > pedido.totalCentavos)
     ? pedido.trocoParaCentavos - pedido.totalCentavos
@@ -313,6 +320,11 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
       mapaMotoboy = criarMapaRastreamento('mapa-motoboy', inicio, 15);
       L.marker([destinoCoords.lat, destinoCoords.lng]).addTo(mapaMotoboy).bindPopup('Destino do Cliente');
       marcadorMoto = criarMarcadorMoto(mapaMotoboy, inicio);
+      if (pedido.destinoCoords && ultimaPosicao) {
+        linhaRotaMoto = criarLinhaRota(mapaMotoboy); // caminho pelas ruas até o cliente
+        linhaRotaMoto.atualizar(ultimaPosicao, pedido.destinoCoords);
+        mapaMotoboy.fitBounds(L.latLngBounds([[ultimaPosicao.lat, ultimaPosicao.lng], [destinoCoords.lat, destinoCoords.lng]]).pad(0.3));
+      }
     }
   }, 100);
 
