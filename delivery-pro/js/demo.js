@@ -3,7 +3,7 @@
 // pelas ruas reais até onde o vendedor está. Não cria pedido nenhum.
 // ?loja=slug usa o endereço e o nome dessa loja como ponto de saída.
 import { db, auth, esc } from './config.js';
-import { criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros, buscarRota, criarLinhaRota } from './geo.js';
+import { criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros, buscarRota, criarLinhaRota, trechoPorDistancia, comprimentoCaminho } from './geo.js';
 import { doc, getDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const PADRAO = { lat: -23.5505, lng: -46.6333 }; // centro de São Paulo, se não houver GPS
@@ -40,26 +40,6 @@ function deslocar(p, metros, graus) {
 // Rota pelas ruas (OSRM / OpenStreetMap, gratuito). Se falhar, segue em linha reta.
 async function rotaPelasRuas(a, b) {
   return (await buscarRota(a, b)) || Array.from({ length: 30 }, (_, i) => ({ lat: a.lat + ((b.lat - a.lat) * i) / 29, lng: a.lng + ((b.lng - a.lng) * i) / 29 }));
-}
-
-// Divide a rota em ~N pontos com distâncias iguais (a moto anda num ritmo constante)
-function pontosNoCaminho(rota, n) {
-  const seg = [];
-  let total = 0;
-  for (let i = 1; i < rota.length; i++) {
-    const d = calcularDistanciaMetros(rota[i - 1].lat, rota[i - 1].lng, rota[i].lat, rota[i].lng);
-    seg.push(d); total += d;
-  }
-  const saida = [rota[0]];
-  for (let k = 1; k <= n; k++) {
-    let alvo = (total * k) / n;
-    let i = 0;
-    while (i < seg.length && alvo > seg[i]) { alvo -= seg[i]; i++; }
-    if (i >= seg.length) { saida.push(rota[rota.length - 1]); continue; }
-    const f = seg[i] ? alvo / seg[i] : 0;
-    saida.push({ lat: rota[i].lat + (rota[i + 1].lat - rota[i].lat) * f, lng: rota[i].lng + (rota[i + 1].lng - rota[i].lng) * f });
-  }
-  return { pontos: saida, totalMetros: total };
 }
 
 const ETAPAS = [
@@ -138,31 +118,33 @@ export async function iniciarDemo(root) {
     etapa('preparo'); await espera(3500);
 
     const rota = await rotaPelasRuas(origem, destino);
-    const { pontos, totalMetros } = pontosNoCaminho(rota, 45); // ~45 passos de 1 s
+    const totalMetros = comprimentoCaminho(rota);
+    const PASSOS = 45; // ~45 s de viagem: a cada segundo a moto anda 1/45 do caminho, POR CIMA da linha azul
     etapa('entrega');
     mapaCard.style.display = '';
     const divMapa = root.querySelector('#demo-mapa');
     divMapa.innerHTML = '';
     if (divMapa._leaflet_id) divMapa._leaflet_id = null;
-    const mapa = criarMapaRastreamento('demo-mapa', pontos[0], 15);
+    const mapa = criarMapaRastreamento('demo-mapa', rota[0], 15);
     L.marker([destino.lat, destino.lng]).addTo(mapa).bindPopup('Seu endereço');
     L.circleMarker([origem.lat, origem.lng], { radius: 7, color: '#ea1d2c' }).addTo(mapa).bindTooltip(`🏪 ${nomeLoja}`);
     mapa.fitBounds(L.latLngBounds([origem, destino].map(p => [p.lat, p.lng])).pad(0.25));
     const linha = criarLinhaRota(mapa); // linha azul do caminho que falta até o cliente
     linha.definir(rota);
-    linha.atualizar(pontos[0], destino);
-    const moto = criarMarcadorMoto(mapa, pontos[0]);
+    linha.atualizar(rota[0], destino);
+    const moto = criarMarcadorMoto(mapa, rota[0]);
     mapaCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const eta = root.querySelector('#demo-eta');
 
-    for (let k = 1; k < pontos.length; k++) {
-      const resta = calcularDistanciaMetros(pontos[k].lat, pontos[k].lng, destino.lat, destino.lng);
-      if (resta <= 50) break; // privacidade: a 50 m o mapa some, igual ao app real
-      moto.moverSuavemente(pontos[k], 1000);
-      linha.atualizar(pontos[k], destino);
-      const minutos = Math.max(1, Math.round(((pontos.length - k) / pontos.length) * (totalMetros / 1000) * 3));
+    for (let k = 1; k <= PASSOS; k++) {
+      const trecho = trechoPorDistancia(rota, (totalMetros * (k - 1)) / PASSOS, (totalMetros * k) / PASSOS);
+      const chegada = trecho[trecho.length - 1];
+      if (calcularDistanciaMetros(chegada.lat, chegada.lng, destino.lat, destino.lng) <= 50) break; // a 50 m o mapa some, igual ao app real
+      moto.moverPeloCaminho(trecho.slice(1), 1000); // segue as curvas da rua
+      linha.atualizar(chegada, destino);
+      const minutos = Math.max(1, Math.round(((PASSOS - k) / PASSOS) * (totalMetros / 1000) * 3));
       eta.textContent = `· chega em ~${minutos} min`;
-      if (k % 5 === 0) mapa.panTo([pontos[k].lat, pontos[k].lng]);
+      if (k % 5 === 0) mapa.panTo([chegada.lat, chegada.lng]);
       await espera(1000);
     }
     mapaCard.style.display = 'none';

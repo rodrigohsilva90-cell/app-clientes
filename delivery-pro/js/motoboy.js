@@ -133,11 +133,10 @@ async function iniciarTelemetriaGPS(motoboyUid) {
         statusEl.style.color = 'var(--success)';
       }
 
-      if (marcadorMoto) marcadorMoto.moverSuavemente(coords, 1500);
-      if (mapaMotoboy && pedidoEmRotaAtual && pedidoEmRotaAtual.destinoCoords) {
+      if (mapaMotoboy && marcadorMoto && pedidoEmRotaAtual && pedidoEmRotaAtual.destinoCoords) {
         if (!linhaRotaMoto) linhaRotaMoto = criarLinhaRota(mapaMotoboy); // GPS chegou depois do mapa
-        linhaRotaMoto.atualizar(coords, pedidoEmRotaAtual.destinoCoords);
-      }
+        linhaRotaMoto.acompanhar(coords, pedidoEmRotaAtual.destinoCoords, marcadorMoto, 1500); // moto anda pela linha azul
+      } else if (marcadorMoto) marcadorMoto.moverSuavemente(coords, 1500);
 
       if (agora - ultimoEnvioTimestamp >= intervaloMinimo) {
         ultimoEnvioTimestamp = agora;
@@ -322,7 +321,7 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
       marcadorMoto = criarMarcadorMoto(mapaMotoboy, inicio);
       if (pedido.destinoCoords && ultimaPosicao) {
         linhaRotaMoto = criarLinhaRota(mapaMotoboy); // caminho pelas ruas até o cliente
-        linhaRotaMoto.atualizar(ultimaPosicao, pedido.destinoCoords);
+        linhaRotaMoto.acompanhar(ultimaPosicao, pedido.destinoCoords, marcadorMoto, 300);
         mapaMotoboy.fitBounds(L.latLngBounds([[ultimaPosicao.lat, ultimaPosicao.lng], [destinoCoords.lat, destinoCoords.lng]]).pad(0.3));
       }
     }

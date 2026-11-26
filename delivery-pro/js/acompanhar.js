@@ -308,16 +308,17 @@ function renderMapa(p) {
   }
   if (!mapa) {
     mapa = criarMapaRastreamento('acomp-mapa', coords, 15);
+    marcadorMoto = criarMarcadorMoto(mapa, coords);
     if (p.destinoCoords) {
       L.marker([p.destinoCoords.lat, p.destinoCoords.lng]).addTo(mapa).bindPopup('Seu endereço');
       mapa.fitBounds(L.latLngBounds([[coords.lat, coords.lng], [p.destinoCoords.lat, p.destinoCoords.lng]]).pad(0.3));
       linhaRota = criarLinhaRota(mapa); // linha azul do caminho que falta
-      linhaRota.atualizar(coords, p.destinoCoords);
+      linhaRota.acompanhar(coords, p.destinoCoords, marcadorMoto, 300); // a moto já nasce em cima da linha
     }
-    marcadorMoto = criarMarcadorMoto(mapa, coords);
   } else {
-    marcadorMoto.moverSuavemente(coords, 2000);
-    if (linhaRota && p.destinoCoords) linhaRota.atualizar(coords, p.destinoCoords);
+    // A moto anda pela linha azul até o ponto da rua mais perto do GPS (o GPS oscila uns metros)
+    if (linhaRota && p.destinoCoords) linhaRota.acompanhar(coords, p.destinoCoords, marcadorMoto, 2500);
+    else marcadorMoto.moverSuavemente(coords, 2000);
     mapa.panTo([coords.lat, coords.lng]);
   }
 }
