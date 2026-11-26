@@ -190,7 +190,7 @@
     }
     h += sec('🎯 Motivos', bars(d.motivos, x => x.avgHours != null ? ` <small style="color:var(--text-muted)">· ${hrs(x.avgHours)}</small>` : ''), 'Quantidade de atendimentos e tempo médio para resolver.');
     if (d.servidores.length > 1) h += sec('🖥️ Por servidor', bars(d.servidores, x => x.porCliente != null ? ` <small style="color:var(--text-muted)">· ${x.porCliente}/cli</small>` : ''), 'Atendimentos e média por cliente ativo do servidor.');
-    if (d.apps.length > 1) h += sec('📺 Por aplicativo', bars(d.apps, x => x.porCliente != null ? ` <small style="color:var(--text-muted)">· ${x.porCliente}/cli</small>` : ''));
+    if (d.apps.length > 1) h += sec('📺 Por aplicativo', bars(d.apps, x => x.porCliente != null ? ` <small style="color:var(--text-muted)">· ${x.porCliente}/cli</small>` : '') + `<button type="button" id="supRepApps" class="btn-tool" style="width:100%; background:#2563eb; padding:7px; font-size:0.76rem; font-weight:700; margin-top:4px;">📺 Ver clientes de um aplicativo e mandar mensagem</button>`);
     if (d.recorrentes.length) h += sec('🔁 Clientes que mais chamaram', `<ul class="ai-ul">${d.recorrentes.map(r => `<li><b>${esc(r.c.name || r.c.username)}</b> · ${r.n} atendimentos · ${esc(appOf(r.c))} · ${esc(srvOf(r.c))}</li>`).join('')}</ul>`);
     if (d.semComentario) h += `<div class="ai-note">📝 ${d.semComentario} de ${d.total} atendimentos fechados sem comentário. Quanto mais você escreve no "Como foi resolvido?", melhor a IA entende as soluções.</div>`;
 
@@ -216,7 +216,7 @@
     if (r.padroes && r.padroes.length) h += sec('💡 Padrões', `<ul class="ai-ul">${r.padroes.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`);
     if (r.tempo) h += sec('⏱️ Tempo de resolução', `<div class="ai-box">${esc(r.tempo)}</div>`);
     if (r.servidores && r.servidores.length) h += sec('🖥️ Servidores', `<ul class="ai-ul">${r.servidores.map(x => `<li><b>${esc(x.name)}:</b> ${esc(x.insight)}</li>`).join('')}</ul>`);
-    if (r.apps && r.apps.length) h += sec('📺 Aplicativos', `<ul class="ai-ul">${r.apps.map(x => `<li><b>${esc(x.name)}:</b> ${esc(x.insight)}</li>`).join('')}</ul>`);
+    if (r.apps && r.apps.length) h += sec('📺 Aplicativos', `<ul class="ai-ul">${r.apps.map(x => `<li><b>${esc(x.name)}:</b> ${esc(x.insight)} <a href="#" data-abrir-app="${esc(x.name)}">ver clientes ›</a></li>`).join('')}</ul>`);
     if (r.recorrentes && r.recorrentes.length) h += sec('🔁 Clientes para acompanhar', `<ul class="ai-ul">${r.recorrentes.map(x => `<li><b>${esc(nomeDe(x.id))}:</b> ${esc(x.why)} <i>${esc(x.action)}</i></li>`).join('')}</ul>`);
     if (r.roteiros && r.roteiros.length) h += sec('📋 Roteiros prontos (do que já funcionou)', r.roteiros.map((x, i) => `<div class="ai-box"><b>${esc(x.problema)}</b><ol class="ai-ul" style="margin-top:4px;">${x.passos.map(s => `<li>${esc(s)}</li>`).join('')}</ol><button type="button" class="btn-tool" data-copiar="${i}" style="background:#0d9488; padding:5px 8px; font-size:0.72rem; margin-top:4px;">📋 Copiar para o WhatsApp</button></div>`).join(''), 'Montados a partir dos seus comentários de "como foi resolvido".');
     return h;
@@ -230,6 +230,9 @@
       st = { dias: n, data: collect(n), ai: loadCache(n), busy: false, error: '' };
       render();
     }));
+    const apps = body.querySelector('#supRepApps');
+    if (apps) apps.addEventListener('click', () => { if (typeof window.openAppGroups === 'function') window.openAppGroups(); });
+    body.querySelectorAll('[data-abrir-app]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); if (typeof window.openAppGroups === 'function') window.openAppGroups(a.getAttribute('data-abrir-app')); }));
     const run = body.querySelector('#supRepRun');
     if (run) run.addEventListener('click', gerar);
     body.querySelectorAll('[data-copiar]').forEach(b => b.addEventListener('click', () => {

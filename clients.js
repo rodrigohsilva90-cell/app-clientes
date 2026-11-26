@@ -493,7 +493,7 @@ window.startDailyQueueBilling = function(opts) {
     const mk = (tag, css, txt) => { const e = document.createElement(tag); if (css) e.style.cssText = css; if (txt != null) e.textContent = txt; return e; };
     if (i >= queue.length) {
       card.appendChild(mk('div', 'font-size:2.4rem;', '✅'));
-      card.appendChild(mk('h3', 'margin:6px 0;', 'Cobranças concluídas'));
+      card.appendChild(mk('h3', 'margin:6px 0;', opts.doneTitle || 'Cobranças concluídas'));
       card.appendChild(mk('p', 'font-size:0.82rem; color:var(--text-muted); margin:0 0 12px;', `${done} enviado(s)` + (skipped ? ` • ${skipped} já enviado(s) hoje ou sem telefone` : '')));
       const ok = mk('button', 'width:100%; padding:11px;', 'Fechar'); ok.type = 'button'; ok.className = 'btn-auth'; ok.onclick = close;
       card.appendChild(ok); return;
