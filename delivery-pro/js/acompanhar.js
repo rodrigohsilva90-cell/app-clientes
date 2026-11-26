@@ -80,6 +80,7 @@ export function iniciarAcompanhamento(pedidoId) {
     <div class="card hidden" id="acomp-push"></div>
     <div class="card hidden" id="acomp-avaliar"></div>
     <div class="card hidden" id="acomp-itens"></div>
+    <p class="selo-organico hidden" id="acomp-selo">Tecnologia <strong>Delivery Pro</strong> · Tem um comércio? <a href="/?ref=selo">Crie seu cardápio grátis</a></p>
   `;
 
   if (!pedidoId) {
@@ -235,6 +236,7 @@ function renderStatus(p) {
 function renderAvaliacao(p) {
   const box = document.getElementById('acomp-avaliar');
   if (!box) return;
+  document.getElementById('acomp-selo')?.classList.toggle('hidden', p.status !== 'concluido');
   if (p.status !== 'concluido') { box.classList.add('hidden'); return; }
   box.classList.remove('hidden');
   if (p.avaliado) { box.innerHTML = `<p>💚 Obrigado pela avaliação${p.avaliacaoNota ? ` (${'★'.repeat(p.avaliacaoNota)})` : ''}!</p>`; return; }

@@ -13,6 +13,7 @@ import { statusAssinatura } from './plano.js';
 import { abrirAvaliacoes } from './avaliacoes.js';
 import { abrirCarrinhos } from './carrinhos.js';
 import { abrirConfigPix } from './config-pix.js';
+import { abrirImportarCardapio } from './importar-cardapio.js';
 import { pedirAceiteTermos } from './termos.js';
 import { avisarCliente } from './notificar.js';
 import { bannerAssinatura, telaBloqueio } from './assinatura.js';
@@ -71,7 +72,7 @@ export async function iniciarBalcao() {
           <button id="btn-aparencia" class="btn-outline-sm">🎨 Aparência</button>
           <button id="btn-avaliacoes" class="btn-outline-sm">⭐ Avaliações</button>
           <button id="btn-pix" class="btn-outline-sm">💳 Pix automático</button>
-          <button id="btn-cardapio-exemplo" class="btn-outline-sm">📋 Cardápio de exemplo</button>
+          <button id="btn-importar-cardapio" class="btn-outline-sm">📥 Importar cardápio</button>
         ` : ''}
       </div>
     </div>
@@ -104,7 +105,7 @@ export async function iniciarBalcao() {
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
   document.getElementById('btn-carrinhos').onclick = abrirCarrinhos;
   if (ehDono) {
-    document.getElementById('btn-cardapio-exemplo').onclick = criarCardapioExemplo;
+    document.getElementById('btn-importar-cardapio').onclick = abrirImportarCardapio;
     document.getElementById('btn-gerenciar-cardapio').onclick = abrirGestaoCardapio;
     document.getElementById('btn-config-entrega').onclick = abrirConfigEntrega;
     document.getElementById('btn-equipe').onclick = abrirEquipe;
@@ -671,51 +672,6 @@ async function abrirPedidoManualRapido() {
 }
 
 // Cria um cardápio de teste (pizza meio a meio + bebidas) no documento único da vitrine
-async function criarCardapioExemplo() {
-  if (!confirm('Criar o cardápio de exemplo? Isso SUBSTITUI o cardápio atual desta loja.')) return;
-  const cardapio = {
-    categorias: [
-      { id: 'pizzas', nome: '🍕 Pizzas' },
-      { id: 'bebidas', nome: '🥤 Bebidas' }
-    ],
-    produtos: [
-      {
-        id: 'pizza_grande', categoriaId: 'pizzas', nome: 'Pizza Grande (8 fatias)',
-        descricao: 'Escolha 1 sabor ou 2 sabores (meio a meio). Cobra o sabor mais caro.',
-        precoCentavos: 0,
-        grupos: [
-          {
-            titulo: 'Sabores', minimo: 1, maximo: 2, regraDePreco: 'MAIOR_VALOR',
-            opcoes: [
-              { nome: 'Mussarela', precoCentavos: 4200 },
-              { nome: 'Calabresa', precoCentavos: 4500 },
-              { nome: 'Frango com Catupiry', precoCentavos: 4900 },
-              { nome: 'Portuguesa', precoCentavos: 5200 }
-            ]
-          },
-          {
-            titulo: 'Borda recheada', minimo: 0, maximo: 1, regraDePreco: 'SOMA',
-            opcoes: [
-              { nome: 'Catupiry', precoCentavos: 800 },
-              { nome: 'Cheddar', precoCentavos: 800 }
-            ]
-          }
-        ]
-      },
-      { id: 'refri_2l', categoriaId: 'bebidas', nome: 'Refrigerante 2L', descricao: 'Coca-Cola ou Guaraná', precoCentavos: 1200 },
-      { id: 'agua', categoriaId: 'bebidas', nome: 'Água sem gás 500ml', descricao: '', precoCentavos: 400 }
-    ],
-    atualizadoEm: serverTimestamp()
-  };
-  try {
-    await setDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo'), cardapio);
-    showToast('Cardápio de exemplo criado! Abra a vitrine para ver.');
-  } catch (err) {
-    console.error(err);
-    showToast(err.code === 'permission-denied' ? 'Sem permissão: entre com a conta da equipe.' : 'Erro ao criar o cardápio.');
-  }
-}
-
 // Despacha o pedido para um entregador escolhido da lista (ele passa a ver no app na hora)
 async function despacharParaEntregador(p) {
   let entregadores = [];

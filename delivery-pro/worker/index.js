@@ -1317,7 +1317,7 @@ function deCampos(campos) {
 // token; aqui conferimos a assinatura do token (Web Crypto) e criamos
 // loja + link + equipe + perfil numa gravação única.
 // =====================================================================
-const SLUGS_RESERVADOS = new Set(['api', 'master', 'admin', 'painel', 'motoboy', 'pedido', 'js', 'css', 'sw', 'www', 'app', 'login', 'entrar', 'cadastro', 'suporte', 'ajuda', 'termos', 'privacidade', 'manifest', 'fotos', 'publico']);
+const SLUGS_RESERVADOS = new Set(['api', 'master', 'admin', 'painel', 'motoboy', 'pedido', 'js', 'css', 'sw', 'www', 'app', 'login', 'entrar', 'cadastro', 'suporte', 'ajuda', 'termos', 'privacidade', 'manifest', 'fotos', 'publico', 'demo']);
 
 async function criarLoja(request, env) {
   try {
@@ -1729,6 +1729,8 @@ async function painelMaster(request, env) {
       cacheLojas.clear();
       return jsonResponse({ ok: true, loja: { plano, trialAte: dados.trialAte ? dados.trialAte.toISOString() : loja.trialAte || null, pagoAte: dados.pagoAte ? dados.pagoAte.toISOString() : loja.pagoAte || null } });
     }
+
+    if (corpo.acao === 'eu') return jsonResponse({ ok: true }); // usado pelo simulador de rota (/demo)
 
     // Mercado Pago do DONO do SaaS (recebe as mensalidades das lojas)
     if (corpo.acao === 'mpStatus') {

@@ -79,6 +79,12 @@ async function resolverRota() {
     return renderizarDocumento(root, pathParts[0]);
   }
 
+  // Simulador de rota (só Master)
+  if (pathParts.length === 1 && pathParts[0] === 'demo') {
+    const { iniciarDemo } = await import('./demo.js');
+    return iniciarDemo(root);
+  }
+
   // Rota Master SaaS
   if (pathParts[0] === 'master') {
     AppState.modoAtual = 'master';

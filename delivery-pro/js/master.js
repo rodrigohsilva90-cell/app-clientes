@@ -95,6 +95,7 @@ function render() {
     </div>
     <div class="ms-barra">
       <input id="ms-busca" type="search" placeholder="🔍 Buscar loja, link ou WhatsApp" value="${esc(busca)}" />
+      <a class="btn-outline-sm" href="/demo" target="_blank" rel="noopener" style="text-decoration:none;">🛵 Simulador de rota</a>
       <button class="btn-outline-sm" id="ms-config">⚙ Configurações</button>
     </div>
     <div class="ms-lista">
@@ -141,6 +142,7 @@ function cartao({ l, ass, st, parada, vencendo }) {
       ${vencendo ? '<div class="tr-alerta" style="margin:6px 0;">⏳ Vence em menos de 2 dias.</div>' : ''}
       <div class="ms-acoes">
         ${zap ? `<a class="btn-outline-sm" href="https://wa.me/55${esc(zap.replace(/^55/, ''))}" target="_blank" rel="noopener">💬 WhatsApp</a>` : ''}
+        ${l.slug ? `<a class="btn-outline-sm" href="/demo?loja=${esc(l.slug)}" target="_blank" rel="noopener" title="Simular uma entrega saindo desta loja">🎬 Simular entrega</a>` : ''}
         <button class="btn-outline-sm" data-loja="${esc(l.id)}" data-acao="teste" data-dias="7">+7 dias de teste</button>
         <button class="btn-outline-sm" data-loja="${esc(l.id)}" data-acao="essencial" data-dias="30">Essencial 30 dias</button>
         <button class="btn-outline-sm" data-loja="${esc(l.id)}" data-acao="pro" data-dias="30">Pro 30 dias</button>
