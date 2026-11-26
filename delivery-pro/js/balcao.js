@@ -21,6 +21,8 @@ import { avisarCliente, carimbarPedido } from './notificar.js';
 import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { modoOperacaoAtual } from './frete.js';
 import { qrSvg, abrirQrLoja } from './qr.js';
+import { abrirConfigRepasse, abrirAcertos } from './repasse.js';
+import { calcularRepasse } from './frete.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp, Timestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
@@ -376,12 +378,14 @@ function criarCardPedidoBalcao(p) {
     ${p.status === 'entrega' && linkAvisoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin-bottom:8px;" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>` : ''}
     ${botaoAcao}
     ${p.tipoEntrega === 'entrega' && ['preparo', 'entrega'].includes(p.status) ? '<button class="btn-outline-sm" type="button" data-resumo style="width:100%; margin-top:6px;">📋 Copiar resumo para motoboy avulso</button>' : ''}
+    ${p.status === 'entrega' ? '<button class="btn-outline-sm gc-perigo" type="button" data-cancelar-rota style="width:100%; margin-top:6px;">✖ Cancelar entrega em rota</button>' : ''}
     ${p.tipoEntrega === 'entrega' && ['novo', 'preparo'].includes(p.status) ? '<button class="btn-outline-sm" type="button" data-converter style="width:100%; margin-top:6px;">🔄 Sem entregador? Converter para retirada</button>' : ''}
   `;
 
   div.querySelector('[data-print]')?.addEventListener('click', () => imprimirComandaTermica(p));
   div.querySelector('[data-resumo]')?.addEventListener('click', () => copiarResumoAvulso(p));
   div.querySelector('[data-converter]')?.addEventListener('click', () => converterParaRetirada(p));
+  div.querySelector('[data-cancelar-rota]')?.addEventListener('click', () => cancelarEmRota(p));
   div.querySelector('[data-avisar]')?.addEventListener('click', () => marcarAvisado(p));
   div.querySelector('[data-recusar]')?.addEventListener('click', async () => {
     const motivo = prompt('Motivo da recusa (o cliente verá que o pedido foi cancelado):', 'Loja sem condições de atender agora');
@@ -698,6 +702,7 @@ async function abrirPedidoManualRapido() {
         origem: 'balcao',
         canal: 'balcao',
         turnoId: estadoCaixa.caixaAberto ? estadoCaixa.turnoId : null,
+        adicionalChuva: Boolean(AppState.lojaDados.repasse && AppState.lojaDados.repasse.chuvaAtiva),
         criadoEm: serverTimestamp()
       });
       overlay.remove();
@@ -813,7 +818,9 @@ const MENU_CONFIG = [
     { icone: '💳', nome: 'Pix automático', dica: 'Receber pelo Mercado Pago', abrir: () => abrirConfigPix() }
   ] },
   { titulo: '👥 Equipe', itens: [
-    { icone: '👥', nome: 'Equipe e entregadores', dica: 'Balcão, cozinha e motoboys', abrir: () => abrirEquipe() }
+    { icone: '👥', nome: 'Equipe e entregadores', dica: 'Balcão, cozinha e motoboys', abrir: () => abrirEquipe() },
+    { icone: '🛵', nome: 'Repasse dos motoboys', dica: 'Diária, valor por entrega, chuva e meta', abrir: () => abrirConfigRepasse() },
+    { icone: '💰', nome: 'Acerto dos motoboys', dica: 'Fechar o turno e ver quanto pagar', abrir: () => abrirAcertos() }
   ] },
   { titulo: '📈 Vendas e clientes', itens: [
     { icone: '📊', nome: 'Relatórios', dica: 'Faturamento, mais vendidos, horário de pico', abrir: () => abrirRelatorios() },
@@ -985,4 +992,36 @@ function ligarIndicadorRede() {
   window.addEventListener('online', desenhar);
   window.addEventListener('offline', desenhar);
   desenhar();
+}
+
+
+// Pedido já saiu com o motoboy e precisa ser cancelado: o balcão decide se o motoboy recebe a corrida
+function cancelarEmRota(p) {
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  const valor = calcularRepasse(AppState.lojaDados.repasse, p);
+  overlay.innerHTML = `
+    <div class="card" style="max-width:400px; width:100%; margin:0;">
+      <h3>✖ Cancelar o pedido #${esc(p.numeroPedido || '')} em rota</h3>
+      <p class="gc-dica" style="margin:6px 0 12px;">O entregador já saiu. Ele recebe pela viagem?</p>
+      <button class="btn-primary" type="button" data-manter="1">Cancelar e PAGAR a corrida ao motoboy${valor ? ` (${formatarCentavos(valor)})` : ''}</button>
+      <button class="btn-outline-sm" type="button" data-manter="0" style="width:100%; margin-top:8px;">Cancelar SEM pagar (ele nem chegou a sair)</button>
+      <button class="btn-outline-sm" type="button" data-fechar style="width:100%; margin-top:8px;">Voltar</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  overlay.querySelectorAll('[data-manter]').forEach(b => {
+    b.onclick = async () => {
+      const manter = b.dataset.manter === '1' && Boolean(p.motoboyId);
+      try {
+        await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
+          status: 'cancelado', canceladoEmRota: true, canceladoEm: serverTimestamp(), atualizadoEm: serverTimestamp(),
+          manterRepasse: manter, ...(manter ? { repasseMotoboyCentavos: valor } : {})
+        });
+        avisarCliente(p.id);
+        overlay.remove();
+        showToast(manter ? 'Cancelado. A corrida entra no extrato do motoboy.' : 'Pedido cancelado.');
+      } catch (err) { console.error(err); showToast('Não foi possível cancelar.'); }
+    };
+  });
 }

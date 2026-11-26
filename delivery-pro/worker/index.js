@@ -88,6 +88,12 @@ export default {
       if (url.pathname === '/api/fidelidade/carimbar' && request.method === 'POST') {
         return carimbarPedido(request, env);
       }
+      if (url.pathname === '/api/motoboy/turno' && request.method === 'POST') {
+        return turnoMotoboy(request, env);
+      }
+      if (url.pathname === '/api/acertos' && request.method === 'POST') {
+        return acertosMotoboy(request, env);
+      }
       if (url.pathname === '/api/cheguei' && request.method === 'POST') {
         return clienteChegou(request, env);
       }
@@ -333,6 +339,7 @@ async function criarPedidoSeguro(request, env) {
       clientePedidosAntes: Number(fichaCliente && fichaCliente.totalPedidos) || 0,
       clienteRestrito: restrito,
       descontoFidelidadeCentavos,
+      adicionalChuva: Boolean(loja.repasse && loja.repasse.chuvaAtiva),
       itens,
       subtotalCentavos,
       freteCentavos,
@@ -846,10 +853,15 @@ async function carimbarPedido(request, env) {
     if (!eu && !(entregador && p.motoboyId === usuario.sub)) throw new ErroPedido('Sem permissão nesta loja.', 403);
     if (p.status !== 'concluido') return jsonResponse({ ok: true, contado: false });
     if (p.contabilizadoEm) return jsonResponse({ ok: true, contado: false, jaContado: true });
+    // Repasse do motoboy desta corrida (regra da loja), gravado no pedido na conclusão
+    const repasseCalc = p.motoboyId && p.repasseMotoboyCentavos == null ? { repasseMotoboyCentavos: calcularRepasse(loja && loja.repasse, p) } : {};
     const whatsapp = String(p.clienteWhatsapp || '').replace(/\D/g, '');
-    if (whatsapp.length < 10 || whatsapp.length > 13) return jsonResponse({ ok: true, contado: false, semWhatsapp: true });
+    if (whatsapp.length < 10 || whatsapp.length > 13) {
+      await fs.atualizarSeVersao(caminho, { contabilizadoEm: new Date(), ...repasseCalc }, lido.versao);
+      return jsonResponse({ ok: true, contado: false, semWhatsapp: true });
+    }
     // Trava: só quem conseguir marcar primeiro soma (evita contar duas vezes)
-    if (!(await fs.atualizarSeVersao(caminho, { contabilizadoEm: new Date() }, lido.versao))) return jsonResponse({ ok: true, contado: false, jaContado: true });
+    if (!(await fs.atualizarSeVersao(caminho, { contabilizadoEm: new Date(), ...repasseCalc }, lido.versao))) return jsonResponse({ ok: true, contado: false, jaContado: true });
     const fid = loja && loja.fidelidade && loja.fidelidade.ativo ? loja.fidelidade : null;
     const valor = Number(p.totalCentavos) || 0;
     const ganhaCarimbo = Boolean(fid) && (Number(p.subtotalCentavos) || valor) >= (Number(fid.minimoCentavos) || 0);
@@ -865,6 +877,152 @@ async function carimbarPedido(request, env) {
     if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
     console.error('carimbarPedido', err && err.stack || err);
     return jsonResponse({ erro: 'Não foi possível registrar.' }, 500);
+  }
+}
+
+// =====================================================================
+// GANHOS DO MOTOBOY: regra de repasse da loja, extrato do turno e acerto com o balcão
+// lojas/{id}.repasse = { tipo: 'fixo'|'taxa'|'faixas', diariaCentavos, porEntregaCentavos, percentualTaxa,
+//   minimoCentavos, faixas: [{ ateKm, centavos }], adicionalChuvaCentavos, chuvaAtiva, metaEntregas, bonusMetaCentavos }
+// lojas/{id}/turnosMotoboy/{uid} = { fundoTrocoCentavos, status: 'aberto'|'aguardando_acerto', encerradoEm }
+// lojas/{id}/acertos_motoboy/{id} = resumo imutável do turno acertado (e os pedidos ganham acertoId)
+// =====================================================================
+function calcularRepasse(rep, p) {
+  if (!rep) return 0;
+  let v;
+  if (rep.tipo === 'taxa') v = Math.round((Number(p.freteCentavos) || 0) * (Number(rep.percentualTaxa) || 100) / 100);
+  else if (rep.tipo === 'faixas') {
+    const km = Number(p.distanciaKm) || 0;
+    const faixas = (Array.isArray(rep.faixas) ? rep.faixas : []).filter(f => Number(f.centavos) >= 0).sort((a, b) => Number(a.ateKm) - Number(b.ateKm));
+    const f = faixas.find(x => km <= Number(x.ateKm)) || faixas[faixas.length - 1];
+    v = f ? Number(f.centavos) || 0 : 0;
+  } else v = Number(rep.porEntregaCentavos) || 0;
+  // Frete grátis para o cliente não tira o ganho do motoboy: vale o mínimo por corrida
+  v = Math.max(v, Number(rep.minimoCentavos) || 0);
+  if (p.adicionalChuva) v += Number(rep.adicionalChuvaCentavos) || 0;
+  return Math.max(0, Math.round(v));
+}
+
+async function extratoTurno(fs, lojaId, uid, loja) {
+  const rep = (loja && loja.repasse) || {};
+  const [turno, pedidos] = await Promise.all([
+    fs.ler(`lojas/${lojaId}/turnosMotoboy/${uid}`),
+    fs.consultarIgual(`lojas/${lojaId}`, 'pedidos', 'motoboyId', uid, 500)
+  ]);
+  const limite = Date.now() - 48 * 60 * 60 * 1000; // corridas ainda não acertadas das últimas 48 h
+  const pago = (p) => p.pagamentoStatus === 'aprovado';
+  const corridas = pedidos
+    .filter(p => !p.acertoId && (p.status === 'concluido' || (p.status === 'cancelado' && p.manterRepasse)))
+    .filter(p => (Date.parse(p.entregueEm || p.canceladoEm || p.criadoEm) || 0) >= limite)
+    .map(p => {
+      const dinheiro = p.status === 'concluido' && !pago(p) && p.formaPagamento === 'dinheiro' ? Number(p.totalCentavos) || 0 : 0;
+      const cartao = p.status === 'concluido' && !pago(p) && /cartao/.test(p.formaPagamento || '') ? Number(p.totalCentavos) || 0 : 0;
+      return {
+        id: p.id, numero: p.numeroPedido || null, bairro: (p.enderecoPartes && p.enderecoPartes.bairro) || '',
+        em: p.entregueEm || p.canceladoEm || null, cancelado: p.status === 'cancelado',
+        repasseCentavos: p.repasseMotoboyCentavos != null ? Number(p.repasseMotoboyCentavos) : calcularRepasse(rep, p),
+        subsidio: !(Number(p.freteCentavos) > 0), chuva: Boolean(p.adicionalChuva), dinheiroCentavos: dinheiro, cartaoCentavos: cartao
+      };
+    })
+    .sort((a, b) => String(a.em).localeCompare(String(b.em)));
+  const entregas = corridas.filter(c => !c.cancelado).length;
+  const somaCorridas = corridas.reduce((a, c) => a + c.repasseCentavos, 0);
+  const diaria = corridas.length || turno ? Number(rep.diariaCentavos) || 0 : 0;
+  const meta = Number(rep.metaEntregas) || 0;
+  const bonus = meta && entregas >= meta ? Number(rep.bonusMetaCentavos) || 0 : 0;
+  const fundoTroco = Number(turno && turno.fundoTrocoCentavos) || 0;
+  const dinheiroRecebido = corridas.reduce((a, c) => a + c.dinheiroCentavos, 0);
+  const receber = diaria + somaCorridas + bonus;
+  const devolver = dinheiroRecebido + fundoTroco;
+  return {
+    status: (turno && turno.status) || 'aberto', encerradoEm: (turno && turno.encerradoEm) || null,
+    corridas, entregas, diariaCentavos: diaria, somaCorridasCentavos: somaCorridas, bonusCentavos: bonus,
+    meta, bonusMetaCentavos: Number(rep.bonusMetaCentavos) || 0, fundoTrocoCentavos: fundoTroco,
+    dinheiroRecebidoCentavos: dinheiroRecebido, cartaoCentavos: corridas.reduce((a, c) => a + c.cartaoCentavos, 0),
+    receberCentavos: receber, devolverCentavos: devolver, saldoCentavos: receber - devolver,
+    emRota: pedidos.filter(p => p.status === 'entrega').length, chuvaAtiva: Boolean(rep.chuvaAtiva)
+  };
+}
+
+// App do motoboy: ver o extrato do turno e pedir o encerramento (o balcão confirma o acerto)
+async function turnoMotoboy(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId)) throw new ErroPedido('Loja inválida.');
+    const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    let usuario;
+    try { usuario = await verificarTokenFirebase(token, conta.project_id); }
+    catch (_) { throw new ErroPedido('Sessão inválida. Entre de novo.', 401); }
+    const fs = await firestore(env);
+    const [entregador, loja] = await Promise.all([fs.ler(`lojas/${lojaId}/entregadores/${usuario.sub}`), fs.ler(`lojas/${lojaId}`)]);
+    if (!entregador) throw new ErroPedido('Sua conta não é de entregador desta loja.', 403);
+    let ext = await extratoTurno(fs, lojaId, usuario.sub, loja);
+    if (corpo.acao === 'encerrar') {
+      if (ext.emRota) throw new ErroPedido('Conclua as entregas em rota antes de encerrar o turno.', 409);
+      await fs.gravarJuntos([{ caminho: `lojas/${lojaId}/turnosMotoboy/${usuario.sub}`, dados: { fundoTrocoCentavos: ext.fundoTrocoCentavos, status: 'aguardando_acerto', encerradoEm: new Date(), nome: entregador.nome || 'Entregador' } }]);
+      ext = { ...ext, status: 'aguardando_acerto' };
+    }
+    return jsonResponse(ext);
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('turnoMotoboy', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível carregar o extrato.' }, 500);
+  }
+}
+
+// Balcão: turnos dos motoboys, troco inicial, confirmação do acerto e histórico
+async function acertosMotoboy(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const { fs, uid: quem } = await usuarioDaEquipe(request, env, lojaId, ['dono', 'balcao']);
+    const loja = await fs.ler(`lojas/${lojaId}`);
+    if (corpo.acao === 'historico') {
+      const lista = (await fs.listar(`lojas/${lojaId}/acertos_motoboy`)).sort((a, b) => String(b.confirmadoEm).localeCompare(String(a.confirmadoEm))).slice(0, 500);
+      return jsonResponse({ acertos: lista.map(a => ({ id: a.id, nome: a.nome, confirmadoEm: a.confirmadoEm, entregas: a.entregas, receberCentavos: a.receberCentavos, devolverCentavos: a.devolverCentavos, saldoCentavos: a.saldoCentavos, diariaCentavos: a.diariaCentavos, somaCorridasCentavos: a.somaCorridasCentavos, bonusCentavos: a.bonusCentavos, fundoTrocoCentavos: a.fundoTrocoCentavos, dinheiroRecebidoCentavos: a.dinheiroRecebidoCentavos })) });
+    }
+    const uid = String(corpo.uid || '');
+    if (corpo.acao !== 'listar' && !/^[A-Za-z0-9]{6,128}$/.test(uid)) throw new ErroPedido('Entregador inválido.');
+    if (corpo.acao === 'fundoTroco') {
+      const v = Math.round(Number(corpo.centavos) || 0);
+      if (v < 0 || v > 100000000) throw new ErroPedido('Valor inválido.');
+      const t = (await fs.ler(`lojas/${lojaId}/turnosMotoboy/${uid}`)) || {};
+      await fs.gravarJuntos([{ caminho: `lojas/${lojaId}/turnosMotoboy/${uid}`, dados: { ...t, fundoTrocoCentavos: v, status: t.status || 'aberto' } }]);
+      return jsonResponse({ ok: true });
+    }
+    if (corpo.acao === 'confirmar') {
+      const ent = await fs.ler(`lojas/${lojaId}/entregadores/${uid}`);
+      const ext = await extratoTurno(fs, lojaId, uid, loja);
+      if (ext.emRota) throw new ErroPedido('Este entregador ainda tem entrega em rota.', 409);
+      const acertoId = 'a_' + [...crypto.getRandomValues(new Uint8Array(8))].map(b => b.toString(16).padStart(2, '0')).join('');
+      const resumo = { uid, nome: (ent && ent.nome) || 'Entregador', confirmadoPor: quem, confirmadoEm: new Date(),
+        entregas: ext.entregas, diariaCentavos: ext.diariaCentavos, somaCorridasCentavos: ext.somaCorridasCentavos, bonusCentavos: ext.bonusCentavos,
+        fundoTrocoCentavos: ext.fundoTrocoCentavos, dinheiroRecebidoCentavos: ext.dinheiroRecebidoCentavos, cartaoCentavos: ext.cartaoCentavos,
+        receberCentavos: ext.receberCentavos, devolverCentavos: ext.devolverCentavos, saldoCentavos: ext.saldoCentavos,
+        corridas: ext.corridas.map(c => ({ id: c.id, numero: c.numero, repasseCentavos: c.repasseCentavos, dinheiroCentavos: c.dinheiroCentavos, cancelado: c.cancelado })) };
+      if (!(await fs.criarSeNaoExiste(`lojas/${lojaId}/acertos_motoboy/${acertoId}`, resumo))) throw new ErroPedido('Tente de novo.', 409);
+      await fs.atualizarVarios(ext.corridas.map(c => ({ caminho: `lojas/${lojaId}/pedidos/${c.id}`, dados: { acertoId } })));
+      await fs.apagar([`lojas/${lojaId}/turnosMotoboy/${uid}`]);
+      return jsonResponse({ ok: true, acertoId, resumo: { ...resumo, confirmadoEm: new Date().toISOString() } });
+    }
+    // listar: um resumo por entregador cadastrado
+    const entregadores = await fs.listar(`lojas/${lojaId}/entregadores`);
+    const lista = [];
+    for (const e of entregadores.slice(0, 20)) {
+      const ext = await extratoTurno(fs, lojaId, e.id, loja);
+      lista.push({ uid: e.id, nome: e.nome || 'Entregador', ...ext });
+    }
+    return jsonResponse({ entregadores: lista, repasse: (loja && loja.repasse) || null });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('acertosMotoboy', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível carregar.' }, 500);
   }
 }
 

@@ -92,3 +92,20 @@ export function modoOperacaoAtual(loja, agora = Date.now()) {
   if (m && ['completo', 'retirada', 'propria'].includes(m.modo) && (!ate || ate > agora)) return m.modo;
   return ['completo', 'retirada', 'propria'].includes(loja && loja.modoPadrao) ? loja.modoPadrao : 'completo';
 }
+
+// Quanto o motoboy ganha numa corrida (igual ao Worker): valor fixo, % da taxa ou faixa de km,
+// nunca menos que o mínimo (frete grátis não tira o ganho dele) + adicional de chuva/horário nobre.
+export function calcularRepasse(rep, p) {
+  if (!rep) return 0;
+  let v;
+  if (rep.tipo === 'taxa') v = Math.round((Number(p.freteCentavos) || 0) * (Number(rep.percentualTaxa) || 100) / 100);
+  else if (rep.tipo === 'faixas') {
+    const km = Number(p.distanciaKm) || 0;
+    const faixas = (Array.isArray(rep.faixas) ? rep.faixas : []).filter(f => Number(f.centavos) >= 0).sort((a, b) => Number(a.ateKm) - Number(b.ateKm));
+    const f = faixas.find(x => km <= Number(x.ateKm)) || faixas[faixas.length - 1];
+    v = f ? Number(f.centavos) || 0 : 0;
+  } else v = Number(rep.porEntregaCentavos) || 0;
+  v = Math.max(v, Number(rep.minimoCentavos) || 0);
+  if (p.adicionalChuva) v += Number(rep.adicionalChuvaCentavos) || 0;
+  return Math.max(0, Math.round(v));
+}

@@ -1,6 +1,7 @@
 import { auth, db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { avisarCliente, carimbarPedido } from './notificar.js';
+import { calcularRepasse } from './frete.js';
 import { validarCercaEntrega, criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros, criarLinhaRota } from './geo.js';
 import {
   collection, query, where, onSnapshot, doc, runTransaction, updateDoc, serverTimestamp
@@ -50,10 +51,13 @@ export function iniciarMotoboy() {
         <div id="gps-status-badge" style="font-size:13px; color:var(--warning);">📡 Aguardando ativação do GPS...</div>
       </div>
       <div style="text-align:right;">
-        <span style="font-size:12px; color:var(--text-muted); display:block;">Fundo de Troco Ativo</span>
+        <span style="font-size:12px; color:var(--text-muted); display:block;">Troco para levar agora</span>
         <strong id="carteira-troco-valor" style="color:var(--primary); font-size:16px;">R$ 0,00</strong>
       </div>
     </div>
+
+    <!-- Placar de ganhos do turno -->
+    <div id="mb-placar" class="card mb-placar"><p class="gc-dica">Carregando seus ganhos...</p></div>
 
     <!-- Container da Entrega Ativa (Visível apenas quando há rota assumida) -->
     <div id="box-entrega-ativa" class="hidden"></div>
@@ -65,6 +69,8 @@ export function iniciarMotoboy() {
     </div>
   `;
 
+  carregarExtrato();
+  setInterval(carregarExtrato, 3 * 60 * 1000);
   sincronizarFilaOffline();
   window.addEventListener('online', sincronizarFilaOffline);
 
@@ -548,6 +554,7 @@ async function tentarFinalizarEntrega(pedido, tipoAcao) {
     showToast(tipoAcao === 'concluido' ? 'Entrega concluída com sucesso!' : 'Ocorrência registrada no balcão.');
     registrarNaViagem(pedido, tipoAcao);
     aposBaixa(pedido);
+    setTimeout(carregarExtrato, 3000);
   } catch (err) {
     salvarAcaoOffline({ lojaId: AppState.lojaId, pedidoId: pedido.id, payload });
     showToast('Oscilação de rede: baixa enfileirada para envio automático.');
@@ -565,17 +572,18 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
     // Pedido extra que desvia muito da rota já assumida fica para outro entregador (o balcão ainda pode forçar)
     const desvio = minhasEntregas.length ? desvioDoPedido(p) : 0;
     const foraDaRota = desvio > LIMITE_DESVIO_M;
-    const travado = bloqueadoPorRotaAtiva || foraDaRota;
+    const travado = bloqueadoPorRotaAtiva || foraDaRota || turnoEncerrado;
     return `
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
       <div>
         <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
         <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoPartes && p.enderecoPartes.bairro ? p.enderecoPartes.bairro + ' · ' : '')}${esc(p.enderecoTexto)}</p>
         <span style="font-size:13px; font-weight:600;">${formatarCentavos(p.totalCentavos)} • ${esc((p.formaPagamento || '').toUpperCase())}${pago(p) ? ' · ✅ pago' : ''}</span>
+        ${AppState.lojaDados.repasse ? `<small class="mb-ganho">💰 Você ganha ${formatarCentavos(calcularRepasse(AppState.lojaDados.repasse, { ...p, adicionalChuva: p.adicionalChuva }))}${p.adicionalChuva ? ' (com 🌧 adicional)' : ''}</small>` : ''}
         ${minhasEntregas.length && p.destinoCoords ? `<small class="${foraDaRota ? 'mb-cobrar' : 'gc-dica'}" style="display:block;">${foraDaRota ? `Fora da sua rota (+${(desvio / 1000).toFixed(1).replace('.', ',')} km): deixe para outro entregador` : `Desvio de +${(desvio / 1000).toFixed(1).replace('.', ',')} km na sua rota`}</small>` : ''}
       </div>
       <button class="btn-primary" style="width:auto;" ${travado ? 'disabled' : ''} data-assumir="${p.id}">
-        ${bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : foraDaRota ? 'Fora da rota' : minhasEntregas.length ? '+ Levar também' : 'Pegar Entrega'}
+        ${turnoEncerrado ? 'Turno encerrado' : bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : foraDaRota ? 'Fora da rota' : minhasEntregas.length ? '+ Levar também' : 'Pegar Entrega'}
       </button>
     </div>`;
   }).join('');
@@ -678,4 +686,76 @@ function aposBaixa(feito) {
   overlay.querySelector('[data-fechar]')?.addEventListener('click', () => overlay.remove());
   overlay.querySelector('[data-ir]')?.addEventListener('click', () => setTimeout(() => overlay.remove(), 300));
   overlay.querySelector('[data-acertado]')?.addEventListener('click', () => { gravarJson(CHAVE_VIAGEM(), []); overlay.remove(); });
+}
+
+
+// ===================== Placar de ganhos e fechamento do turno =====================
+let turnoEncerrado = false;
+let extratoAtual = null;
+const CHAVE_OLHO = 'motoboy_ocultar_valores';
+const ocultar = () => { try { return localStorage.getItem(CHAVE_OLHO) === '1'; } catch (_) { return false; } };
+const val = (c) => (ocultar() ? 'R$ •••••' : formatarCentavos(c));
+
+async function chamarTurno(acao) {
+  const u = auth.currentUser;
+  const r = await fetch('/api/motoboy/turno', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await u.getIdToken()}` }, body: JSON.stringify({ lojaId: AppState.lojaId, acao }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.erro || 'Não foi possível carregar.');
+  return d;
+}
+
+async function carregarExtrato() {
+  if (!auth.currentUser || !navigator.onLine) return;
+  try { extratoAtual = await chamarTurno('extrato'); desenharPlacar(); } catch (_) {}
+}
+
+function desenharPlacar() {
+  const box = document.getElementById('mb-placar');
+  const e = extratoAtual;
+  if (!box || !e) return;
+  const eraEncerrado = turnoEncerrado;
+  turnoEncerrado = e.status === 'aguardando_acerto';
+  if (eraEncerrado !== turnoEncerrado) assinaturaTela = ''; // redesenha a fila (trava/destrava "Pegar entrega")
+  const pct = e.meta ? Math.min(100, Math.round((e.entregas / e.meta) * 100)) : 0;
+  box.innerHTML = `
+    <div class="mb-placar-topo">
+      <div><small>Meu ganho no turno</small><strong>${val(e.receberCentavos)}</strong></div>
+      <button class="btn-outline-sm" type="button" data-olho title="Esconder/mostrar valores">${ocultar() ? '👁 Mostrar' : '🙈 Esconder'}</button>
+    </div>
+    <div class="mb-placar-dados">
+      <span>🛵 <strong>${e.entregas}</strong> entrega(s)</span>
+      <span>💵 A devolver à loja: <strong>${val(e.devolverCentavos)}</strong></span>
+      ${e.chuvaAtiva ? '<span>🌧 Adicional de chuva ligado</span>' : ''}
+    </div>
+    ${e.meta ? `<div class="mb-meta"><div class="mb-meta-barra"><div style="width:${pct}%"></div></div><small>${e.entregas >= e.meta ? `🎉 Meta batida! Bônus de ${val(e.bonusMetaCentavos)} garantido.` : `${e.entregas} / ${e.meta} entregas · faltam ${e.meta - e.entregas} para o bônus de ${val(e.bonusMetaCentavos)}`}</small></div>` : ''}
+    <details class="mb-extrato"><summary>Ver extrato (${e.corridas.length})</summary>
+      ${e.corridas.length ? e.corridas.map(c => `<div class="mb-bag-linha"><span>${c.em ? new Date(c.em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''} · #${esc(c.numero || '')} ${esc(c.bairro || '')}</span><span>${c.cancelado ? '⚠ Cancelado em rota ' : ''}${c.subsidio ? '🎁' : '💵'} +${val(c.repasseCentavos)}${c.chuva ? ' 🌧' : ''}</span></div>`).join('') : '<p class="gc-dica">Nenhuma corrida ainda neste turno.</p>'}
+      <p class="gc-dica" style="margin-top:6px;">💵 = taxa de entrega · 🎁 = frete grátis pago pela loja · 🌧 = adicional</p>
+    </details>
+    ${turnoEncerrado
+      ? `<div class="mb-encerrado">🧾 <strong>Turno encerrado.</strong> Aguardando o balcão conferir o acerto.${comprovanteHtml(e)}</div>`
+      : '<button class="btn-outline-sm" type="button" data-encerrar style="width:100%; margin-top:8px;">🧾 Encerrar meu turno</button>'}`;
+  box.querySelector('[data-olho]').onclick = () => { try { localStorage.setItem(CHAVE_OLHO, ocultar() ? '0' : '1'); } catch (_) {} desenharPlacar(); };
+  const enc = box.querySelector('[data-encerrar]');
+  if (enc) enc.onclick = async () => {
+    if (minhasEntregas.length) { showToast('Conclua as entregas em rota antes de encerrar o turno.', 5000); return; }
+    if (!confirm('Encerrar o turno? Você não pega mais entregas até o balcão conferir o acerto.')) return;
+    enc.disabled = true;
+    try { extratoAtual = await chamarTurno('encerrar'); desenharPlacar(); showToast('Turno encerrado. Passe no balcão para o acerto.', 6000); }
+    catch (err) { showToast(err.message, 5000); enc.disabled = false; }
+  };
+}
+
+function comprovanteHtml(e) {
+  const saldo = e.saldoCentavos;
+  return `
+    <div class="mb-comprovante">
+      <div class="mb-bag-total"><span>Diária</span><strong>${formatarCentavos(e.diariaCentavos)}</strong></div>
+      <div class="mb-bag-total"><span>Corridas (${e.entregas})</span><strong>${formatarCentavos(e.somaCorridasCentavos)}</strong></div>
+      ${e.bonusCentavos ? `<div class="mb-bag-total"><span>Bônus da meta</span><strong>${formatarCentavos(e.bonusCentavos)}</strong></div>` : ''}
+      <div class="mb-bag-total"><span><strong>Total a receber</strong></span><strong>${formatarCentavos(e.receberCentavos)}</strong></div>
+      <div class="mb-bag-total"><span>Dinheiro recebido dos clientes</span><strong>− ${formatarCentavos(e.dinheiroRecebidoCentavos)}</strong></div>
+      ${e.fundoTrocoCentavos ? `<div class="mb-bag-total"><span>Troco inicial da loja</span><strong>− ${formatarCentavos(e.fundoTrocoCentavos)}</strong></div>` : ''}
+      <div class="mb-saldo ${saldo >= 0 ? 'positivo' : 'negativo'}">${saldo >= 0 ? `A loja te paga <strong>${formatarCentavos(saldo)}</strong>` : `Você devolve à loja <strong>${formatarCentavos(-saldo)}</strong>`}</div>
+    </div>`;
 }
