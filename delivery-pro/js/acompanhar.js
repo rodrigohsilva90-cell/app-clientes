@@ -81,6 +81,7 @@ export function iniciarAcompanhamento(pedidoId) {
     </div>
     <div class="card hidden" id="acomp-push"></div>
     <div class="card hidden" id="acomp-avaliar"></div>
+    <div class="card hidden acomp-fid" id="acomp-fidelidade"></div>
     <div class="card hidden" id="acomp-itens"></div>
     <p class="selo-organico hidden" id="acomp-selo">Tecnologia <strong>Delivery Pro</strong> · Tem um comércio? <a href="/?ref=selo">Crie seu cardápio grátis</a></p>
   `;
@@ -102,6 +103,7 @@ export function iniciarAcompanhamento(pedidoId) {
       renderItens(p);
       renderMapa(p);
       renderAvaliacao(p);
+      if (p.status === 'concluido') { renderFidelidade(p); confirmarPinoPeloGps(p); }
       const boxPush = document.getElementById('acomp-push');
       if (FINAIS.includes(p.status)) boxPush?.classList.add('hidden');
       else if (boxPush && !boxPush.dataset.feito) { boxPush.dataset.feito = '1'; cartaoNotificacao(boxPush, p.id); }
@@ -233,6 +235,48 @@ function renderStatus(p) {
       `;
     }).join('')}
   `;
+}
+
+// Cartão fidelidade depois da entrega (o carimbo é dado quando a loja/motoboy conclui o pedido)
+let fidelidadeMostrada = false;
+function renderFidelidade(p) {
+  const box = document.getElementById('acomp-fidelidade');
+  const fid = AppState.lojaDados && AppState.lojaDados.fidelidade;
+  const whats = String(p.clienteWhatsapp || '').replace(/\D/g, '');
+  if (!box || fidelidadeMostrada || !fid || !fid.ativo || whats.length < 10 || !AppState.slug) return;
+  fidelidadeMostrada = true;
+  setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/fidelidade?loja=${encodeURIComponent(AppState.slug)}&whats=${whats}`);
+      const f = r.ok ? await r.json() : null;
+      if (!f || !f.ativo) return;
+      const premio = (f.premioCentavos / 100).toFixed(2).replace('.', ',');
+      box.classList.remove('hidden');
+      box.innerHTML = f.premios > 0
+        ? `<strong>🎉 Você completou o cartão fidelidade!</strong><p>Tem <strong>${f.premios} prêmio${f.premios > 1 ? 's' : ''} de R$ ${premio}</strong> para usar no próximo pedido. É só pedir com este mesmo WhatsApp.</p>`
+        : `<strong>🎁 Cartão fidelidade: ${f.carimbos} de ${f.meta}</strong><div class="acomp-carimbos">${'●'.repeat(f.carimbos)}${'○'.repeat(Math.max(0, f.meta - f.carimbos))}</div><p class="gc-dica">Faltam ${f.meta - f.carimbos} pedido(s) para ganhar R$ ${premio} de desconto.</p>`;
+    } catch (_) {}
+  }, 4000);
+}
+
+// Se o motoboy deu baixa a menos de 40 m do pino do cliente, o endereço salvo neste aparelho
+// fica "confirmado pelo entregador" e o cliente não precisa ajustar o pino da próxima vez.
+function confirmarPinoPeloGps(p) {
+  try {
+    const d = p.destinoCoords, b = p.coordsBaixa;
+    if (p.tipoEntrega !== 'entrega' || !d || !b || !Number.isFinite(Number(b.lat)) || !Number.isFinite(Number(d.lat))) return;
+    const rad = (x) => (x * Math.PI) / 180;
+    const dLat = rad(b.lat - d.lat), dLng = rad(b.lng - d.lng);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(d.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+    if (2 * 6371000 * Math.asin(Math.sqrt(h)) > 40) return;
+    const lista = JSON.parse(localStorage.getItem('enderecos_v1') || 'null');
+    if (!Array.isArray(lista)) return;
+    let mudou = false;
+    lista.forEach(e => {
+      if (e && e.endereco === p.enderecoTexto && !e.gpsVerificado) { e.gpsVerificado = true; e.destino = { lat: Number(d.lat), lng: Number(d.lng) }; mudou = true; }
+    });
+    if (mudou) localStorage.setItem('enderecos_v1', JSON.stringify(lista));
+  } catch (_) {}
 }
 
 function renderAvaliacao(p) {

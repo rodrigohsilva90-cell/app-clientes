@@ -509,6 +509,28 @@ function guardarEndereco(e) {
   } catch (_) {}
 }
 
+function removerEndereco(apelido) {
+  try { localStorage.setItem(CHAVE_ENDERECOS, JSON.stringify(lerEnderecos().filter(x => x.apelido !== apelido))); } catch (_) {}
+}
+// WhatsApp com máscara (11) 98765-4321
+function mascaraWhats(t) {
+  const d = String(t || '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '').slice(0, 11);
+  if (d.length <= 2) return d ? `(${d}` : '';
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+const cacheFidelidade = new Map();
+async function consultarFidelidade(whatsapp) {
+  if (cacheFidelidade.has(whatsapp)) return cacheFidelidade.get(whatsapp);
+  try {
+    const r = await fetch(`/api/fidelidade?loja=${encodeURIComponent(AppState.slug)}&whats=${whatsapp}`);
+    const d = r.ok ? await r.json() : null;
+    if (d) cacheFidelidade.set(whatsapp, d);
+    return d;
+  } catch (_) { return null; }
+}
+
 // ---- Endereço em partes (CEP, rua, número, bairro, complemento) ----
 const soDigitos = (t) => String(t || '').replace(/\D/g, '');
 function montarEnderecoTexto(c) {
@@ -577,7 +599,13 @@ function abrirModalCheckout() {
   const enderecos = rascunho.confirmado ? enderecosGuardados : [];
   let apelido = salvo.apelido && APELIDOS.includes(salvo.apelido) ? salvo.apelido : (enderecos[0] ? enderecos[0].apelido : 'Casa');
   let mapa = null;
-  let pino = null;
+  let pinoConfirmado = Boolean(destino && salvo.pinoConfirmado); // o cliente tocou em "Confirmar este local"
+  let pinoManual = Boolean(destino && salvo.pinoManual);         // arrastou o mapa/tocou (não veio do endereço digitado nem do GPS)
+  if (destino && !pinoConfirmado && enderecos.some(e => e.gpsVerificado && coordsValidas(e.destino) && e.destino.lat === destino.lat && e.destino.lng === destino.lng)) pinoConfirmado = true;
+  const lembrarPino = () => { if (rascunho) { rascunho.destino = destino; rascunho.pinoConfirmado = pinoConfirmado; rascunho.pinoManual = pinoManual; } };
+  let ignorarMovimento = false;
+  let descontoPremio = 0;     // prêmio do cartão fidelidade escolhido (o Worker confere de novo)
+  let usarPremio = false;
   const campo = 'width:100%; padding:10px; margin:4px 0 10px; border:1px solid var(--border); border-radius:8px;';
   const rotulo = 'display:block; font-size:13px; font-weight:600;';
 
@@ -614,8 +642,10 @@ function abrirModalCheckout() {
     <input id="chk-nome" type="text" placeholder="Ex: João Silva" value="${esc(salvo.nome || '')}" style="${campo}" />
 
     <label style="${rotulo}">WhatsApp (com DDD)</label>
-    <input id="chk-whats" type="tel" placeholder="11999999999" value="${esc(salvo.whatsapp || '')}" style="${campo}" />
-    <p class="gc-dica" style="margin:-6px 0 10px;">Usado só para falar sobre este pedido (inclusive se ele não for concluído).</p>
+    <input id="chk-whats" type="tel" inputmode="numeric" autocomplete="tel-national" placeholder="(11) 98765-4321" value="${esc(mascaraWhats(salvo.whatsapp || ''))}" style="${campo}" />
+    <p class="chk-whats-conf hidden" id="chk-whats-conf"></p>
+    <p class="gc-dica" style="margin:-6px 0 10px;">Usado só para falar sobre este pedido${loja.fidelidade && loja.fidelidade.ativo ? ' e para o seu cartão fidelidade' : ''}.</p>
+    ${loja.fidelidade && loja.fidelidade.ativo ? `<div class="chk-fid" id="chk-fid">🎁 <span>Esta loja tem <strong>cartão fidelidade</strong>: a cada ${esc(loja.fidelidade.meta || 10)} pedidos você ganha ${formatarCentavos(loja.fidelidade.premioCentavos || 0)} de desconto. Digite seu WhatsApp para ver seus carimbos.</span></div>` : ''}
 
     <label style="${rotulo}">Como quer receber?</label>
     <div class="chk-tipo">
@@ -627,7 +657,7 @@ function abrirModalCheckout() {
       ${enderecos.length ? `
         <label style="${rotulo}">Seus endereços</label>
         <div class="chk-enderecos">
-          ${enderecos.map(e => `<button type="button" class="chk-end" data-end="${esc(e.apelido)}"><strong>${e.apelido === 'Casa' ? '🏠' : e.apelido === 'Trabalho' ? '💼' : '📍'} ${esc(e.apelido)}</strong><small>${esc(e.endereco)}</small></button>`).join('')}
+          ${enderecos.map(e => `<div class="chk-end-wrap"><button type="button" class="chk-end" data-end="${esc(e.apelido)}"><strong>${e.apelido === 'Casa' ? '🏠' : e.apelido === 'Trabalho' ? '💼' : '📍'} ${esc(e.apelido)}${e.gpsVerificado ? ' <span title="Local confirmado pelo entregador">✔</span>' : ''}</strong><small>${esc(e.endereco)}</small></button><button type="button" class="chk-end-del" data-del="${esc(e.apelido)}" aria-label="Apagar endereço ${esc(e.apelido)}">✕</button></div>`).join('')}
           <button type="button" class="chk-end" data-end="_novo"><strong>＋ Novo</strong><small>outro endereço</small></button>
         </div>` : ''}
       <div class="chk-end-grade">
@@ -648,8 +678,9 @@ function abrirModalCheckout() {
           <button class="btn-outline-sm" id="chk-gps" type="button">📍 Estou em casa (usar GPS)</button>
         </div>
         <p class="chk-mapa-status" id="chk-mapa-status">Digite a rua e o número: o mapa vai até lá sozinho.</p>
-        <div id="chk-mapa" class="chk-mapa"></div>
-        <p class="gc-dica">Se o pino não estiver na sua porta, arraste ou toque no lugar certo. Isso calcula a entrega e guia o motoboy.</p>
+        <div class="chk-mapa-wrap"><div id="chk-mapa" class="chk-mapa"></div><div class="chk-pino-centro inativo" id="chk-pino" aria-hidden="true"><span>📍</span></div></div>
+        <p class="gc-dica">Arraste o mapa com o dedo até a ponta do pino ficar <strong>em cima do seu portão</strong>. Isso calcula a entrega e leva o motoboy direto até você.</p>
+        <div class="chk-confirmar hidden" id="chk-confirmar"></div>
       ` : ''}
       <label style="${rotulo}">Salvar este endereço como</label>
       <div class="chk-tipo" id="chk-apelidos">
@@ -675,6 +706,7 @@ function abrirModalCheckout() {
     <div class="chk-resumo">
       <div><span>Subtotal</span><span>${formatarCentavos(subtotalCentavos)}</span></div>
       <div id="chk-linha-frete"><span>Entrega</span><span id="chk-frete">—</span></div>
+      <div id="chk-linha-premio" class="hidden"><span>🎁 Prêmio fidelidade</span><span id="chk-premio"></span></div>
       <div class="chk-total"><span>Total</span><strong id="chk-total">${formatarCentavos(subtotalCentavos)}</strong></div>
       <p id="chk-aviso-frete" class="chk-aviso hidden"></p>
     </div>
@@ -751,12 +783,16 @@ function abrirModalCheckout() {
       preencherCampos(e ? (e.campos || { rua: e.endereco }) : {});
       const radio = content.querySelector(`input[name="chk-apelido"][value="${e ? e.apelido : (APELIDOS.find(a => !enderecos.some(x => x.apelido === a)) || 'Outro')}"]`);
       if (radio) radio.checked = true;
-      if (pino) { pino.remove(); pino = null; }
-      destino = null;
+      destino = null; pinoConfirmado = false; pinoManual = false;
+      const c = lerCampos();
+      ultimaBusca = '';
       if (e && coordsValidas(e.destino)) {
-        marcar(e.destino);
-        if (mapa) mapa.setView([e.destino.lat, e.destino.lng], 16);
+        // Endereço salvo já tem o pino: não busca de novo (só se a pessoa mudar o texto)
+        ultimaBusca = [c.rua, c.numero, c.bairro, soDigitos(c.cep)].join('|').toLowerCase();
+        marcar(e.destino, { confirmado: Boolean(e.gpsVerificado) });
+        if (e.gpsVerificado) statusMapa('✅ Este endereço já foi confirmado pelo entregador.');
       } else {
+        atualizarPino();
         atualizarTotais();
         if (!e) document.getElementById('chk-rua').focus();
         else localizarNoMapa();
@@ -766,6 +802,52 @@ function abrirModalCheckout() {
   });
   ['chk-rua', 'chk-numero', 'chk-bairro', 'chk-compl'].forEach(id => document.getElementById(id).addEventListener('input', marcarEnderecoAtivo));
   marcarEnderecoAtivo();
+
+  content.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = () => {
+      if (!confirm(`Apagar o endereço "${b.dataset.del}" deste aparelho?`)) return;
+      guardarCampos();
+      removerEndereco(b.dataset.del);
+      if (mapa) { mapa.remove(); mapa = null; }
+      abrirModalCheckout();
+    };
+  });
+
+  // WhatsApp: máscara, confirmação em destaque e cartão fidelidade
+  const campoWhats = document.getElementById('chk-whats');
+  let seqFid = 0;
+  async function atualizarWhats() {
+    const digitos = campoWhats.value.replace(/\D/g, '');
+    const conf = document.getElementById('chk-whats-conf');
+    const completo = digitos.length === 11 || (digitos.length === 10 && !/^\d{2}9/.test(digitos));
+    conf.classList.toggle('hidden', !completo);
+    if (completo) conf.innerHTML = `📲 O acompanhamento ao vivo vai para <strong>${esc(mascaraWhats(digitos))}</strong>. Confira se o número está certo.`;
+    const box = document.getElementById('chk-fid');
+    if (!box) return;
+    if (!completo) { usarPremio = false; descontoPremio = 0; atualizarTotais(); return; }
+    const seq = ++seqFid;
+    const f = await consultarFidelidade(digitos);
+    if (seq !== seqFid || !f || !f.ativo) return;
+    const premio = formatarCentavos(f.premioCentavos);
+    if (f.premios > 0) {
+      box.innerHTML = `🎉 <span><strong>Você tem ${f.premios} prêmio${f.premios > 1 ? 's' : ''} de ${premio}!</strong>
+        <label class="chk-lembrar" style="margin:6px 0 0;"><input type="checkbox" id="chk-usar-premio" checked /> <span>Usar 1 prêmio neste pedido (−${premio})</span></label></span>`;
+      usarPremio = true;
+      document.getElementById('chk-usar-premio').onchange = (e) => { usarPremio = e.target.checked; atualizarTotais(); };
+    } else {
+      usarPremio = false;
+      const faltam = f.meta - f.carimbos;
+      box.innerHTML = `🎁 <span><strong>Cartão fidelidade: ${f.carimbos} de ${f.meta}</strong> <span class="chk-carimbos">${'●'.repeat(f.carimbos)}${'○'.repeat(Math.max(0, faltam))}</span><br/>${f.carimbos ? `Faltam ${faltam} pedido(s) para ganhar ${premio}.` : `Este pedido já vale o 1º carimbo${f.minimoCentavos ? ` (pedidos a partir de ${formatarCentavos(f.minimoCentavos)})` : ''}.`}</span>`;
+    }
+    descontoPremio = usarPremio ? Math.min(f.premioCentavos, subtotalCentavos) : 0;
+    atualizarTotais();
+  }
+  campoWhats.addEventListener('input', () => {
+    const pos = campoWhats.value.length - campoWhats.selectionStart;
+    campoWhats.value = mascaraWhats(campoWhats.value);
+    try { campoWhats.setSelectionRange(campoWhats.value.length - pos, campoWhats.value.length - pos); } catch (_) {}
+    atualizarWhats();
+  });
 
   // "Sou eu" preenche com os dados salvos; "Não sou eu" apaga tudo deste aparelho
   content.querySelectorAll('[data-salvo]').forEach(b => {
@@ -792,9 +874,14 @@ function abrirModalCheckout() {
   const statusMapa = (t) => { const el = document.getElementById('chk-mapa-status'); if (el) el.innerHTML = t; };
   let buscaSeq = 0;
   let timerBusca = null;
+  let ultimaBusca = '';
   async function localizarNoMapa() {
     const c = lerCampos();
     if (!temFrete || !c.rua) return;
+    // Só busca de novo se o endereço mudou (sair do campo não pode desfazer o pino já confirmado)
+    const chave = [c.rua, c.numero, c.bairro, soDigitos(c.cep)].join('|').toLowerCase();
+    if (chave === ultimaBusca) return;
+    ultimaBusca = chave;
     const seq = ++buscaSeq;
     statusMapa('🔎 Procurando o endereço no mapa...');
     const p = await localizarEndereco(c, loja.localizacao);
@@ -802,7 +889,7 @@ function abrirModalCheckout() {
     if (!p) { statusMapa('⚠ Não achamos esse endereço no mapa. <strong>Toque no mapa</strong> no lugar da sua casa.'); return; }
     marcar(p);
     if (mapa) mapa.setView([p.lat, p.lng], p.exato ? 18 : 17);
-    statusMapa(p.exato ? '✅ Achamos! Confira se o pino está na sua porta.' : '📍 Achamos a rua. <strong>Arraste o pino</strong> até a sua casa.');
+    statusMapa(p.exato ? '✅ Achamos! Confira se o pino está na sua porta.' : '📍 Achamos a rua. <strong>Arraste o mapa</strong> até o pino ficar na sua casa.');
   }
   const agendarBusca = () => { clearTimeout(timerBusca); timerBusca = setTimeout(localizarNoMapa, 900); };
   ['chk-rua', 'chk-numero', 'chk-bairro'].forEach(id => {
@@ -871,22 +958,66 @@ function abrirModalCheckout() {
         btn.disabled = true;
       } else {
         valor.textContent = `${formatarCentavos(freteAtual.freteCentavos)} (${freteAtual.distanciaKm} km${freteAtual.adicional ? ` · ${freteAtual.adicional}` : ''})`;
+        // Pino dentro da área: falta só o cliente confirmar que é a porta dele
+        if (!pinoConfirmado) btn.disabled = true;
       }
     }
-    document.getElementById('chk-total').textContent = formatarCentavos(subtotalCentavos + (freteAtual.freteCentavos || 0));
+    const desconto = usarPremio ? descontoPremio : 0;
+    document.getElementById('chk-linha-premio').classList.toggle('hidden', !desconto);
+    document.getElementById('chk-premio').textContent = `−${formatarCentavos(desconto)}`;
+    document.getElementById('chk-total').textContent = formatarCentavos(subtotalCentavos + (freteAtual.freteCentavos || 0) - desconto);
+    desenharConfirmacao();
     if (!retirada && temFrete) setTimeout(() => iniciarMapa(), 50);
   }
 
-  function marcar(p) {
-    destino = { lat: p.lat, lng: p.lng };
+  // O pino fica FIXO no centro do mapa: o cliente arrasta o mapa por baixo dele.
+  // marcar() leva o mapa até o ponto (endereço digitado, GPS ou endereço salvo).
+  function marcar(p, { manual = false, confirmado = false } = {}) {
+    destino = { lat: Number(p.lat), lng: Number(p.lng) };
+    pinoManual = manual;
+    pinoConfirmado = confirmado;
     if (mapa) {
-      if (!pino) {
-        pino = L.marker([p.lat, p.lng], { draggable: true }).addTo(mapa);
-        pino.on('dragend', () => marcar(pino.getLatLng()));
-      } else pino.setLatLng([p.lat, p.lng]);
+      ignorarMovimento = true;
+      mapa.setView([destino.lat, destino.lng], Math.max(mapa.getZoom(), 17), { animate: false });
+      ignorarMovimento = false;
     }
-    if (rascunho) rascunho.destino = destino;
+    lembrarPino();
+    atualizarPino();
     atualizarTotais();
+    agendarRuaDetectada();
+  }
+  function atualizarPino() {
+    document.getElementById('chk-pino')?.classList.toggle('inativo', !destino);
+  }
+
+  // Embaixo do mapa: qual rua o pino está apontando + botão obrigatório de confirmar
+  let ruaDetectada = '';
+  let timerRua = null;
+  function agendarRuaDetectada() {
+    ruaDetectada = '';
+    clearTimeout(timerRua);
+    if (!destino) return;
+    const alvo = { ...destino };
+    timerRua = setTimeout(async () => {
+      const e = await enderecoDoPonto(alvo);
+      if (!destino || destino.lat !== alvo.lat || destino.lng !== alvo.lng) return;
+      ruaDetectada = e && e.rua ? `${e.rua}${e.numero ? ', ' + e.numero : ''}${e.bairro ? ' – ' + e.bairro : ''}` : 'rua não identificada no mapa';
+      desenharConfirmacao();
+    }, 700);
+  }
+  function desenharConfirmacao() {
+    const box = document.getElementById('chk-confirmar');
+    if (!box) return;
+    const f = tipoAtual() === 'entrega' && temFrete && destino ? calcularFrete(loja, destino) : null;
+    if (!f || f.fora || f.bloqueado || f.precisaLocal) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    const rua = ruaDetectada ? `<small>📍 O pino está em: <strong>${esc(ruaDetectada)}</strong></small>` : '<small>📍 Identificando a rua...</small>';
+    box.classList.toggle('ok', pinoConfirmado);
+    box.innerHTML = pinoConfirmado
+      ? `<span>✅ <strong>Local confirmado.</strong> Se mexer no mapa, confirme de novo.</span>${rua}`
+      : `${rua}<button type="button" class="btn-primary" id="chk-confirmar-btn">✅ Confirmar este local no mapa</button><small>É aqui o seu portão? Se não for, arraste o mapa antes de confirmar.</small>`;
+    const b = document.getElementById('chk-confirmar-btn');
+    if (b) b.onclick = () => { pinoConfirmado = true; lembrarPino(); atualizarTotais(); statusMapa('✅ Local confirmado!'); };
   }
 
   function iniciarMapa() {
@@ -894,14 +1025,24 @@ function abrirModalCheckout() {
     if (!div || typeof L === 'undefined') return;
     if (mapa) { mapa.invalidateSize(); return; }
     const centro = destino || loja.localizacao || { lat: -23.5505, lng: -46.6333 };
-    mapa = L.map(div).setView([centro.lat, centro.lng], destino ? 16 : 14);
+    // Zoom sempre pelo centro, para o ponto embaixo do pino não sair do lugar
+    mapa = L.map(div, { touchZoom: 'center', scrollWheelZoom: 'center', doubleClickZoom: 'center' }).setView([centro.lat, centro.lng], destino ? 17 : 14);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapa);
-    L.circleMarker([loja.localizacao.lat, loja.localizacao.lng], { radius: 7, color: 'var(--primary)' }).addTo(mapa).bindTooltip('🏪 Loja');
-    if (destino) {
-      pino = L.marker([destino.lat, destino.lng], { draggable: true }).addTo(mapa);
-      pino.on('dragend', () => { buscaSeq++; marcar(pino.getLatLng()); });
-    }
-    mapa.on('click', (e) => { buscaSeq++; marcar(e.latlng); statusMapa('✅ Pino marcado. Pode arrastar para ajustar.'); });
+    if (coordsValidas(loja.localizacao)) L.circleMarker([loja.localizacao.lat, loja.localizacao.lng], { radius: 7, color: 'var(--primary)' }).addTo(mapa).bindTooltip('🏪 Loja');
+    // Cliente arrastou o mapa: o novo ponto é o que está embaixo do pino
+    mapa.on('dragend', () => {
+      if (ignorarMovimento) return;
+      buscaSeq++; // cancela busca por texto em andamento
+      const c = mapa.getCenter();
+      destino = { lat: c.lat, lng: c.lng };
+      pinoManual = true; pinoConfirmado = false;
+      lembrarPino();
+      atualizarPino(); atualizarTotais(); agendarRuaDetectada();
+      statusMapa('📍 Pino ajustado. Confira e toque em <strong>Confirmar este local</strong>.');
+    });
+    // Tocar num ponto leva o mapa até ele (o pino fica em cima)
+    mapa.on('click', (e) => { buscaSeq++; marcar(e.latlng, { manual: true }); statusMapa('📍 Pino ajustado. Confira e toque em <strong>Confirmar este local</strong>.'); });
+    atualizarPino();
     setTimeout(() => mapa && mapa.invalidateSize(), 200);
   }
 
@@ -931,6 +1072,12 @@ function abrirModalCheckout() {
   });
   content.querySelectorAll('input[name="chk-tipo"]').forEach(r => r.onchange = atualizarTotais);
   atualizarTotais();
+  if (destino) {
+    const c = lerCampos();
+    ultimaBusca = [c.rua, c.numero, c.bairro, soDigitos(c.cep)].join('|').toLowerCase();
+    agendarRuaDetectada();
+  }
+  if (campoWhats.value) atualizarWhats();
 
   document.getElementById('btn-enviar-pedido').onclick = async () => {
     const nome = document.getElementById('chk-nome').value.trim();
@@ -941,7 +1088,7 @@ function abrirModalCheckout() {
     const pagamento = selPag.value;
     const trocoParaCentavos = pagamento === 'dinheiro' ? Math.round((Number(document.getElementById('chk-troco').value) || 0) * 100) : 0;
 
-    if (!nome || whatsapp.length < 10) {
+    if (!nome || whatsapp.length < 10 || whatsapp.length > 11) {
       showToast('Preencha seu nome e um WhatsApp válido.');
       return;
     }
@@ -977,7 +1124,9 @@ function abrirModalCheckout() {
           clienteWhatsapp: whatsapp,
           tipoEntrega,
           enderecoTexto: tipoEntrega === 'entrega' ? endereco : '',
-          destinoCoords: tipoEntrega === 'entrega' && destino ? destino : null,
+          destinoCoords: tipoEntrega === 'entrega' && destino ? { ...destino, pinoManual, confirmado: pinoConfirmado } : null,
+          enderecoPartes: tipoEntrega === 'entrega' ? { rua: campos.rua, numero: campos.numero, bairro: campos.bairro, compl: campos.compl, cep: campos.cep } : null,
+          usarPremio: usarPremio && descontoPremio > 0,
           formaPagamento: pagamento,
           trocoParaCentavos,
           origem: new URLSearchParams(window.location.search).get('origem') || 'direto',

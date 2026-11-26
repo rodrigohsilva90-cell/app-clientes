@@ -16,7 +16,8 @@ import { abrirConfigPix } from './config-pix.js';
 import { abrirImportarCardapio } from './importar-cardapio.js';
 import { pedirAceiteTermos } from './termos.js';
 import { abrirRelatorios } from './relatorios.js';
-import { avisarCliente } from './notificar.js';
+import { abrirClientes, abrirConfigFidelidade } from './clientes.js';
+import { avisarCliente, carimbarPedido } from './notificar.js';
 import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
@@ -310,6 +311,8 @@ function criarCardPedidoBalcao(p) {
     </div>
     <p style="font-size:14px; margin:4px 0;"><strong>${esc(p.clienteNome)}</strong> ${p.clienteWhatsapp ? `(${esc(p.clienteWhatsapp)})` : ''}</p>
     <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
+    ${p.pinoManual ? '<p style="font-size:12px; color:#92400e; margin:2px 0;">📍 Pino ajustado à mão pelo cliente</p>' : ''}
+    ${p.descontoFidelidadeCentavos ? `<div class="pedido-premio">🎁 Prêmio fidelidade usado: −${formatarCentavos(p.descontoFidelidadeCentavos)} (já descontado do total)</div>` : ''}
     <div style="margin:8px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
       ${(p.itens || []).map(i => `<div>${esc(i.quantidade)}x ${esc(i.nome)} ${i.detalhes?.length ? `(${esc(i.detalhes.join(', '))})` : ''}</div>`).join('')}
     </div>
@@ -352,6 +355,7 @@ function criarCardPedidoBalcao(p) {
         ...(novoStatus === 'concluido' ? { entregueEm: serverTimestamp() } : {})
       });
       avisarCliente(p.id);
+      if (novoStatus === 'concluido') carimbarPedido(p.id);
       showToast(`Pedido #${esc(p.numeroPedido)} movido para ${novoStatus.toUpperCase()}`);
     };
   }
@@ -383,7 +387,9 @@ function imprimirComandaTermica(p) {
     <div style="padding:6px 0; border-bottom:1px dashed #000;">
       Cliente: ${esc(p.clienteNome)}<br/>
       Tel: ${esc(p.clienteWhatsapp)}<br/>
-      End: ${esc(p.enderecoTexto)}
+      ${p.enderecoPartes && p.enderecoPartes.rua
+        ? `End: ${esc(p.enderecoPartes.rua)}${p.enderecoPartes.numero ? ', ' + esc(p.enderecoPartes.numero) : ''}<br/>${p.enderecoPartes.bairro ? `<strong>BAIRRO: ${esc(p.enderecoPartes.bairro.toUpperCase())}</strong><br/>` : ''}${p.enderecoPartes.compl ? `<strong>REF: ${esc(p.enderecoPartes.compl)}</strong>` : ''}`
+        : `End: ${esc(p.enderecoTexto)}`}
     </div>
     <div style="padding:6px 0; border-bottom:1px dashed #000;">
       ${(p.itens || []).map(i => `
@@ -394,6 +400,7 @@ function imprimirComandaTermica(p) {
     <div style="padding-top:6px;">
       ${p.freteCentavos ? `Subtotal: ${formatarCentavos(p.subtotalCentavos ?? (p.totalCentavos - p.freteCentavos))}<br/>Entrega: ${formatarCentavos(p.freteCentavos)}<br/>` : ''}
       ${p.tipoEntrega === 'retirada' ? '*** RETIRADA NA LOJA ***<br/>' : ''}
+      ${p.descontoFidelidadeCentavos ? `Premio fidelidade: -${formatarCentavos(p.descontoFidelidadeCentavos)}<br/>` : ''}
       <strong>TOTAL: ${formatarCentavos(p.totalCentavos)}</strong><br/>
       Pagamento: ${esc((p.formaPagamento || '').toUpperCase())}
       ${p.trocoParaCentavos > p.totalCentavos ? `<br/>TROCO P/ ${formatarCentavos(p.trocoParaCentavos)}: ${formatarCentavos(p.trocoParaCentavos - p.totalCentavos)}` : ''}
@@ -440,8 +447,9 @@ async function abrirPedidoManualRapido() {
           <label style="display:block; font-size:13px; font-weight:600; margin-top:10px;">Nome do cliente</label>
           <input id="pm-nome" type="text" placeholder="Ex: Maria" style="${campo}" />
 
-          <label style="display:block; font-size:13px; font-weight:600;">Telefone (opcional)</label>
-          <input id="pm-tel" type="tel" placeholder="11999999999" style="${campo}" />
+          <label style="display:block; font-size:13px; font-weight:600;">WhatsApp do cliente (opcional)</label>
+          <input id="pm-tel" type="tel" placeholder="(11) 99999-9999" style="${campo}" />
+          <p class="gc-dica" style="margin:-6px 0 10px;">${AppState.lojaDados.fidelidade?.ativo ? '🎁 Com o WhatsApp, o cliente ganha o carimbo do cartão fidelidade.' : 'Com o WhatsApp, o pedido entra na ficha do cliente.'}</p>
 
           <label style="display:block; font-size:13px; font-weight:600;">Tipo</label>
           <select id="pm-tipo" style="${campo}">
@@ -734,6 +742,8 @@ const MENU_CONFIG = [
   ] },
   { titulo: '📈 Vendas e clientes', itens: [
     { icone: '📊', nome: 'Relatórios', dica: 'Faturamento, mais vendidos, horário de pico', abrir: () => abrirRelatorios() },
+    { icone: '📇', nome: 'Clientes', dica: 'Quem compra, quanto gasta e quando voltou', abrir: () => abrirClientes() },
+    { icone: '🎁', nome: 'Cartão fidelidade', dica: 'A cada X pedidos o cliente ganha desconto', abrir: () => abrirConfigFidelidade() },
     { icone: '⭐', nome: 'Avaliações', dica: 'O que os clientes acharam', abrir: () => abrirAvaliacoes() },
     { icone: '🛒', nome: 'Carrinhos abandonados', dica: 'Quem desistiu no meio do pedido', abrir: () => abrirCarrinhos() }
   ] }

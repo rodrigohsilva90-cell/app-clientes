@@ -82,6 +82,15 @@ export default {
       if (url.pathname === '/api/carrinho' && request.method === 'POST') {
         return registrarCarrinho(request, env);
       }
+      if (url.pathname === '/api/fidelidade' && request.method === 'GET') {
+        return consultarFidelidade(request, env, url);
+      }
+      if (url.pathname === '/api/fidelidade/carimbar' && request.method === 'POST') {
+        return carimbarPedido(request, env);
+      }
+      if (url.pathname === '/api/clientes' && request.method === 'POST') {
+        return painelClientes(request, env);
+      }
       if (url.pathname === '/api/carrinhos' && request.method === 'POST') {
         return painelCarrinhos(request, env);
       }
@@ -174,6 +183,13 @@ async function criarPedidoSeguro(request, env) {
     const endereco = tipoEntrega === 'retirada' ? 'Retirada na loja' : String(corpo.enderecoTexto || '').trim();
     const destino = corpo.destinoCoords && coordsValidas({ lat: Number(corpo.destinoCoords.lat), lng: Number(corpo.destinoCoords.lng) })
       ? { lat: Number(corpo.destinoCoords.lat), lng: Number(corpo.destinoCoords.lng) } : null;
+    // Pino conferido pelo cliente; "manual" = ele arrastou o mapa (o motoboy é avisado para ligar se precisar)
+    const pinoManual = Boolean(destino && corpo.destinoCoords.pinoManual === true);
+    const pinoConfirmado = Boolean(destino && corpo.destinoCoords.confirmado === true);
+    const partes = corpo.enderecoPartes && typeof corpo.enderecoPartes === 'object' ? corpo.enderecoPartes : {};
+    const enderecoPartes = tipoEntrega === 'entrega'
+      ? Object.fromEntries(['rua', 'numero', 'bairro', 'compl', 'cep'].map(k => [k, String(partes[k] || '').trim().slice(0, 120)]))
+      : null;
     const formaPagamento = String(corpo.formaPagamento || '');
     const trocoParaCentavos = Number(corpo.trocoParaCentavos) || 0;
     const origem = String(corpo.origem || 'direto').replace(/[^a-z0-9_-]/gi, '').slice(0, 30) || 'direto';
@@ -254,12 +270,28 @@ async function criarPedidoSeguro(request, env) {
         distanciaKm = frete.distanciaKm;
       }
     }
-    const totalCentavos = subtotalCentavos + freteCentavos;
+    let totalCentavos = subtotalCentavos + freteCentavos;
     // Pix automático (Mercado Pago da própria loja): o pedido só vai para a cozinha depois de pago
     const pixOnline = formaPagamento === 'pix' && loja.pixOnline === true && Boolean(env.MP_CHAVE);
     if (formaPagamento === 'dinheiro' && trocoParaCentavos && trocoParaCentavos < totalCentavos) {
       throw new ErroPedido(`O troco precisa ser para um valor maior que o total (${reais(totalCentavos)}).`);
     }
+
+    // Prêmio do cartão fidelidade (desconto). Reserva o prêmio de forma atômica antes de gravar.
+    const fid = loja.fidelidade && loja.fidelidade.ativo ? loja.fidelidade : null;
+    let descontoFidelidadeCentavos = 0;
+    const caminhoCliente = `lojas/${lojaId}/clientes/${whatsapp}`;
+    if (fid && corpo.usarPremio === true && Number(fid.premioCentavos) > 0) {
+      const meta = Math.max(1, Number(fid.meta) || 10);
+      const r = await fs.incrementar(caminhoCliente, { premiosUsados: 1, carimbos: 0 });
+      if (r.premiosUsados <= Math.floor((r.carimbos || 0) / meta)) {
+        descontoFidelidadeCentavos = Math.min(Number(fid.premioCentavos), subtotalCentavos);
+        totalCentavos -= descontoFidelidadeCentavos;
+      } else {
+        await fs.incrementar(caminhoCliente, { premiosUsados: -1 });
+      }
+    }
+    const devolverPremio = async () => { if (descontoFidelidadeCentavos) { try { await fs.incrementar(caminhoCliente, { premiosUsados: -1 }); } catch (_) {} } };
 
     const pedido = {
       checkoutToken: token,
@@ -269,6 +301,10 @@ async function criarPedidoSeguro(request, env) {
       enderecoTexto: endereco,
       tipoEntrega,
       destinoCoords: tipoEntrega === 'entrega' ? destino : null,
+      pinoManual: tipoEntrega === 'entrega' ? pinoManual : false,
+      pinoConfirmado: tipoEntrega === 'entrega' ? pinoConfirmado : false,
+      enderecoPartes,
+      descontoFidelidadeCentavos,
       itens,
       subtotalCentavos,
       freteCentavos,
@@ -284,6 +320,7 @@ async function criarPedidoSeguro(request, env) {
 
     // O ID do pedido é o próprio token: clicar duas vezes não cria dois pedidos
     const criado = await fs.criarSeNaoExiste(caminho, pedido, ['criadoEm']);
+    if (!criado) await devolverPremio();
     if (criado && pixOnline) {
       try {
         const pix = await criarCobrancaPix(env, fs, lojaId, token, pedido, loja, new URL(request.url).origin);
@@ -291,10 +328,20 @@ async function criarPedidoSeguro(request, env) {
       } catch (err) {
         console.error('pix', err && err.message);
         try { await fs.apagar([caminho]); } catch (_) {}
+        await devolverPremio();
         throw new ErroPedido('O Pix automático está indisponível agora. Escolha outra forma de pagamento ou tente de novo em instantes.', 502);
       }
     }
     if (criado) { try { await fs.apagar([`lojas/${lojaId}/carrinhos/${whatsapp}`]); } catch (_) {} }
+    // Ficha do cliente (CRM da loja): só dados do último pedido + contadores, sem histórico duplicado
+    if (criado) {
+      try {
+        await fs.incrementar(caminhoCliente, { pedidosFeitos: 1 }, {
+          nome, whatsapp, ultimoPedidoEm: new Date(),
+          ...(tipoEntrega === 'entrega' ? { ultimoEnderecoTexto: endereco } : {})
+        });
+      } catch (err) { console.error('crm', err && err.message); }
+    }
     const final = criado ? pedido : await fs.ler(caminho);
     return jsonResponse({ id: token, numeroPedido: final?.numeroPedido, totalCentavos: final?.totalCentavos, duplicado: !criado, aguardandoPix: pixOnline }, criado ? 201 : 200);
   } catch (err) {
@@ -707,6 +754,125 @@ async function lojaPeloSlug(fs, slug) {
   const s = await fs.ler(`slugs/${slug}`);
   if (!s || !s.lojaId) throw new ErroPedido('Loja não encontrada.', 404);
   return String(s.lojaId);
+}
+
+// =====================================================================
+// CARTÃO FIDELIDADE + FICHA DE CLIENTES (CRM) da loja
+// lojas/{id}/clientes/{whatsapp}: { nome, whatsapp, pedidosFeitos, totalPedidos, totalGastoCentavos,
+//   carimbos (total acumulado), premiosUsados, ultimoPedidoEm, ultimaCompraEm, ultimoEnderecoTexto }
+// Prêmios disponíveis = floor(carimbos / meta) - premiosUsados. Só o Worker lê e grava.
+// =====================================================================
+function resumoFidelidade(fid, c) {
+  const meta = Math.max(1, Number(fid.meta) || 10);
+  const carimbos = Number(c && c.carimbos) || 0;
+  const premios = Math.max(0, Math.floor(carimbos / meta) - (Number(c && c.premiosUsados) || 0));
+  return { ativo: true, meta, carimbos: carimbos % meta, premios, premioCentavos: Number(fid.premioCentavos) || 0, minimoCentavos: Number(fid.minimoCentavos) || 0 };
+}
+
+// Público: devolve SÓ números (carimbos, meta, prêmios). Nunca nome, endereço ou histórico.
+async function consultarFidelidade(request, env, url) {
+  try {
+    const ip = request.headers.get('CF-Connecting-IP') || 'local';
+    if (!dentroDoLimite(`fid:${ip}`)) throw new ErroPedido('Muitas consultas. Aguarde alguns minutos.', 429);
+    const whatsapp = String(url.searchParams.get('whats') || '').replace(/\D/g, '');
+    if (whatsapp.length < 10 || whatsapp.length > 13) throw new ErroPedido('WhatsApp inválido.');
+    const fs = await firestore(env);
+    const lojaId = await lojaPeloSlug(fs, url.searchParams.get('loja'));
+    const loja = await fs.ler(`lojas/${lojaId}`);
+    const fid = loja && loja.fidelidade && loja.fidelidade.ativo ? loja.fidelidade : null;
+    if (!fid) return jsonResponse({ ativo: false });
+    const c = await fs.ler(`lojas/${lojaId}/clientes/${whatsapp}`);
+    return jsonResponse(resumoFidelidade(fid, c));
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('consultarFidelidade', err && err.stack || err);
+    return jsonResponse({ erro: 'Indisponível.' }, 500);
+  }
+}
+
+// Chamado pelo balcão ou pelo motoboy quando o pedido é concluído: soma na ficha do cliente e dá o carimbo.
+// Cada pedido conta uma vez só (marca "contabilizadoEm" com trava de versão).
+async function carimbarPedido(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const pedidoId = String(corpo.pedidoId || '');
+    if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId) || !/^[A-Za-z0-9_-]{6,100}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+    const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    let usuario;
+    try { usuario = await verificarTokenFirebase(token, conta.project_id); }
+    catch (_) { throw new ErroPedido('Sessão inválida. Entre de novo.', 401); }
+    const fs = await firestore(env);
+    const caminho = `lojas/${lojaId}/pedidos/${pedidoId}`;
+    const [eu, entregador, lido, loja] = await Promise.all([
+      fs.ler(`lojas/${lojaId}/equipe/${usuario.sub}`),
+      fs.ler(`lojas/${lojaId}/entregadores/${usuario.sub}`),
+      fs.lerComVersao(caminho),
+      fs.ler(`lojas/${lojaId}`)
+    ]);
+    if (!lido) throw new ErroPedido('Pedido não encontrado.', 404);
+    const p = lido.dados;
+    if (!eu && !(entregador && p.motoboyId === usuario.sub)) throw new ErroPedido('Sem permissão nesta loja.', 403);
+    if (p.status !== 'concluido') return jsonResponse({ ok: true, contado: false });
+    if (p.contabilizadoEm) return jsonResponse({ ok: true, contado: false, jaContado: true });
+    const whatsapp = String(p.clienteWhatsapp || '').replace(/\D/g, '');
+    if (whatsapp.length < 10 || whatsapp.length > 13) return jsonResponse({ ok: true, contado: false, semWhatsapp: true });
+    // Trava: só quem conseguir marcar primeiro soma (evita contar duas vezes)
+    if (!(await fs.atualizarSeVersao(caminho, { contabilizadoEm: new Date() }, lido.versao))) return jsonResponse({ ok: true, contado: false, jaContado: true });
+    const fid = loja && loja.fidelidade && loja.fidelidade.ativo ? loja.fidelidade : null;
+    const valor = Number(p.totalCentavos) || 0;
+    const ganhaCarimbo = Boolean(fid) && (Number(p.subtotalCentavos) || valor) >= (Number(fid.minimoCentavos) || 0);
+    const r = await fs.incrementar(`lojas/${lojaId}/clientes/${whatsapp}`,
+      { totalPedidos: 1, totalGastoCentavos: valor, carimbos: ganhaCarimbo ? 1 : 0, premiosUsados: 0 },
+      { whatsapp, nome: String(p.clienteNome || 'Cliente').slice(0, 80), ultimaCompraEm: new Date(),
+        ...(p.tipoEntrega === 'entrega' && p.enderecoTexto ? { ultimoEnderecoTexto: String(p.enderecoTexto).slice(0, 250) } : {}) });
+    return jsonResponse({ ok: true, contado: true, carimbo: ganhaCarimbo, fidelidade: fid ? resumoFidelidade(fid, r) : null });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('carimbarPedido', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível registrar.' }, 500);
+  }
+}
+
+// Painel: lista de clientes (dono e balcão) e anonimização a pedido do cliente (LGPD, só o dono)
+async function painelClientes(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const { fs, papel } = await usuarioDaEquipe(request, env, lojaId, ['dono', 'balcao']);
+    const loja = await fs.ler(`lojas/${lojaId}`);
+    const fid = loja && loja.fidelidade && loja.fidelidade.ativo ? loja.fidelidade : null;
+    if (corpo.acao === 'anonimizar') {
+      if (papel !== 'dono') throw new ErroPedido('Só o dono pode apagar os dados de um cliente.', 403);
+      const wa = String(corpo.whatsapp || '').replace(/\D/g, '');
+      if (wa.length < 10 || wa.length > 13) throw new ErroPedido('WhatsApp inválido.');
+      const pedidos = await fs.consultarIgual(`lojas/${lojaId}`, 'pedidos', 'clienteWhatsapp', wa, 500);
+      const emAndamento = pedidos.filter(x => ['novo', 'preparo', 'entrega', 'aguardando_pagamento'].includes(x.status));
+      if (emAndamento.length) throw new ErroPedido('Este cliente tem um pedido em andamento. Conclua antes de apagar os dados.', 409);
+      // Pedidos continuam no histórico (valores), mas sem nome, telefone e endereço
+      await fs.atualizarVarios(pedidos.map(x => ({ caminho: `lojas/${lojaId}/pedidos/${x.id}`, dados: { clienteNome: 'Cliente anonimizado', clienteWhatsapp: '', enderecoTexto: x.tipoEntrega === 'entrega' ? 'Endereço removido (LGPD)' : (x.enderecoTexto || ''), destinoCoords: null, enderecoPartes: null, coordsBaixa: null, motoboyCoords: null, anonimizadoEm: new Date() } })));
+      await fs.apagar([`lojas/${lojaId}/clientes/${wa}`, `lojas/${lojaId}/carrinhos/${wa}`]);
+      return jsonResponse({ ok: true, pedidos: pedidos.length });
+    }
+    const clientes = (await fs.listar(`lojas/${lojaId}/clientes`))
+      .filter(c => c.whatsapp)
+      .map(c => ({
+        nome: c.nome || 'Cliente', whatsapp: c.whatsapp, totalPedidos: Number(c.totalPedidos) || 0, pedidosFeitos: Number(c.pedidosFeitos) || 0,
+        totalGastoCentavos: Number(c.totalGastoCentavos) || 0, ultimaCompraEm: c.ultimaCompraEm || c.ultimoPedidoEm || null,
+        ultimoEnderecoTexto: c.ultimoEnderecoTexto || '', fidelidade: fid ? resumoFidelidade(fid, c) : null
+      }))
+      .sort((a, b) => b.totalGastoCentavos - a.totalGastoCentavos);
+    return jsonResponse({ clientes, fidelidade: fid ? { meta: Number(fid.meta) || 10 } : null });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('painelClientes', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível carregar.' }, 500);
+  }
 }
 
 // =====================================================================
@@ -1249,6 +1415,53 @@ async function firestore(env) {
       const texto = await resp.text();
       if (resp.status === 409 || /ALREADY_EXISTS|FAILED_PRECONDITION/.test(texto)) return false;
       throw new Error(`Firestore commit: ${resp.status} ${texto}`);
+    },
+    // Soma valores em campos numéricos (atômico) e grava outros campos junto. Cria o documento se não existir.
+    // Retorna os valores DEPOIS da soma: { campo: novoValor }.
+    async incrementar(caminho, somas, dados = {}) {
+      const resp = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
+        method: 'POST',
+        headers: await cabecalhos(),
+        body: JSON.stringify({ writes: [{
+          update: { name: `${base}/${caminho}`, fields: paraCampos(dados) },
+          updateMask: { fieldPaths: Object.keys(dados) },
+          updateTransforms: Object.entries(somas).map(([c, n]) => ({ fieldPath: c, increment: paraValor(n) }))
+        }] })
+      });
+      if (!resp.ok) throw new Error(`Firestore increment ${caminho}: ${resp.status} ${await resp.text()}`);
+      const r = await resp.json();
+      const valores = ((r.writeResults && r.writeResults[0] && r.writeResults[0].transformResults) || []).map(deValor);
+      return Object.fromEntries(Object.keys(somas).map((c, i) => [c, Number(valores[i]) || 0]));
+    },
+    // Atualiza campos de vários documentos existentes (até 400 por envio)
+    async atualizarVarios(lista) {
+      for (let i = 0; i < lista.length; i += 400) {
+        const resp = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
+          method: 'POST',
+          headers: await cabecalhos(),
+          body: JSON.stringify({ writes: lista.slice(i, i + 400).map(it => ({ update: { name: `${base}/${it.caminho}`, fields: paraCampos(it.dados) }, updateMask: { fieldPaths: Object.keys(it.dados) }, currentDocument: { exists: true } })) })
+        });
+        if (!resp.ok) throw new Error(`Firestore commit: ${resp.status} ${await resp.text()}`);
+      }
+    },
+    // Lê com a "versão" do documento (para gravar só se ninguém mexeu antes)
+    async lerComVersao(caminho) {
+      const resp = await fetch(`${url}/${caminho}`, { headers: await cabecalhos() });
+      if (resp.status === 404) return null;
+      if (!resp.ok) throw new Error(`Firestore GET ${caminho}: ${resp.status} ${await resp.text()}`);
+      const d = await resp.json();
+      return { dados: deCampos(d.fields || {}), versao: d.updateTime };
+    },
+    async atualizarSeVersao(caminho, dados, versao) {
+      const resp = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
+        method: 'POST',
+        headers: await cabecalhos(),
+        body: JSON.stringify({ writes: [{ update: { name: `${base}/${caminho}`, fields: paraCampos(dados) }, updateMask: { fieldPaths: Object.keys(dados) }, currentDocument: { updateTime: versao } }] })
+      });
+      if (resp.ok) return true;
+      const texto = await resp.text();
+      if (resp.status === 409 || /FAILED_PRECONDITION/.test(texto)) return false;
+      throw new Error(`Firestore commit ${caminho}: ${resp.status} ${texto}`);
     },
     // Documentos de uma subcoleção com campo == valor (índice simples, automático)
     async consultarIgual(pai, colecao, campo, valor, limite = 20) {

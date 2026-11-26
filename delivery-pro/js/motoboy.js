@@ -1,6 +1,6 @@
 import { auth, db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
-import { avisarCliente } from './notificar.js';
+import { avisarCliente, carimbarPedido } from './notificar.js';
 import { validarCercaEntrega, criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros, criarLinhaRota } from './geo.js';
 import {
   collection, query, where, onSnapshot, doc, runTransaction, updateDoc, serverTimestamp
@@ -253,6 +253,12 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
   const mapsUrl = pedido.destinoCoords
     ? `https://www.google.com/maps/dir/?api=1&destination=${destinoCoords.lat},${destinoCoords.lng}`
     : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pedido.enderecoTexto)}`;
+  // Waze direto no ponto marcado pelo cliente (coordenadas, não o nome da rua)
+  const wazeUrl = pedido.destinoCoords
+    ? `https://waze.com/ul?ll=${destinoCoords.lat},${destinoCoords.lng}&navigate=yes`
+    : `https://waze.com/ul?q=${encodeURIComponent(pedido.enderecoTexto)}&navigate=yes`;
+  const ep = pedido.enderecoPartes || null;
+  const zapCliente = String(pedido.clienteWhatsapp || '').replace(/\D/g, '');
 
   box.innerHTML = `
     <div class="card" style="border: 2px solid var(--primary);">
@@ -268,7 +274,13 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
       ` : ''}
 
       <p style="margin-top:8px;"><strong>Cliente:</strong> ${esc(pedido.clienteNome)}</p>
-      <p style="font-size:14px; color:var(--text-muted); margin:4px 0;"><strong>Endereço:</strong> ${esc(pedido.enderecoTexto)}</p>
+      ${ep && ep.rua ? `
+        <p style="font-size:15px; margin:4px 0;"><strong>📍 ${esc(ep.rua)}${ep.numero ? `, ${esc(ep.numero)}` : ''}</strong></p>
+        ${ep.bairro ? `<p style="font-size:15px; margin:2px 0;"><strong>Bairro: ${esc(ep.bairro)}</strong></p>` : ''}
+        ${ep.compl ? `<p class="mb-referencia">🏠 <strong>${esc(ep.compl)}</strong></p>` : ''}`
+        : `<p style="font-size:14px; color:var(--text-muted); margin:4px 0;"><strong>Endereço:</strong> ${esc(pedido.enderecoTexto)}</p>`}
+      ${pedido.pinoManual ? `<div class="mb-alerta-pino">⚠ O cliente ajustou o pino no mapa à mão. Confira a referência${zapCliente ? ` ou <a href="https://wa.me/55${esc(zapCliente.replace(/^55/, ''))}" target="_blank" rel="noopener">chame no WhatsApp</a>` : ''} se não achar.</div>` : ''}
+      ${!pedido.destinoCoords && pedido.tipoEntrega === 'entrega' ? '<div class="mb-alerta-pino">⚠ Sem pino no mapa: o GPS vai pelo nome da rua. Confira a referência.</div>' : ''}
       <p style="font-size:14px;"><strong>Cobrar:</strong> ${formatarCentavos(pedido.totalCentavos)} (${esc((pedido.formaPagamento || '').toUpperCase())})</p>
 
       <div style="margin:10px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
@@ -280,11 +292,14 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
       <div id="mapa-motoboy" style="height:220px; border-radius:8px; margin:10px 0; z-index:1;"></div>
 
       <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-top:10px;">
-        <a href="${mapsUrl}" target="_blank" class="btn-outline-sm" style="text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center;">
-          🧭 Abrir GPS / Waze
+        <a href="${mapsUrl}" target="_blank" rel="noopener" class="btn-outline-sm" style="text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center;">
+          🧭 Google Maps
         </a>
-        <button id="btn-concluir-entrega" class="btn-primary">✅ Confirmar Entrega</button>
+        <a href="${wazeUrl}" target="_blank" rel="noopener" class="btn-outline-sm" style="text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center;">
+          🚗 Waze
+        </a>
       </div>
+      <button id="btn-concluir-entrega" class="btn-primary" style="margin-top:8px;">✅ Confirmar Entrega</button>
 
       <button id="btn-ocorrencia-entrega" class="btn-outline-sm" style="width:100%; margin-top:8px; color:var(--danger); border-color:var(--danger);">
         ⚠️ Reportar Problema / Cliente Ausente
@@ -375,6 +390,7 @@ async function tentarFinalizarEntrega(pedido, tipoAcao) {
       entregueEm: serverTimestamp()
     });
     avisarCliente(pedido.id);
+    if (tipoAcao === 'concluido') carimbarPedido(pedido.id);
     showToast(tipoAcao === 'concluido' ? 'Entrega concluída com sucesso!' : 'Ocorrência registrada no balcão.');
   } catch (err) {
     salvarAcaoOffline({ lojaId: AppState.lojaId, pedidoId: pedido.id, payload });
@@ -423,6 +439,7 @@ async function sincronizarFilaOffline() {
   for (const item of fila) {
     try {
       await updateDoc(doc(db, 'lojas', item.lojaId, 'pedidos', item.pedidoId), item.payload);
+      if (item.payload && item.payload.status === 'concluido') carimbarPedido(item.pedidoId, item.lojaId);
     } catch (_) {
       restantes.push(item);
     }

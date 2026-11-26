@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 76c5f8ca8277cf241d9fa1b684797ea9dc3c12a25cc7fb3045f740079047135d).
+worker.js = cópia EXATA do que está no ar (sha256 bb5240d0e034aa7c64d6cad5961131b5ed9419cab42711c5e0a6d870cc1b3024).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
@@ -17,3 +17,6 @@ Secret MP_CHAVE: chave AES que criptografa o Access Token do Mercado Pago de cad
 Webhook do Pix: /api/mp/webhook?loja={lojaId} (enviado automaticamente em cada cobrança; não precisa configurar no painel do Mercado Pago).
 Mensalidades: token do Mercado Pago do dono do SaaS em config/mercadopago (criptografado com MP_CHAVE). Cobranças em cobrancasSaas/{mpId}; pagamentos já aplicados em assinaturasPagas/{mpId}. Webhook: /api/mp/webhook-saas.
 Secret UNSPLASH_ACCESS_KEY (opcional): "Chave de acesso" do app Unsplash (NUNCA a "Chave secreta"). Usada pelo Master para buscar as fotos dos modelos de loja (config/fotosModelos, ~50 buscas/hora). Fotos ficam em images.unsplash.com, com crédito ao fotógrafo.
+Ficha de clientes e cartão fidelidade: lojas/{id}/clientes/{whatsapp} (só o Worker lê e grava; as regras do Firestore bloqueiam o app).
+Carimbo: o app chama /api/fidelidade/carimbar quando o pedido é concluído (conta uma vez só por pedido, campo contabilizadoEm).
+Consulta pública /api/fidelidade?loja=&whats= devolve só números. Config da loja em lojas/{id}.fidelidade = { ativo, meta, premioCentavos, minimoCentavos }.

@@ -121,6 +121,7 @@ function privacidadeHtml(cfg) {
 
     <h2>Dados guardados no seu aparelho</h2>
     <p>Seu nome, WhatsApp e endereços só ficam guardados <strong>no seu próprio celular</strong> se você marcar "Lembrar meus dados neste aparelho" ao finalizar o pedido. Eles não aparecem para outras pessoas em outros aparelhos. Para apagar, toque em "Não sou eu" ou desmarque a opção.</p>
+    <p><strong>Ficha do cliente e cartão fidelidade:</strong> a loja guarda seu nome, WhatsApp, o último endereço de entrega, quantos pedidos você fez, quanto gastou e seus carimbos, para contar o cartão fidelidade e atender melhor. Ninguém consegue ver esses dados digitando o seu telefone: a consulta pública mostra só a quantidade de carimbos. Para apagar, peça à loja; ela apaga com um toque e seus pedidos antigos ficam sem nome, telefone e endereço.</p>
 
     <h2>4. Localização</h2>
     <p>O ponto que o cliente marca no mapa é usado para o frete e para o entregador chegar. O GPS do entregador só é enviado enquanto há uma entrega em andamento; a transmissão para o cliente <strong>para quando o entregador chega a cerca de 50 metros</strong> do endereço e é encerrada ao concluir a entrega. Em rotas com várias entregas, cada cliente vê apenas quantas entregas vêm antes da sua, nunca o endereço dos outros.</p>

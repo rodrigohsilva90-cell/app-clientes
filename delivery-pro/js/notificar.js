@@ -15,3 +15,17 @@ export function avisarCliente(pedidoId) {
     })).catch(() => {});
   } catch (_) {}
 }
+
+// Pedido concluído: soma na ficha do cliente e dá o carimbo do cartão fidelidade (o Worker conta cada pedido uma vez só)
+export function carimbarPedido(pedidoId, lojaId = AppState.lojaId) {
+  try {
+    const u = auth.currentUser;
+    if (!u || !pedidoId || !lojaId) return;
+    u.getIdToken().then(token => fetch('/api/fidelidade/carimbar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ lojaId, pedidoId }),
+      keepalive: true
+    })).catch(() => {});
+  } catch (_) {}
+}
