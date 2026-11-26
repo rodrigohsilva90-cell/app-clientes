@@ -282,7 +282,7 @@ async function criarPedidoSeguro(request, env) {
       const quantidade = Number(pedido.quantidade);
       if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 50) throw new ErroPedido(`Quantidade inválida em "${prod.nome}".`);
       const { unitarioCentavos, detalhes } = calcularItemOficial(prod, pedido.selecoes || {}, loja);
-      return { produtoId: prod.id, nome: prod.nome, quantidade, unitarioCentavos, detalhes };
+      return { produtoId: prod.id, nome: nomeNoPedido(prod), quantidade, unitarioCentavos, detalhes };
     });
 
     const subtotalCentavos = itens.reduce((acc, i) => acc + i.unitarioCentavos * i.quantidade, 0);
@@ -1327,7 +1327,7 @@ async function registrarCarrinho(request, env) {
       if (!prod) continue;
       try {
         const { unitarioCentavos, detalhes } = calcularItemOficial(prod, it.selecoes || {}, loja);
-        itens.push({ nome: prod.nome, quantidade, detalhes });
+        itens.push({ nome: nomeNoPedido(prod), quantidade, detalhes });
         totalCentavos += unitarioCentavos * quantidade;
       } catch (_) {}
     }
@@ -1637,6 +1637,13 @@ function adicionaisAgora(loja, data = new Date()) {
   if (f.noturnoAtivo && Number(f.noturnoCentavos) > 0 && dentroDoHorario(f.noturnoInicio, f.noturnoFim, loja, data)) { centavos += Number(f.noturnoCentavos); textos.push('Adicional noturno'); }
   return { centavos, texto: textos.length ? textos.join(' + ') : null };
 }
+// Nome do item no pedido: igual a nomeNoPedido() de js/cardapio.js
+function nomeNoPedido(prod) {
+  const sub = String(prod.subcategoriaNome || '').trim();
+  const nome = String(prod.nome || '');
+  return sub && !nome.toLowerCase().includes(sub.toLowerCase()) ? `${nome} (${sub})` : nome;
+}
+
 // MESMA conta de js/frete.js (se mudar lá, mude aqui)
 // Valor da entrega para uma distância (sem adicionais). Modos:
 //  'fixo'      = mesmo valor para qualquer endereço da área

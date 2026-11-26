@@ -15,6 +15,13 @@ export function ofertaDoDia(prod, loja, data = new Date()) {
 
 // prod: produto do cardápio | selecoes: { indiceDoGrupo: [opcoesEscolhidas] }
 // Devolve { item } pronto para a sacola, ou { erro } com a mensagem para o usuário.
+// Nome do item no pedido/comanda: com a subcategoria (ex.: "Calabresa (Broto)"), sem repetir se já estiver no nome
+export function nomeNoPedido(prod) {
+  const sub = String(prod.subcategoriaNome || '').trim();
+  const nome = String(prod.nome || '');
+  return sub && !nome.toLowerCase().includes(sub.toLowerCase()) ? `${nome} (${sub})` : nome;
+}
+
 export function montarItem(prod, selecoes, loja) {
   const oferta = ofertaDoDia(prod, loja);
   let totalCentavos = oferta ? oferta.porCentavos : Number(prod.precoCentavos) || 0;
@@ -43,6 +50,6 @@ export function montarItem(prod, selecoes, loja) {
   }
 
   return {
-    item: { produtoId: prod.id, nome: prod.nome, quantidade: 1, unitarioCentavos: totalCentavos, detalhes: oferta ? ['Oferta do dia', ...detalhes] : detalhes, selecoes: indices }
+    item: { produtoId: prod.id, nome: nomeNoPedido(prod), quantidade: 1, unitarioCentavos: totalCentavos, detalhes: oferta ? ['Oferta do dia', ...detalhes] : detalhes, selecoes: indices }
   };
 }

@@ -128,7 +128,18 @@ export async function abrirGestaoCardapio() {
                 <button title="Excluir" data-acao="cat-excluir" data-i="${b.ci}">🗑️</button>
               </span>` : ''}
           </div>
-          ${b.itens.map(p => `
+          ${listaDaCategoria(b)}
+          ${b.ci >= 0 ? `<div class="gc-add-linha">
+            <button class="gc-add-prod" data-acao="novo-produto" data-cat="${esc(b.cat.id)}">+ Produto em ${esc(b.cat.nome)}</button>
+            <button class="gc-add-sub" data-acao="nova-sub" data-i="${b.ci}" title="Ex.: Broto e Grande dentro de Pizzas">+ Subcategoria</button>
+          </div>` : ''}
+        </div>
+      `).join('')}
+    `;
+  }
+
+  // Um produto na lista da esquerda
+  const itemDaLista = (p) => `
             <div class="gc-item${p.id === selecionadoId ? ' ativo' : ''}" data-acao="abrir" data-id="${esc(p.id)}">
               <span class="gc-item-foto">${urlSegura(p.imagemUrl) ? `<img src="${esc(urlSegura(p.imagemUrl))}" alt="" loading="lazy" />` : '🍽️'}</span>
               <span class="gc-item-info">
@@ -141,11 +152,27 @@ export async function abrirGestaoCardapio() {
                 <button title="Descer" data-acao="prod-descer" data-id="${esc(p.id)}">↓</button>
               </span>
             </div>
-          `).join('')}
-          ${b.ci >= 0 ? `<button class="gc-add-prod" data-acao="novo-produto" data-cat="${esc(b.cat.id)}">+ Produto em ${esc(b.cat.nome)}</button>` : ''}
+          `;
+  // Produtos da categoria: os sem subcategoria primeiro, depois cada subcategoria com o seu título
+  function listaDaCategoria(b) {
+    const subs = (b.cat.subcategorias || []);
+    if (!subs.length) return b.itens.map(itemDaLista).join('');
+    const ids = new Set(subs.map(x => x.id));
+    const soltos = b.itens.filter(p => !ids.has(p.subcategoriaId));
+    return soltos.map(itemDaLista).join('') + subs.map((sb, si) => {
+      const itens = b.itens.filter(p => p.subcategoriaId === sb.id);
+      return `<div class="gc-sub">
+        <div class="gc-sub-topo">
+          <span>↳ <strong>${esc(sb.nome)}</strong> <small class="gc-cat-qtd">${itens.length}</small></span>
+          <span class="gc-acoes">
+            <button title="Renomear" data-acao="sub-renomear" data-i="${b.ci}" data-s="${si}">✏️</button>
+            <button title="Excluir" data-acao="sub-excluir" data-i="${b.ci}" data-s="${si}">🗑️</button>
+          </span>
         </div>
-      `).join('')}
-    `;
+        ${itens.map(itemDaLista).join('')}
+        <button class="gc-add-prod gc-add-prod-sub" data-acao="novo-produto" data-cat="${esc(b.cat.id)}" data-sub="${esc(sb.id)}">+ Produto em ${esc(sb.nome)}</button>
+      </div>`;
+    }).join('');
   }
 
   // Move o produto para cima/baixo entre os da mesma categoria
@@ -187,6 +214,28 @@ export async function abrirGestaoCardapio() {
     } else if (acao === 'cat-descer' && i < cats.length - 1) {
       [cats[i + 1], cats[i]] = [cats[i], cats[i + 1]];
       marcarAlterado();
+    } else if (acao === 'nova-sub') {
+      const nome = prompt(`Nova subcategoria dentro de "${cats[i].nome}"\n(ex.: Broto, Grande, Pedaço, Inteiro):`);
+      if (!nome || !nome.trim()) return;
+      cats[i].subcategorias = cats[i].subcategorias || [];
+      if (cats[i].subcategorias.some(x => x.nome.trim().toLowerCase() === nome.trim().toLowerCase())) { showToast('Já existe essa subcategoria.'); return; }
+      if (cats[i].subcategorias.length >= 12) { showToast('Limite de 12 subcategorias por categoria.'); return; }
+      cats[i].subcategorias.push({ id: novoId('sub'), nome: nome.trim().slice(0, 30) });
+      marcarAlterado();
+      showToast(`Subcategoria "${nome.trim()}" criada. Toque em "+ Produto em ${nome.trim()}".`);
+    } else if (acao === 'sub-renomear') {
+      const sb = cats[i].subcategorias[Number(alvo.dataset.s)];
+      const nome = prompt('Novo nome da subcategoria:', sb.nome);
+      if (!nome || !nome.trim()) return;
+      sb.nome = nome.trim().slice(0, 30);
+      marcarAlterado();
+    } else if (acao === 'sub-excluir') {
+      const sb = cats[i].subcategorias[Number(alvo.dataset.s)];
+      const dela = rascunho.produtos.filter(p => p.subcategoriaId === sb.id);
+      if (!confirm(`Excluir a subcategoria "${sb.nome}"?${dela.length ? `\n\nOs ${dela.length} produto(s) dela continuam em "${cats[i].nome}", só sem subcategoria.` : ''}`)) return;
+      dela.forEach(p => { delete p.subcategoriaId; });
+      cats[i].subcategorias.splice(Number(alvo.dataset.s), 1);
+      marcarAlterado();
     } else if (acao === 'cat-excluir') {
       const qtd = rascunho.produtos.filter(p => p.categoriaId === cats[i].id).length;
       if (qtd) { showToast(`Esta categoria tem ${qtd} produto(s). Mova ou exclua os produtos antes.`); return; }
@@ -194,7 +243,7 @@ export async function abrirGestaoCardapio() {
       cats.splice(i, 1);
       marcarAlterado();
     } else if (acao === 'novo-produto') {
-      const p = { id: novoId('p'), categoriaId: alvo.dataset.cat, nome: '', descricao: '', precoCentavos: 0, grupos: [] };
+      const p = { id: novoId('p'), categoriaId: alvo.dataset.cat, nome: '', descricao: '', precoCentavos: 0, grupos: [], ...(alvo.dataset.sub ? { subcategoriaId: alvo.dataset.sub } : {}) };
       rascunho.produtos.push(p);
       selecionadoId = p.id;
       marcarAlterado();
@@ -254,6 +303,17 @@ export async function abrirGestaoCardapio() {
               ${rascunho.categorias.map(c => `<option value="${esc(c.id)}" ${c.id === p.categoriaId ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
             </select>
           </div>
+          ${(() => {
+            const cat = rascunho.categorias.find(c => c.id === p.categoriaId);
+            const subs = (cat && cat.subcategorias) || [];
+            return subs.length ? `<div>
+            <label>Subcategoria</label>
+            <select data-campo="subcategoriaId">
+              <option value="">— nenhuma —</option>
+              ${subs.map(sb => `<option value="${esc(sb.id)}" ${sb.id === p.subcategoriaId ? 'selected' : ''}>${esc(sb.nome)}</option>`).join('')}
+            </select>
+          </div>` : '';
+          })()}
           <div>
             <label>Preço (R$)</label>
             <input data-campo="preco" inputmode="decimal" value="${centavosParaTexto(p.precoCentavos)}" placeholder="0,00" />
@@ -400,7 +460,13 @@ export async function abrirGestaoCardapio() {
       marcarAlterado();
       return;
     }
-    if (el.dataset.campo === 'categoriaId') p.categoriaId = el.value;
+    if (el.dataset.campo === 'categoriaId') {
+      p.categoriaId = el.value;
+      const cat = rascunho.categorias.find(c => c.id === p.categoriaId);
+      if (!(cat && (cat.subcategorias || []).some(sb => sb.id === p.subcategoriaId))) delete p.subcategoriaId;
+    } else if (el.dataset.campo === 'subcategoriaId') {
+      if (el.value) p.subcategoriaId = el.value; else delete p.subcategoriaId;
+    }
     else if (el.dataset.campo === 'esgotado') {
       estoqueEditado.add(p.id);
       if (el.checked) { p.controlarEstoque = true; p.estoque = 0; p.estoqueRepostoEm = diaDaLoja(AppState.lojaDados); }
@@ -501,6 +567,11 @@ export async function abrirGestaoCardapio() {
     const out = {
       id: p.id,
       categoriaId: p.categoriaId,
+      ...(() => {
+        const cat = rascunho.categorias.find(c => c.id === p.categoriaId);
+        const sb = cat && (cat.subcategorias || []).find(x => x.id === p.subcategoriaId);
+        return sb ? { subcategoriaId: sb.id, subcategoriaNome: sb.nome } : {};
+      })(),
       nome: p.nome.trim(),
       descricao: (p.descricao || '').trim(),
       precoCentavos: p.precoCentavos || 0
@@ -569,7 +640,7 @@ export async function abrirGestaoCardapio() {
         return { ...x, estoque: Number(sv.estoque) || 0, ...(sv.estoqueRepostoEm ? { estoqueRepostoEm: sv.estoqueRepostoEm } : {}) };
       });
       await setDoc(ref, {
-        categorias: rascunho.categorias.map(c => ({ id: c.id, nome: c.nome })),
+        categorias: rascunho.categorias.map(c => ({ id: c.id, nome: c.nome, ...((c.subcategorias || []).length ? { subcategorias: c.subcategorias.map(sb => ({ id: sb.id, nome: sb.nome.trim().slice(0, 30) })) } : {}) })),
         produtos: produtosFinais,
         atualizadoEm: serverTimestamp()
       });

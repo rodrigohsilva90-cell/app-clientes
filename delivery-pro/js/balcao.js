@@ -676,7 +676,7 @@ async function abrirPedidoManualRapido() {
           const esgotado = esgotadoAgora(p, AppState.lojaDados);
           return `
             <button class="btn-outline-sm" data-prod="${esc(p.id)}" ${esgotado ? 'disabled' : ''} style="text-align:left; padding:10px; min-height:64px; ${esgotado ? 'opacity:0.5;' : ''}">
-              <div>${esc(p.nome)}</div>
+              <div>${esc(p.nome)}${p.subcategoriaNome ? ` <small>(${esc(p.subcategoriaNome)})</small>` : ''}</div>
               <div style="color:var(--primary); font-size:13px;">${p.grupos?.length ? 'Escolher opções' : (ofertaDoDia(p, AppState.lojaDados) ? `🔥 ${formatarCentavos(ofertaDoDia(p, AppState.lojaDados).porCentavos)}` : formatarCentavos(p.precoCentavos))}</div>
               ${esgotado ? '<div style="font-size:12px;">Esgotado</div>' : ''}
             </button>

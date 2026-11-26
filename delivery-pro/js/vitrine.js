@@ -262,23 +262,18 @@ function renderizarProdutos(dados, modoLayout) {
 
   const urlSegura = (u) => (typeof u === 'string' && /^https:\/\//i.test(u) ? esc(u) : '');
 
-  abas.innerHTML = secoes.map((s, i) => `<button class="vt-aba${i === 0 ? ' ativa' : ''}" data-alvo="sec-${esc(s.id)}">${esc(s.nome)}</button>`).join('');
-
-  container.innerHTML = secoes.map(s => `
-    <section class="vt-secao" id="sec-${esc(s.id)}">
-      <h2 class="vt-secao-titulo">${esc(s.nome)}</h2>
-      <div class="vt-grade${modoLayout === 'varejo' ? ' varejo' : ''}">
-        ${s.itens.map(prod => {
+  // Cartão de um produto (comSub = mostra a etiqueta da subcategoria, ex. na seção de ofertas)
+  const cartaoProduto = (prod, comSub) => {
           const esgotado = esgotadoAgora(prod, AppState.lojaDados);
           const temOpcoes = prod.grupos && prod.grupos.length;
           const foto = urlSegura(prod.imagemUrl);
           const oferta = ofertaDoDia(prod, AppState.lojaDados);
           const preco = temOpcoes ? precoMinimo(prod) : (oferta ? oferta.porCentavos : Number(prod.precoCentavos) || 0);
           return `
-            <button class="vt-produto${esgotado ? ' esgotado' : ''}" data-prod-id="${esc(prod.id)}" data-busca="${esc(`${prod.nome} ${prod.descricao || ''}`.toLowerCase())}" ${esgotado ? 'disabled' : ''}>
+            <button class="vt-produto${esgotado ? ' esgotado' : ''}" data-prod-id="${esc(prod.id)}" data-busca="${esc(`${prod.nome} ${prod.subcategoriaNome || ''} ${prod.descricao || ''}`.toLowerCase())}" ${esgotado ? 'disabled' : ''}>
               <div class="vt-foto">${foto ? `<img src="${foto}" alt="" loading="lazy"${prod.imagemCredito && prod.imagemCredito.autor ? ` title="Foto: ${esc(prod.imagemCredito.autor)} / Unsplash"` : ''} />` : '<span>🍽️</span>'}</div>
               <div class="vt-produto-info">
-                <strong>${esc(prod.nome)}</strong>
+                <strong>${esc(prod.nome)}</strong>${comSub && prod.subcategoriaNome ? `<small class="vt-sub-tag">${esc(prod.subcategoriaNome)}</small>` : ''}
                 ${prod.descricao ? `<p>${esc(prod.descricao)}</p>` : ''}
                 ${oferta && !esgotado ? `<span class="vt-oferta">🔥 Oferta do dia</span>` : ''}
                 <span class="vt-preco">${esgotado ? 'Esgotado' : `${temOpcoes && !oferta ? '<small>A partir de</small> ' : ''}${oferta ? `<s>${formatarCentavos(oferta.deCentavos)}</s> ` : ''}${formatarCentavos(preco)}`}</span>
@@ -286,8 +281,26 @@ function renderizarProdutos(dados, modoLayout) {
               ${esgotado ? '' : (modoLayout === 'varejo' ? `<span class="vt-add">${temOpcoes ? 'Escolher' : '+ Adicionar'}</span>` : '<span class="vt-mais">+</span>')}
             </button>
           `;
-        }).join('')}
-      </div>
+  };
+  const grade = (itens, comSub = false) => `<div class="vt-grade${modoLayout === 'varejo' ? ' varejo' : ''}">${itens.map(p => cartaoProduto(p, comSub)).join('')}</div>`;
+  // Categoria com subcategorias (ex.: Pizzas → Broto / Grande): um título para cada uma
+  const conteudoDaSecao = (sec) => {
+    const cat = categorias.find(c => c.id === sec.id);
+    const subs = (cat && cat.subcategorias) || [];
+    if (!subs.length) return grade(sec.itens, sec.id === '_ofertas' || sec.id === '_outros');
+    const ids = new Set(subs.map(x => x.id));
+    const soltos = sec.itens.filter(p => !ids.has(p.subcategoriaId));
+    return (soltos.length ? `<div class="vt-subgrupo">${grade(soltos)}</div>` : '')
+      + subs.map(sb => ({ sb, itens: sec.itens.filter(p => p.subcategoriaId === sb.id) })).filter(g => g.itens.length)
+        .map(g => `<div class="vt-subgrupo"><h3 class="vt-sub-titulo">${esc(g.sb.nome)}</h3>${grade(g.itens)}</div>`).join('');
+  };
+
+  abas.innerHTML = secoes.map((s, i) => `<button class="vt-aba${i === 0 ? ' ativa' : ''}" data-alvo="sec-${esc(s.id)}">${esc(s.nome)}</button>`).join('');
+
+  container.innerHTML = secoes.map(s => `
+    <section class="vt-secao" id="sec-${esc(s.id)}">
+      <h2 class="vt-secao-titulo">${esc(s.nome)}</h2>
+      ${conteudoDaSecao(s)}
     </section>
   `).join('') + '<p class="vt-vazio hidden" id="vt-vazio">Nenhum produto encontrado.</p>'
     + (ativos.some(p => p.imagemCredito && /^https:\/\/images\.unsplash\.com\//.test(p.imagemUrl || ''))
@@ -351,6 +364,7 @@ function renderizarProdutos(dados, modoLayout) {
         card.classList.toggle('hidden', !mostra);
         if (mostra) visiveis++;
       });
+      sec.querySelectorAll('.vt-subgrupo').forEach(g => g.classList.toggle('hidden', !g.querySelector('[data-busca]:not(.hidden)')));
       sec.classList.toggle('hidden', !visiveis);
       if (visiveis) algum = true;
     });
