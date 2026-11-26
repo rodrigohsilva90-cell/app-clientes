@@ -82,3 +82,13 @@ export function calcularFrete(loja, destino, data = new Date()) {
   const adicional = extra.texto;
   return { configurado: true, freteCentavos, distanciaKm, adicional };
 }
+
+// Modo de operação da loja: 'completo' (entrega + retirada), 'retirada' (só retirada no balcão) ou
+// 'propria' (entrega feita pela própria loja, sem app de motoboy). Um modo temporário ("só hoje")
+// tem data de validade e volta sozinho ao modo padrão no dia seguinte.
+export function modoOperacaoAtual(loja, agora = Date.now()) {
+  const m = loja && loja.modoOperacao;
+  const ate = m && m.ate ? (m.ate.toMillis ? m.ate.toMillis() : Date.parse(m.ate)) : null;
+  if (m && ['completo', 'retirada', 'propria'].includes(m.modo) && (!ate || ate > agora)) return m.modo;
+  return ['completo', 'retirada', 'propria'].includes(loja && loja.modoPadrao) ? loja.modoPadrao : 'completo';
+}

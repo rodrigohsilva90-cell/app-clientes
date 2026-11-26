@@ -2,7 +2,7 @@ import { db, auth, formatarCentavos, showToast, esc, WORKER_API_URL } from './co
 import { AppState } from './router.js';
 import { montarItem, ofertaDoDia } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes, enviarAvaliacao } from './acompanhar.js';
-import { calcularFrete, coordsValidas, adicionaisAgora } from './frete.js';
+import { calcularFrete, coordsValidas, adicionaisAgora, modoOperacaoAtual } from './frete.js';
 import { situacaoLoja } from './horario.js';
 import { statusAssinatura } from './plano.js';
 import { configPublica } from './push-cliente.js';
@@ -94,6 +94,8 @@ export async function iniciarVitrine() {
     if (salvo) carrinho = JSON.parse(salvo);
   } catch (_) { carrinho = []; }
 
+  // Esqueleto enquanto o cardápio chega (no 4G fraco a tela não fica em branco)
+  root.innerHTML = `<div class="sk-capa"></div><div class="sk-linha" style="width:60%"></div><div class="sk-linha" style="width:40%"></div>${'<div class="sk-card"><div class="sk-foto"></div><div style="flex:1"><div class="sk-linha"></div><div class="sk-linha" style="width:70%"></div></div></div>'.repeat(4)}`;
   // Cardápio (documento único) e aberto/fechado buscados ao mesmo tempo (abre mais rápido)
   const [cardapioSnap, estadoLoja] = await Promise.all([
     getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo')),
@@ -110,15 +112,18 @@ export async function iniciarVitrine() {
   const logo = urlSegura(loja.logoUrl);
   const iniciais = esc((loja.nome || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase());
   const chips = [
-    loja.taxaEntregaTexto ? `🛵 ${esc(loja.taxaEntregaTexto)}`
+    modoOperacaoAtual(loja) === 'retirada' ? '🛍️ Retirada no balcão' : loja.taxaEntregaTexto ? `🛵 ${esc(loja.taxaEntregaTexto)}`
       : (loja.frete && coordsValidas(loja.localizacao) ? `🛵 a partir de ${formatarCentavos((loja.frete.baseCentavos || 0) + adicionaisAgora(loja).centavos)}` : ''),
-    `⏱️ ${esc(tempoEstimado)}`,
+    modoOperacaoAtual(loja) === 'retirada' ? `⏱️ pronto em ${esc(loja.tempoPreparo || '15-25 min')}` : `⏱️ ${esc(tempoEstimado)}`,
     loja.pedidoMinimoCentavos ? `💲 Mín. ${formatarCentavos(loja.pedidoMinimoCentavos)}` : '',
     loja.fidelidade && loja.fidelidade.ativo ? `🎁 A cada ${esc(loja.fidelidade.meta || 10)} pedidos, ${formatarCentavos(loja.fidelidade.premioCentavos || 0)} de desconto` : ''
   ].filter(Boolean);
-  const podeSimular = Boolean(loja.frete && coordsValidas(loja.localizacao));
+  const modoOp = modoOperacaoAtual(loja);
+  const soRetirada = modoOp === 'retirada';
+  const podeSimular = !soRetirada && Boolean(loja.frete && coordsValidas(loja.localizacao));
 
   root.innerHTML = `
+    ${loja.avisoTopo ? `<div class="vt-aviso-topo">${esc(String(loja.avisoTopo).slice(0, 80))}</div>` : ''}
     <section class="vt-capa" style="${banner ? `background-image:url('${banner}');` : ''}"></section>
     <div class="vt-loja">
       <div class="vt-logo">${logo ? `<img src="${logo}" alt="" />` : `<span>${iniciais}</span>`}</div>
@@ -126,8 +131,10 @@ export async function iniciarVitrine() {
         <h1>${esc(loja.nome)}</h1>
         <span class="vt-aberto${situacao.aberta ? '' : ' fechado'}">● ${esc(situacao.aberta && situacao.semHorario ? 'Aberto' : situacao.texto)}</span>
         <div class="vt-chips">${chips.map(c => `<span class="vt-chip">${c}</span>`).join('')}</div>
+        ${loja.instagram ? `<a class="vt-insta" href="https://instagram.com/${esc(loja.instagram)}" target="_blank" rel="noopener">📸 @${esc(loja.instagram)}</a>` : ''}
       </div>
     </div>
+    ${soRetirada ? '<div class="vt-modo-retirada">🛍️ <strong>Hoje só retirada no balcão</strong> — peça pelo celular e retire sem fila.</div>' : ''}
     ${podeSimular ? `
       <div class="vt-simular">
         <span>🛵 Quanto fica a entrega para você?</span>
@@ -685,8 +692,10 @@ function abrirModalCheckout() {
 
     <label style="${rotulo}">Como quer receber?</label>
     <div class="chk-tipo">
-      <label><input type="radio" name="chk-tipo" value="entrega" ${salvo.tipo !== 'retirada' ? 'checked' : ''} /> 🛵 Entrega</label>
-      <label><input type="radio" name="chk-tipo" value="retirada" ${salvo.tipo === 'retirada' ? 'checked' : ''} /> 🏪 Retirar na loja</label>
+      ${modoOperacaoAtual(loja) === 'retirada'
+        ? '<label><input type="radio" name="chk-tipo" value="entrega" disabled /> 🛵 Entrega <small>(hoje não)</small></label><label><input type="radio" name="chk-tipo" value="retirada" checked /> 🏪 Retirar na loja</label>'
+        : `<label><input type="radio" name="chk-tipo" value="entrega" ${salvo.tipo !== 'retirada' ? 'checked' : ''} /> 🛵 Entrega</label>
+      <label><input type="radio" name="chk-tipo" value="retirada" ${salvo.tipo === 'retirada' ? 'checked' : ''} /> 🏪 Retirar na loja</label>`}
     </div>
 
     <div id="box-entrega">

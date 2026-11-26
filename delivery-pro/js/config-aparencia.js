@@ -3,6 +3,7 @@
 import { db, showToast, esc, formatarCentavos } from './config.js';
 import { AppState } from './router.js';
 import { enviarFoto } from './fotos.js';
+import { PALETAS, textoSobre, contraste, aplicarTema } from './tema.js';
 import { doc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const urlOk = (u) => !u || /^https:\/\/\S+$/i.test(u);
@@ -44,6 +45,11 @@ export function abrirConfigAparencia() {
       <label style="${rotulo}">Descrição curta (aparece no WhatsApp)</label>
       <textarea name="descricao" maxlength="160" rows="2" placeholder="Ex: Pizzas artesanais no forno a lenha. Entrega rápida no Centro e região." style="${campo}">${esc(l.descricao || '')}</textarea>
 
+      <label style="${rotulo}">Paletas prontas (1 toque)</label>
+      <div class="ap-paletas">
+        ${PALETAS.map((p, i) => `<button type="button" class="ap-paleta" data-paleta="${i}" style="--c:${p.cor}; ${p.escuro ? 'background:#111827; color:#e5e7eb;' : ''}"><span></span>${esc(p.nome)}${p.escuro ? ' 🌙' : ''}</button>`).join('')}
+      </div>
+      <label class="chk-lembrar"><input type="checkbox" name="escuro" ${l.modoEscuro ? 'checked' : ''} /> <span>🌙 Modo escuro no cardápio <small>Fica bonito em hamburgueria, adega e lojas noturnas.</small></span></label>
       <div class="gc-linha">
         <div>
           <label style="${rotulo}">Cor da loja</label>
@@ -54,6 +60,14 @@ export function abrirConfigAparencia() {
           <input name="tempo" maxlength="20" value="${esc(l.tempoEstimado || '30-45 min')}" style="${campo}" />
         </div>
       </div>
+
+      <div class="ap-botao-previa" id="ap-botao-previa"></div>
+
+      <label style="${rotulo}">Faixa de aviso no topo (opcional, até 80 letras)</label>
+      <input name="aviso" maxlength="80" placeholder="Ex: Frete grátis acima de R$ 60 🎉" value="${esc(l.avisoTopo || '')}" style="${campo}" />
+
+      <label style="${rotulo}">Instagram da loja (opcional)</label>
+      <input name="instagram" maxlength="40" placeholder="@sualoja" value="${esc(l.instagram ? '@' + l.instagram : '')}" style="${campo}" />
 
       <label style="${rotulo}">Pedido mínimo (R$, 0 = sem mínimo)</label>
       <input name="minimo" inputmode="decimal" value="${((Number(l.pedidoMinimoCentavos) || 0) / 100).toFixed(2).replace('.', ',')}" style="${campo}" />
@@ -89,8 +103,26 @@ export function abrirConfigAparencia() {
         <small>${esc(window.location.host)}</small>
       </div>`;
   };
-  form.oninput = desenharPrevia;
+  // Prévia do botão com o texto de contraste automático (branco ou grafite)
+  const desenharBotao = () => {
+    const cor = form.cor.value;
+    const txt = textoSobre(cor);
+    const fraco = contraste(cor, form.escuro.checked ? '#111827' : '#ffffff') < 3;
+    overlay.querySelector('#ap-botao-previa').innerHTML = `
+      <span class="ap-botao-amostra" style="background:${esc(cor)}; color:${txt};">Finalizar pedido</span>
+      <small>${fraco ? '⚠ Cor muito parecida com o fundo: textos coloridos podem ficar fracos. O texto dos botões é ajustado sozinho.' : '✅ Boa leitura: o texto dos botões fica ' + (txt === '#ffffff' ? 'branco' : 'escuro') + ' automaticamente.'}</small>`;
+  };
+  form.oninput = () => { desenharPrevia(); desenharBotao(); };
   desenharPrevia();
+  desenharBotao();
+  overlay.querySelectorAll('[data-paleta]').forEach(b => {
+    b.onclick = () => {
+      const pl = PALETAS[Number(b.dataset.paleta)];
+      form.cor.value = pl.cor;
+      form.escuro.checked = pl.escuro;
+      desenharPrevia(); desenharBotao();
+    };
+  });
 
   overlay.querySelectorAll('[data-foto]').forEach(btn => {
     btn.onclick = async () => {
@@ -114,7 +146,11 @@ export function abrirConfigAparencia() {
       pedidoMinimoCentavos: reaisParaCentavos(form.minimo.value),
       logoUrl: form.logo.value.trim() || null,
       bannerUrl: form.banner.value.trim() || null,
-      layoutVitrine: form.layout.value === 'varejo' ? 'varejo' : 'gastronomia'
+      layoutVitrine: form.layout.value === 'varejo' ? 'varejo' : 'gastronomia',
+      modoEscuro: form.escuro.checked,
+      avisoTopo: form.aviso.value.trim().slice(0, 80) || null,
+      instagram: form.instagram.value.trim().replace(/^@/, '').replace(/[^A-Za-z0-9._]/g, '').slice(0, 30) || null,
+      temaVersao: Date.now()
     };
     if (dados.nome.length < 2) return showToast('Informe o nome da loja.');
     if (dados.pedidoMinimoCentavos === null) return showToast('Pedido mínimo inválido. Use o formato 20,00.');
@@ -124,7 +160,7 @@ export function abrirConfigAparencia() {
     try {
       await updateDoc(doc(db, 'lojas', AppState.lojaId), dados);
       AppState.lojaDados = { ...AppState.lojaDados, ...dados };
-      document.documentElement.style.setProperty('--primary', dados.corPrimaria);
+      aplicarTema({ ...AppState.lojaDados, modoEscuro: false }); // no painel fica sempre claro
       showToast(`Aparência salva!${dados.pedidoMinimoCentavos ? ` Pedido mínimo: ${formatarCentavos(dados.pedidoMinimoCentavos)}.` : ''}`);
       overlay.remove();
     } catch (err) {

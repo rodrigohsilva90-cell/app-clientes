@@ -19,7 +19,9 @@ import { abrirRelatorios } from './relatorios.js';
 import { abrirClientes, abrirConfigFidelidade } from './clientes.js';
 import { avisarCliente, carimbarPedido } from './notificar.js';
 import { bannerAssinatura, telaBloqueio } from './assinatura.js';
-import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { modoOperacaoAtual } from './frete.js';
+import { qrSvg, abrirQrLoja } from './qr.js';
+import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp, Timestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 let audioCtx = null;
 let wakeLock = null;
@@ -59,7 +61,9 @@ export async function iniciarBalcao() {
         <div id="status-loja" class="painel-status">⏳ Verificando loja...</div>
         <div id="status-caixa" class="painel-status">⏳ Verificando caixa...</div>
         <div id="status-som" class="painel-status" style="color:var(--warning);">🔇 Campainha desligada</div>
+        <div id="status-rede" class="painel-status"></div>
       </div>
+      ${ehDono ? '<div class="modo-op" id="modo-op"></div>' : ''}
       <div class="painel-botoes">
         <button id="btn-caixa" class="btn-primary" style="width:auto;" disabled>Caixa</button>
         <button id="btn-som" class="btn-outline-sm">🔊 Ativar campainha</button>
@@ -94,6 +98,8 @@ export async function iniciarBalcao() {
   `;
 
   document.getElementById('btn-som').onclick = ativarSomEWakeLock;
+  if (ehDono) desenharModoOperacao();
+  ligarIndicadorRede();
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
   if (ehDono) document.getElementById('btn-config').onclick = abrirMenuConfig;
   else document.getElementById('btn-carrinhos').onclick = abrirCarrinhos;
@@ -312,7 +318,12 @@ function renderizarConcluidos() {
 function criarCardPedidoBalcao(p) {
   const div = document.createElement('div');
   const minutos = Math.floor(minutosDesde(p));
-  div.className = `card${p.status === 'novo' && minutos >= MIN_ALERTA ? ' pedido-atrasado' : ''}`;
+  const emAberto = ['novo', 'preparo', 'entrega'].includes(p.status);
+  // Tempo desde o pedido: verde até 25 min, amarelo até 35, vermelho pulsante depois
+  const sla = !emAberto || !p.criadoEm?.toMillis ? '' : minutos >= 35 ? ' sla-vermelho' : minutos >= 25 ? ' sla-amarelo' : ' sla-verde';
+  const chegou = p.tipoEntrega === 'retirada' && p.clienteChegouEm && emAberto;
+  div.className = `card${p.status === 'novo' && minutos >= MIN_ALERTA ? ' pedido-atrasado' : ''}${sla}${chegou ? ' cliente-chegou' : ''}`;
+  if (chegou && !clientesChegaramAvisados.has(p.id)) { clientesChegaramAvisados.add(p.id); tocarAvisoChegada(); }
   div.style.borderLeft = p.status === 'novo' ? '4px solid var(--danger)' : '4px solid var(--primary)';
 
   const trocoTxt = (p.formaPagamento === 'dinheiro' && p.trocoParaCentavos > p.totalCentavos)
@@ -335,7 +346,7 @@ function criarCardPedidoBalcao(p) {
     <div style="display:flex; justify-content:space-between; align-items:center;">
       <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
       <span style="display:flex; gap:6px; align-items:center;">
-        ${p.criadoEm?.toMillis ? `<span class="pedido-idade${p.status === 'novo' && minutos >= MIN_ALERTA ? ' alerta' : ''}">⏱ ${minutos} min</span>` : ''}
+        ${p.criadoEm?.toMillis ? `<span class="pedido-idade${(p.status === 'novo' && minutos >= MIN_ALERTA) || (emAberto && minutos >= 35) ? ' alerta' : ''}">⏱ ${minutos} min</span>` : ''}
         <button class="btn-outline-sm" style="padding:2px 8px;" data-print="1" title="Imprimir Comanda">🖨️</button>
       </span>
     </div>
@@ -343,6 +354,9 @@ function criarCardPedidoBalcao(p) {
     ${p.clienteVip ? `<p class="gc-dica" style="margin:0 0 4px;">Cliente fiel (${esc(p.clientePedidosAntes)} pedidos): que tal um mimo ou prioridade no preparo?</p>` : ''}
     ${p.recebedorNome ? `<p style="font-size:13px; margin:2px 0;">👤 Quem recebe: <strong>${esc(p.recebedorNome)}</strong>${p.recebedorWhats ? ` (${esc(p.recebedorWhats)})` : ''}</p>` : ''}
     ${p.clienteRestrito ? '<p style="font-size:12px; color:#9a3412; margin:2px 0;">⚠ Cliente com 2 ausências seguidas</p>' : ''}
+    ${chegou ? '<div class="pedido-chegou">🙋 <strong>O cliente chegou no balcão!</strong> Entregue o pedido.</div>' : ''}
+    ${p.tipoEntrega === 'retirada' && p.status === 'preparo' && linkProntoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin:4px 0 8px;" href="${esc(linkProntoWhats(p))}" target="_blank" rel="noopener">📲 Avisar: pronto para retirada</a>` : ''}
+    ${p.status === 'entrega' && p.entregaPropria ? '<p style="font-size:13px; margin:2px 0;">🙋 Entrega própria da loja (sem app de motoboy)</p>' : ''}
     ${p.status === 'entrega' && p.tentativaAusente ? `<div class="pedido-aviso">📵 O motoboy chegou${p.tentativaAusente.em && p.tentativaAusente.em.toDate ? ` às ${p.tentativaAusente.em.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : ''} e o cliente não atendeu. Ele foi fazer outra entrega e volta depois. ${p.clienteWhatsapp ? `<a href="https://wa.me/55${esc(String(p.clienteWhatsapp).replace(/\D/g, '').replace(/^55/, ''))}" target="_blank" rel="noopener">📲 Chamar o cliente</a>` : 'Ligue para o cliente.'}</div>` : ''}
     <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
     ${p.pinoManual ? '<p style="font-size:12px; color:#92400e; margin:2px 0;">📍 Pino ajustado à mão pelo cliente</p>' : ''}
@@ -361,9 +375,13 @@ function criarCardPedidoBalcao(p) {
     ${p.status === 'entrega' ? `<div style="font-size:13px; margin-bottom:8px;">🛵 Com: <strong>${esc(p.motoboyNome || (p.motoboyId ? 'entregador (app)' : 'sem entregador'))}</strong></div>` : ''}
     ${p.status === 'entrega' && linkAvisoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin-bottom:8px;" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>` : ''}
     ${botaoAcao}
+    ${p.tipoEntrega === 'entrega' && ['preparo', 'entrega'].includes(p.status) ? '<button class="btn-outline-sm" type="button" data-resumo style="width:100%; margin-top:6px;">📋 Copiar resumo para motoboy avulso</button>' : ''}
+    ${p.tipoEntrega === 'entrega' && ['novo', 'preparo'].includes(p.status) ? '<button class="btn-outline-sm" type="button" data-converter style="width:100%; margin-top:6px;">🔄 Sem entregador? Converter para retirada</button>' : ''}
   `;
 
   div.querySelector('[data-print]')?.addEventListener('click', () => imprimirComandaTermica(p));
+  div.querySelector('[data-resumo]')?.addEventListener('click', () => copiarResumoAvulso(p));
+  div.querySelector('[data-converter]')?.addEventListener('click', () => converterParaRetirada(p));
   div.querySelector('[data-avisar]')?.addEventListener('click', () => marcarAvisado(p));
   div.querySelector('[data-recusar]')?.addEventListener('click', async () => {
     const motivo = prompt('Motivo da recusa (o cliente verá que o pedido foi cancelado):', 'Loja sem condições de atender agora');
@@ -708,10 +726,6 @@ async function despacharParaEntregador(p) {
     showToast('Erro ao carregar a lista de entregadores.');
     return;
   }
-  if (!entregadores.length) {
-    showToast('Nenhum entregador cadastrado nesta loja.');
-    return;
-  }
 
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:1000; display:flex; align-items:center; justify-content:center; padding:16px;';
@@ -724,10 +738,35 @@ async function despacharParaEntregador(p) {
       ${entregadores.map(e => `
         <button class="btn-outline-sm" data-uid="${esc(e.uid)}" style="width:100%; text-align:left; padding:12px; margin-bottom:8px; font-size:15px;">🛵 ${esc(e.nome)}</button>
       `).join('')}
+      <button class="btn-outline-sm" data-propria="1" style="width:100%; text-align:left; padding:12px; margin-bottom:8px; font-size:15px;">🙋 Eu mesmo / entregador sem o app</button>
+      ${entregadores.length ? '' : '<p class="gc-dica">Nenhum motoboy cadastrado com o app. Cadastre em ⚙ Configurações → Equipe, ou faça a entrega você mesmo.</p>'}
     </div>
   `;
   document.body.appendChild(overlay);
   overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  overlay.querySelector('[data-propria]').onclick = async () => {
+    try {
+      await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
+        status: 'entrega', motoboyId: null, motoboyNome: 'Entregador da loja', entregaPropria: true,
+        saiuParaEntregaEm: serverTimestamp(), atualizadoEm: serverTimestamp()
+      });
+      avisarCliente(p.id);
+      const rota = urlRota(p);
+      let qr = '';
+      try { qr = await qrSvg(rota, 5); } catch (_) {}
+      const link = linkAvisoWhats(p);
+      overlay.querySelector('.card').innerHTML = `
+        <h3>🛵 Pedido #${esc(p.numeroPedido || '')} saiu com a loja</h3>
+        <p class="gc-dica">Quem vai entregar aponta a câmera do celular para o QR Code e o mapa abre direto no endereço do cliente.</p>
+        ${qr ? `<div class="qr-img" style="display:flex; justify-content:center; margin:8px 0;">${qr}</div>` : ''}
+        <button class="btn-outline-sm" type="button" data-resumo style="width:100%;">📋 Copiar resumo (endereço, mapa, valor e telefone)</button>
+        ${link ? `<a class="btn-primary btn-whats" style="margin-top:8px;" href="${esc(link)}" target="_blank" rel="noopener" data-avisar>📲 Avisar cliente no WhatsApp</a>` : ''}
+        <button class="btn-outline-sm" data-fechar style="width:100%; margin-top:8px;">Fechar</button>`;
+      overlay.querySelector('[data-resumo]').onclick = () => copiarResumoAvulso(p);
+      overlay.querySelector('[data-avisar]')?.addEventListener('click', () => marcarAvisado(p));
+      overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+    } catch (err) { console.error(err); showToast('Erro ao despachar o pedido.'); }
+  };
   overlay.querySelectorAll('[data-uid]').forEach(btn => {
     btn.onclick = async () => {
       const escolhido = entregadores.find(e => e.uid === btn.dataset.uid);
@@ -770,6 +809,7 @@ const MENU_CONFIG = [
     { icone: '🎨', nome: 'Aparência', dica: 'Logo, capa, cores e descrição', abrir: () => abrirConfigAparencia() },
     { icone: '🕒', nome: 'Horários', dica: 'Dias e horas de funcionamento', abrir: () => abrirConfigHorarios() },
     { icone: '🛵', nome: 'Entrega e frete', dica: 'Endereço da loja, taxas e áreas', abrir: () => abrirConfigEntrega() },
+    { icone: '🔳', nome: 'QR Code para mesa', dica: 'Cartaz para imprimir: o cliente pede pelo celular', abrir: () => abrirQrLoja() },
     { icone: '💳', nome: 'Pix automático', dica: 'Receber pelo Mercado Pago', abrir: () => abrirConfigPix() }
   ] },
   { titulo: '👥 Equipe', itens: [
@@ -818,4 +858,131 @@ function abrirMenuConfig() {
   overlay.querySelectorAll('.cfg-item').forEach(b => {
     b.onclick = () => { fechar(); MENU_CONFIG[b.dataset.g].itens[b.dataset.i].abrir(); };
   });
+}
+
+
+// ===================== Modos de operação, entrega própria e retirada =====================
+const clientesChegaramAvisados = new Set();
+function tocarAvisoChegada() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.25].forEach((t, i) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 660 + i * 330; o.connect(g); g.connect(ctx.destination); g.gain.setValueAtTime(0.3, ctx.currentTime + t); o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.18); });
+  } catch (_) {}
+}
+
+function urlRota(p) {
+  return p.destinoCoords
+    ? `https://www.google.com/maps/dir/?api=1&travelmode=two-wheeler&destination=${p.destinoCoords.lat},${p.destinoCoords.lng}`
+    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.enderecoTexto || '')}`;
+}
+
+function linkProntoWhats(p) {
+  const numero = String(p.clienteWhatsapp || '').replace(/\D/g, '');
+  if (numero.length < 10) return null;
+  const primeiro = String(p.clienteNome || '').trim().split(/\s+/)[0] || '';
+  const texto = `Olá${primeiro ? `, ${primeiro}` : ''}! Seu pedido #${p.numeroPedido || ''} da ${AppState.lojaDados.nome} está PRONTO para retirada 🛍️ É só falar o número ${p.numeroPedido || ''} no balcão.`;
+  return `https://wa.me/${numero.startsWith('55') ? numero : '55' + numero}?text=${encodeURIComponent(texto)}`;
+}
+
+// Texto pronto para mandar no WhatsApp de um motoboy avulso (cooperativa, app de entregas, conhecido)
+async function copiarResumoAvulso(p) {
+  const ep = p.enderecoPartes || {};
+  const cobrar = p.pagamentoStatus === 'aprovado' ? 'JÁ PAGO (não cobrar)'
+    : p.formaPagamento === 'dinheiro' ? `Cobrar ${formatarCentavos(p.totalCentavos)} em DINHEIRO${p.trocoParaCentavos > p.totalCentavos ? ` (troco para ${formatarCentavos(p.trocoParaCentavos)}: levar ${formatarCentavos(p.trocoParaCentavos - p.totalCentavos)})` : ''}`
+    : p.formaPagamento === 'pix' ? `Pix: confirmar com a loja (${formatarCentavos(p.totalCentavos)})`
+    : `Cobrar ${formatarCentavos(p.totalCentavos)} na MAQUININHA`;
+  const linhas = [
+    `🛵 Entrega ${AppState.lojaDados.nome} · Pedido #${p.numeroPedido || ''}`,
+    ep.bairro ? `📍 ${ep.bairro.toUpperCase()}` : null,
+    `🏠 ${ep.rua ? `${ep.rua}${ep.numero ? ', ' + ep.numero : ''}` : (p.enderecoTexto || '')}`,
+    ep.compl ? `Ref.: ${ep.compl}` : null,
+    `🗺 Mapa: ${urlRota(p)}`,
+    `👤 ${p.recebedorNome || p.clienteNome || ''}${p.recebedorWhats || p.clienteWhatsapp ? ` · 📞 ${p.recebedorWhats || p.clienteWhatsapp}` : ''}`,
+    `💵 ${cobrar}`
+  ].filter(Boolean).join('\n');
+  try { await navigator.clipboard.writeText(linhas); showToast('📋 Resumo copiado! Cole no WhatsApp do entregador.'); }
+  catch (_) { prompt('Copie o resumo:', linhas); }
+}
+
+// Sem entregador: vira retirada, tira a taxa do total e abre o WhatsApp do cliente com a mensagem pronta
+async function converterParaRetirada(p) {
+  const frete = Number(p.freteCentavos) || 0;
+  const pagoPix = p.pagamentoStatus === 'aprovado';
+  if (!confirm(`Converter o pedido #${p.numeroPedido || ''} para RETIRADA no balcão?\n\nA taxa de entrega (${formatarCentavos(frete)}) sai do total.${pagoPix && frete ? ' Como já foi pago no Pix, devolva a taxa ao cliente pelo Pix.' : ''}`)) return;
+  try {
+    await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), {
+      tipoEntrega: 'retirada', freteCentavos: 0, totalCentavos: Math.max(0, (Number(p.totalCentavos) || 0) - frete),
+      convertidoRetirada: true, freteDevolverCentavos: pagoPix ? frete : 0, atualizadoEm: serverTimestamp()
+    });
+    const numero = String(p.clienteWhatsapp || '').replace(/\D/g, '');
+    if (numero.length >= 10) {
+      const primeiro = String(p.clienteNome || '').trim().split(/\s+/)[0] || '';
+      const texto = `Olá${primeiro ? `, ${primeiro}` : ''}! Aqui é da ${AppState.lojaDados.nome}. Tivemos um imprevisto com o entregador agora 😕 Podemos deixar seu pedido #${p.numeroPedido || ''} pronto para retirada no balcão?${frete ? (pagoPix ? ` Devolvemos o valor da taxa de entrega (${formatarCentavos(frete)}) pelo Pix.` : ` A taxa de entrega (${formatarCentavos(frete)}) foi retirada do total.`) : ''}`;
+      window.open(`https://wa.me/${numero.startsWith('55') ? numero : '55' + numero}?text=${encodeURIComponent(texto)}`, '_blank');
+    }
+    showToast('Pedido convertido para retirada.');
+  } catch (err) { console.error(err); showToast('Não foi possível converter o pedido.'); }
+}
+
+// Modo de operação: 🟢 entrega + retirada · 🟡 só retirada · 🔵 entrega própria (sem app de motoboy)
+const MODOS = [
+  { id: 'completo', icone: '🟢', nome: 'Entrega + Retirada' },
+  { id: 'retirada', icone: '🟡', nome: 'Só retirada' },
+  { id: 'propria', icone: '🔵', nome: 'Entrega própria' }
+];
+function desenharModoOperacao() {
+  const box = document.getElementById('modo-op');
+  if (!box) return;
+  const l = AppState.lojaDados;
+  const atual = modoOperacaoAtual(l);
+  const padrao = ['completo', 'retirada', 'propria'].includes(l.modoPadrao) ? l.modoPadrao : 'completo';
+  box.innerHTML = `
+    <div class="modo-op-botoes">${MODOS.map(m => `<button type="button" class="modo-op-btn${m.id === atual ? ' ativo' : ''}" data-modo="${m.id}">${m.icone} ${m.nome}</button>`).join('')}</div>
+    ${atual !== padrao ? `<small class="modo-op-aviso">⏳ Modo temporário: volta sozinho para "${MODOS.find(m => m.id === padrao).nome}" amanhã de manhã.</small>` : ''}`;
+  box.querySelectorAll('[data-modo]').forEach(b => {
+    b.onclick = () => escolherModo(b.dataset.modo, padrao);
+  });
+}
+function escolherModo(modo, padrao) {
+  const nome = MODOS.find(m => m.id === modo).nome;
+  const overlay = document.createElement('div');
+  overlay.className = 'gc-overlay';
+  overlay.innerHTML = `
+    <div class="card" style="max-width:380px; width:100%; margin:0;">
+      <h3>${MODOS.find(m => m.id === modo).icone} ${nome}</h3>
+      <p class="gc-dica" style="margin:6px 0 12px;">${modo === 'retirada' ? 'Novos clientes só conseguem pedir para retirar no balcão. Pedidos de entrega que já entraram continuam aqui para você despachar.' : modo === 'propria' ? 'Você mesmo (ou um entregador sem o app) faz as entregas: no pedido, toque em "Despachar" e escolha "Eu mesmo".' : 'Volta ao normal: entrega com motoboys + retirada.'}</p>
+      ${modo === padrao ? '' : '<button class="btn-primary" type="button" data-quando="hoje">Só hoje (volta sozinho amanhã)</button>'}
+      <button class="btn-outline-sm" type="button" data-quando="sempre" style="width:100%; margin-top:8px;">Deixar sempre assim</button>
+      <button class="btn-outline-sm" type="button" data-fechar style="width:100%; margin-top:8px;">Cancelar</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+  overlay.querySelectorAll('[data-quando]').forEach(b => {
+    b.onclick = async () => {
+      // "Só hoje" vale até as 5h da manhã seguinte
+      const ate = new Date(); ate.setDate(ate.getDate() + (ate.getHours() < 5 ? 0 : 1)); ate.setHours(5, 0, 0, 0);
+      const dados = b.dataset.quando === 'hoje'
+        ? { modoOperacao: { modo, ate: Timestamp.fromDate(ate) } }
+        : { modoPadrao: modo, modoOperacao: null };
+      try {
+        await updateDoc(doc(db, 'lojas', AppState.lojaId), dados);
+        Object.assign(AppState.lojaDados, dados);
+        overlay.remove();
+        desenharModoOperacao();
+        showToast(`Modo: ${nome}${b.dataset.quando === 'hoje' ? ' (só hoje)' : ''}`);
+      } catch (err) { console.error(err); showToast('Não foi possível mudar o modo.'); }
+    };
+  });
+}
+
+// 🟢 Online / 🟠 sem internet (os pedidos já recebidos continuam na tela e sincronizam ao voltar)
+function ligarIndicadorRede() {
+  const el = document.getElementById('status-rede');
+  if (!el) return;
+  const desenhar = () => {
+    el.innerHTML = navigator.onLine ? '<span style="color:var(--success);">🟢 Online</span>' : '<span class="rede-offline">🟠 Sem internet: os pedidos na tela continuam valendo e tudo sincroniza quando a conexão voltar</span>';
+  };
+  window.addEventListener('online', desenhar);
+  window.addEventListener('offline', desenhar);
+  desenhar();
 }

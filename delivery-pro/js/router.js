@@ -7,6 +7,7 @@ import { iniciarMotoboy } from './motoboy.js';
 import { iniciarAcompanhamento } from './acompanhar.js';
 import { abrirCadastroLoja } from './cadastro.js';
 import { iniciarMaster } from './master.js';
+import { aplicarTema } from './tema.js';
 
 // 1. Registro do Service Worker com aviso de atualização
 if ('serviceWorker' in navigator) {
@@ -118,11 +119,9 @@ async function resolverRota() {
     const lojaSnap = await getDoc(doc(db, 'lojas', AppState.lojaId));
     AppState.lojaDados = { id: AppState.lojaId, ...lojaSnap.data() };
 
-    // Aplica White-Label (Cor e Título da Loja)
-    if (AppState.lojaDados.corPrimaria) {
-      document.documentElement.style.setProperty('--primary', AppState.lojaDados.corPrimaria);
-      document.getElementById('meta-theme-color')?.setAttribute('content', AppState.lojaDados.corPrimaria);
-    }
+    // Aplica White-Label (cor com texto de contraste automático; modo escuro só nas telas do cliente)
+    const telaDoCliente = !['painel', 'motoboy'].includes(subRota);
+    aplicarTema({ ...AppState.lojaDados, modoEscuro: telaDoCliente && AppState.lojaDados.modoEscuro }, telaDoCliente ? slug : null);
     document.getElementById('page-title').textContent = AppState.lojaDados.nome;
     document.getElementById('topbar-store-name').textContent = AppState.lojaDados.nome;
     document.getElementById('global-topbar').classList.remove('hidden');

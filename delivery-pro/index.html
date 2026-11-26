@@ -25,6 +25,18 @@
 
   <!-- Estilos Principais -->
   <link rel="stylesheet" href="/css/styles.css" />
+  <script>
+    // Pinta a cor da loja antes de tudo (cache da última visita), para não piscar a cor padrão
+    try {
+      var sl = location.pathname.split('/')[1] || '';
+      var tm = sl && JSON.parse(localStorage.getItem('tema_' + sl.toLowerCase()) || 'null');
+      if (tm && /^#[0-9a-f]{6}$/i.test(tm.c) && !/^\/[^/]+\/(painel|motoboy)/.test(location.pathname)) {
+        var r = document.documentElement.style;
+        r.setProperty('--primary', tm.c); r.setProperty('--primary-text', tm.t); r.setProperty('--primary-dark', tm.d);
+        if (tm.e) document.documentElement.classList.add('tema-escuro');
+      }
+    } catch (e) {}
+  </script>
 </head>
 <body>
   <!-- Barra Superior Global (Alternador de Perfil quando logado com múltiplos papéis) -->

@@ -88,6 +88,9 @@ export default {
       if (url.pathname === '/api/fidelidade/carimbar' && request.method === 'POST') {
         return carimbarPedido(request, env);
       }
+      if (url.pathname === '/api/cheguei' && request.method === 'POST') {
+        return clienteChegou(request, env);
+      }
       if (url.pathname === '/api/entrega/tentativa' && request.method === 'POST') {
         return tentativaEntrega(request, env);
       }
@@ -228,6 +231,9 @@ async function criarPedidoSeguro(request, env) {
       throw new ErroPedido(situacao.pausada
         ? 'A loja pausou os pedidos por alguns minutos. Tente de novo em instantes.'
         : (situacao.texto === 'Fechado' ? 'A loja está fechada no momento.' : `A loja está fechada agora (${situacao.texto.replace('Fechado · ', '')}).`), 409);
+    }
+    if (tipoEntrega === 'entrega' && modoOperacaoAtual(loja) === 'retirada') {
+      throw new ErroPedido('Neste momento a loja está só com retirada no balcão. Escolha "Retirar na loja".', 409);
     }
     const produtos = (cardapio?.produtos || []).filter(p => !p.excluido);
     const caminho = `lojas/${lojaId}/pedidos/${token}`;
@@ -862,6 +868,30 @@ async function carimbarPedido(request, env) {
   }
 }
 
+// Retirada: o cliente avisa "Cheguei no balcão". O ID do pedido (longo e aleatório) funciona como senha do link.
+async function clienteChegou(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    const ip = request.headers.get('CF-Connecting-IP') || 'local';
+    if (!dentroDoLimite(`chg:${ip}`)) throw new ErroPedido('Muitas tentativas. Aguarde um pouco.', 429);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const pedidoId = String(corpo.pedidoId || '');
+    if (!/^[A-Za-z0-9_-]{8,100}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+    const fs = await firestore(env);
+    const lojaId = await lojaPeloSlug(fs, corpo.slug);
+    const caminho = `lojas/${lojaId}/pedidos/${pedidoId}`;
+    const p = await fs.ler(caminho);
+    if (!p || p.tipoEntrega !== 'retirada' || !['novo', 'preparo'].includes(p.status)) throw new ErroPedido('Este pedido não está aguardando retirada.', 409);
+    if (!p.clienteChegouEm) await fs.atualizar(caminho, { clienteChegouEm: new Date() });
+    return jsonResponse({ ok: true });
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('clienteChegou', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível avisar agora.' }, 500);
+  }
+}
+
 // Motoboy chegou e o cliente não atendeu: registra a tentativa (hora + GPS) para o balcão ligar.
 // O pedido continua com ele (vai para o fim da rota); não conta como ausência até o balcão confirmar.
 async function tentativaEntrega(request, env) {
@@ -1260,6 +1290,14 @@ function distanciaRetaKm(a, b) {
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
+// Igual ao app (js/frete.js): modo temporário vale até a data "ate"; depois volta ao modo padrão
+function modoOperacaoAtual(loja, agora = Date.now()) {
+  const m = loja && loja.modoOperacao;
+  const ate = m && m.ate ? Date.parse(m.ate) : null;
+  if (m && ['completo', 'retirada', 'propria'].includes(m.modo) && (!ate || ate > agora)) return m.modo;
+  return ['completo', 'retirada', 'propria'].includes(loja && loja.modoPadrao) ? loja.modoPadrao : 'completo';
+}
+
 function coordsValidas(c) {
   return !!c && Number.isFinite(c.lat) && Number.isFinite(c.lng) && Math.abs(c.lat) <= 90 && Math.abs(c.lng) <= 180;
 }

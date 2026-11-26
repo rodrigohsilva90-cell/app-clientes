@@ -10,7 +10,11 @@
   --warning: #d97706;
   --danger: #dc2626;
   --radius: 12px;
+  --primary-text: #ffffff;
 }
+/* Modo escuro da vitrine (escolhido pelo lojista em 🎨 Aparência) */
+:root.tema-escuro { --bg: #0b1120; --surface: #111827; --text: #e5e7eb; --text-muted: #9ca3af; --border: #1f2937; color-scheme: dark; }
+:root.tema-escuro input, :root.tema-escuro select, :root.tema-escuro textarea { background: #0f172a; color: var(--text); border-color: var(--border); }
 
 * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
 body { background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -28,7 +32,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 
 /* Botões e Inputs */
 .btn-primary {
-  background: var(--primary); color: #fff; border: none; padding: 12px 18px;
+  background: var(--primary); color: var(--primary-text); border: none; padding: 12px 18px;
   border-radius: var(--radius); font-weight: 600; cursor: pointer; width: 100%;
 }
 .btn-primary:hover { background: var(--primary-dark); }
@@ -46,7 +50,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Banner Update & Toast */
-.update-banner { background: var(--primary); color: #fff; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+.update-banner { background: var(--primary); color: var(--primary-text); padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
 .toast-container { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 9999; display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 32px); }
 .toast { background: #111827; color: #fff; padding: 12px 16px; border-radius: 8px; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
 
@@ -74,7 +78,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .vt-logo {
   width: 96px; height: 96px; border-radius: 50%; flex-shrink: 0; overflow: hidden;
   border: 4px solid var(--surface); box-shadow: 0 2px 10px rgba(0,0,0,0.15);
-  background: var(--primary); color: #fff; display: flex; align-items: center; justify-content: center;
+  background: var(--primary); color: var(--primary-text); display: flex; align-items: center; justify-content: center;
   font-size: 30px; font-weight: 800;
 }
 .vt-logo img { width: 100%; height: 100%; object-fit: cover; }
@@ -118,14 +122,14 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .vt-preco small { font-weight: 500; font-size: 13px; color: var(--text-muted); }
 .vt-mais {
   position: absolute; right: 10px; bottom: 10px; width: 30px; height: 30px; border-radius: 50%;
-  background: var(--primary); color: #fff; font-size: 20px; font-weight: 700;
+  background: var(--primary); color: var(--primary-text); font-size: 20px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
 }
 .vt-vazio { text-align: center; color: var(--text-muted); padding: 30px 0; }
 
 .vt-carrinho {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px; z-index: 800;
-  width: min(560px, calc(100% - 32px)); background: var(--primary); color: #fff;
+  width: min(560px, calc(100% - 32px)); background: var(--primary); color: var(--primary-text);
   border-radius: 14px; padding: 14px 18px; display: flex; justify-content: space-between; align-items: center;
   cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.25);
 }
@@ -306,7 +310,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .vt-grade.varejo .vt-produto-info { padding-right: 0; }
 .vt-grade.varejo .vt-produto-info strong { font-size: 14px; text-transform: none; }
 .vt-grade.varejo .vt-produto-info p { -webkit-line-clamp: 2; font-size: 12px; }
-.vt-add { display: block; text-align: center; background: var(--primary); color: #fff; border-radius: 10px; padding: 8px; font-weight: 700; font-size: 14px; }
+.vt-add { display: block; text-align: center; background: var(--primary); color: var(--primary-text); border-radius: 10px; padding: 8px; font-weight: 700; font-size: 14px; }
 .vt-oferta { align-self: flex-start; background: #fff7ed; color: #c2410c; border-radius: 99px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
 .vt-preco s { color: var(--text-muted); font-weight: 500; font-size: 13px; }
 @media (max-width: 640px) {
@@ -444,7 +448,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .rl-caixa { max-height: 92vh; overflow-y: auto; }
 .rl-periodos { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 4px; }
 .rl-chip { flex-shrink: 0; border: 1px solid var(--border); background: var(--surface, #fff); color: inherit; border-radius: 99px; padding: 6px 12px; font: inherit; font-size: 14px; cursor: pointer; }
-.rl-chip.ativo { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 700; }
+.rl-chip.ativo { background: var(--primary); border-color: var(--primary); color: var(--primary-text); font-weight: 700; }
 .rl-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
 .rl-tile { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
 .rl-tile > span:first-child { font-size: 13px; color: var(--text-muted); }
@@ -536,3 +540,46 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .mb-transicao-card { width: 100%; max-width: 480px; margin: 0; }
 .mb-transicao-ok { font-size: 20px; font-weight: 800; margin: 0 0 6px; }
 .mb-botao-gigante { display: block; text-align: center; text-decoration: none; font-size: 18px; padding: 18px; margin-top: 12px; }
+.ap-paletas { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; margin: 4px 0 10px; }
+.ap-paleta { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: var(--surface); font: inherit; font-size: 13px; color: inherit; cursor: pointer; text-align: left; }
+.ap-paleta span { width: 18px; height: 18px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
+.ap-botao-previa { display: flex; flex-direction: column; gap: 4px; margin: -4px 0 10px; }
+.ap-botao-amostra { display: inline-block; align-self: flex-start; padding: 10px 18px; border-radius: 10px; font-weight: 700; }
+.ap-botao-previa small { font-size: 12px; color: var(--text-muted); }
+.qr-cartao { border: 3px solid var(--c); border-radius: 20px; padding: 18px; text-align: center; display: flex; flex-direction: column; gap: 6px; align-items: center; background: #fff; color: #111827; }
+.qr-logo { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; }
+.qr-cartao strong { font-size: 20px; }
+.qr-img svg { width: 220px; height: 220px; }
+.qr-cartao small { color: #6b7280; }
+.modo-op { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.modo-op-botoes { display: flex; gap: 6px; flex-wrap: wrap; }
+.modo-op-btn { border: 1px solid var(--border); background: var(--surface); color: inherit; border-radius: 99px; padding: 6px 12px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.modo-op-btn.ativo { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary) inset; }
+.modo-op-aviso { font-size: 12px; color: #92400e; }
+.rede-offline { color: #c2410c; font-weight: 700; }
+.card.sla-verde { border-left-color: #16a34a !important; }
+.card.sla-amarelo { border-left-color: #eab308 !important; }
+.card.sla-vermelho { border-left-color: #dc2626 !important; animation: pulsoSla 1.6s ease-in-out infinite; }
+@keyframes pulsoSla { 50% { box-shadow: 0 0 0 3px rgba(220,38,38,.25); } }
+.card.cliente-chegou { animation: pulsoChegou 1s ease-in-out infinite; border-color: #2563eb; }
+@keyframes pulsoChegou { 50% { box-shadow: 0 0 0 4px rgba(37,99,235,.35); background: #eff6ff; } }
+.pedido-chegou { background: #2563eb; color: #fff; border-radius: 8px; padding: 6px 8px; margin: 6px 0; font-size: 14px; }
+.vt-aviso-topo { background: var(--primary); color: var(--primary-text); text-align: center; font-size: 14px; font-weight: 700; padding: 8px 12px; border-radius: 10px; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vt-insta { display: inline-block; margin-top: 6px; font-size: 14px; font-weight: 600; color: var(--primary); text-decoration: none; }
+.vt-modo-retirada { background: #fef9c3; color: #713f12; border: 1px solid #fde047; border-radius: 12px; padding: 10px 12px; margin: 8px 0; font-size: 14px; }
+.vt-produto-info strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.vt-produto-info p { -webkit-line-clamp: 2; }
+.vt-foto img { aspect-ratio: 1 / 1; }
+.sk-capa, .sk-linha, .sk-foto { background: linear-gradient(90deg, var(--border) 25%, var(--surface) 50%, var(--border) 75%); background-size: 200% 100%; animation: skBrilho 1.2s linear infinite; border-radius: 10px; }
+.sk-capa { height: 140px; margin-bottom: 12px; }
+.sk-linha { height: 14px; margin: 8px 0; }
+.sk-card { display: flex; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin: 10px 0; }
+.sk-foto { width: 80px; height: 80px; flex-shrink: 0; }
+@keyframes skBrilho { to { background-position: -200% 0; } }
+:root.tema-escuro .vt-modo-retirada { background: #422006; color: #fde68a; border-color: #854d0e; }
+.acomp-retirada { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; border: 2px solid var(--primary); }
+.acomp-cod-rotulo { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+.acomp-cod { font-size: 56px; font-weight: 900; line-height: 1; color: var(--primary); }
+.acomp-ret-acoes { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+.acomp-ret-acoes a { text-decoration: none; color: inherit; }
+.acomp-chegou-ok { color: #15803d; font-weight: 700; }

@@ -74,6 +74,7 @@ export function iniciarAcompanhamento(pedidoId) {
     <a href="/${esc(AppState.slug)}" class="btn-outline-sm" style="text-decoration:none; display:inline-block; margin-bottom:12px;">← Voltar ao cardápio</a>
     <div class="card" id="acomp-status"><p>Carregando seu pedido...</p></div>
     <div class="card hidden acomp-chegando" id="acomp-chegando">🏁 <strong>O entregador está chegando ao seu endereço!</strong><span>Fique de olho no portão ou no interfone.</span></div>
+    <div class="card hidden acomp-retirada" id="acomp-retirada"></div>
     <div class="card hidden acomp-tentativa" id="acomp-tentativa"></div>
     <div class="card hidden acomp-parada" id="acomp-parada"></div>
     <div class="card hidden" id="acomp-mapa-card">
@@ -106,6 +107,7 @@ export function iniciarAcompanhamento(pedidoId) {
       renderItens(p);
       renderMapa(p);
       renderAvaliacao(p);
+      renderRetirada(p);
       if (p.status === 'concluido') { renderFidelidade(p); confirmarPinoPeloGps(p); }
       const boxPush = document.getElementById('acomp-push');
       if (FINAIS.includes(p.status)) boxPush?.classList.add('hidden');
@@ -240,6 +242,51 @@ function renderStatus(p) {
   `;
 }
 
+// Retirada no balcão: código grande, "Como chegar", "Cheguei" (perto da loja) e compartilhar o comprovante
+function renderRetirada(p) {
+  const box = document.getElementById('acomp-retirada');
+  if (!box) return;
+  const ativo = p.tipoEntrega === 'retirada' && ['novo', 'preparo'].includes(p.status);
+  box.classList.toggle('hidden', !ativo);
+  if (!ativo) return;
+  const loja = AppState.lojaDados || {};
+  const local = loja.localizacao && Number.isFinite(Number(loja.localizacao.lat)) ? loja.localizacao : null;
+  const rota = local ? `https://www.google.com/maps/dir/?api=1&destination=${local.lat},${local.lng}` : null;
+  const comprovante = `Pedido #${p.numeroPedido || ''} na ${loja.nome || 'loja'} — retirada no balcão. Acompanhe: ${window.location.href}`;
+  if (box.dataset.pedido === p.id && box.dataset.chegou === String(Boolean(p.clienteChegouEm))) return;
+  box.dataset.pedido = p.id; box.dataset.chegou = String(Boolean(p.clienteChegouEm));
+  box.innerHTML = `
+    <span class="acomp-cod-rotulo">Código de retirada</span>
+    <div class="acomp-cod">#${esc(p.numeroPedido || '')}</div>
+    <p class="gc-dica">Fale este número no balcão.</p>
+    ${p.clienteChegouEm ? '<p class="acomp-chegou-ok">✅ A loja já sabe que você chegou!</p>' : `<button class="btn-primary" type="button" id="acomp-cheguei">📣 Cheguei no balcão</button><small class="gc-dica" id="acomp-cheguei-dica">Funciona quando você estiver perto da loja.</small>`}
+    <div class="acomp-ret-acoes">
+      ${rota ? `<a class="btn-outline-sm" href="${rota}" target="_blank" rel="noopener">📍 Como chegar na loja</a>` : ''}
+      <a class="btn-outline-sm" href="https://wa.me/?text=${encodeURIComponent(comprovante)}" target="_blank" rel="noopener">🧾 Compartilhar comprovante</a>
+    </div>`;
+  const btn = document.getElementById('acomp-cheguei');
+  if (!btn) return;
+  btn.onclick = () => {
+    const dica = document.getElementById('acomp-cheguei-dica');
+    const enviar = async () => {
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/cheguei', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: AppState.slug, pedidoId: p.id }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.erro || 'Não foi possível avisar agora.');
+        dica.textContent = '✅ Avisamos a loja! Já vão te entregar.';
+      } catch (err) { dica.textContent = err.message; btn.disabled = false; }
+    };
+    if (!local || !navigator.geolocation) return enviar();
+    dica.textContent = '📡 Conferindo se você está perto da loja...';
+    navigator.geolocation.getCurrentPosition((pos) => {
+      const d = distanciaMetros({ lat: pos.coords.latitude, lng: pos.coords.longitude }, local);
+      if (d > 150) { dica.textContent = `Você está a ${d >= 1000 ? (d / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(d) + ' m'} da loja. Toque de novo quando chegar.`; return; }
+      enviar();
+    }, () => enviar(), { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 });
+  };
+}
+
 // Cartão fidelidade depois da entrega (o carimbo é dado quando a loja/motoboy conclui o pedido)
 let fidelidadeMostrada = false;
 function renderFidelidade(p) {
@@ -362,6 +409,13 @@ function renderMapa(p) {
   ultimaPosicaoEm = p.gpsAtualizadoEm && p.gpsAtualizadoEm.toMillis ? p.gpsAtualizadoEm.toMillis() : ultimaPosicaoEm;
   if (!relogioPosicao) relogioPosicao = setInterval(desenharIdadePosicao, 5000);
   desenharIdadePosicao();
+  // Entrega feita pela própria loja (sem app de motoboy): sem mapa ao vivo, mostra um aviso claro
+  if (p.status === 'entrega' && p.entregaPropria && !(coords && Number.isFinite(coords.lat))) {
+    const parada0 = document.getElementById('acomp-parada');
+    if (parada0) { parada0.classList.remove('hidden'); parada0.innerHTML = '🛵 <strong>Seu pedido saiu com o entregador da própria loja.</strong><span>Não temos o mapa ao vivo nessa entrega, mas ele já está a caminho. Fique de olho no portão e no telefone.</span>'; }
+    card.classList.add('hidden');
+    return;
+  }
   // Entregador fazendo outra entrega antes desta: não mostra onde ele está (privacidade do outro cliente)
   const parada = document.getElementById('acomp-parada');
   const emParada = p.status === 'entrega' && coords && !coords.chegou && Number(coords.antes) >= 1 && !Number.isFinite(coords.lat);

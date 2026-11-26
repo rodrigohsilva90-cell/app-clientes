@@ -1,6 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import { getAuth } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
-import { getFirestore } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 // Projeto Firebase delivery-pro-38f75 (Firestore em southamerica-east1)
 export const FIREBASE_CONFIG = {
@@ -17,7 +17,15 @@ export const WORKER_API_URL = "https://api.seudominio.com.br";
 
 export const app = initializeApp(FIREBASE_CONFIG);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// No painel da loja e no app do motoboy, os pedidos ficam guardados no aparelho: se a internet da loja
+// cair, a tela continua mostrando os pedidos e as mudanças sincronizam sozinhas quando a conexão voltar.
+function criarBanco() {
+  if (/^\/[^/]+\/(painel|motoboy)(\/|$)/.test(window.location.pathname)) {
+    try { return initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); } catch (_) {}
+  }
+  return getFirestore(app);
+}
+export const db = criarBanco();
 
 // Formatação monetária segura (sempre trabalhando com centavos inteiros no banco)
 export function formatarCentavos(centavos) {
