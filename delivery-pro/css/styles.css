@@ -293,7 +293,10 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 .ms-kpi strong { font-size: 26px; }
 .ms-kpi span { font-size: 13px; color: var(--text-muted); }
 .ms-kpi.ativo { border-color: var(--primary); }
-.ms-barra { display: flex; gap: 8px; margin-bottom: 12px; }
+.ms-barra { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+.ms-barra input { min-width: 220px; }
+@media (max-width: 640px) { .ms-barra input { flex-basis: 100%; } .ms-barra > .btn-primary, .ms-barra > .btn-outline-sm { flex: 1 1 auto; text-align: center; min-height: 44px; } }
+.ms-barra a.btn-outline-sm { color: inherit; display: inline-flex; align-items: center; justify-content: center; }
 .ms-barra input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 99px; font-size: 14px; }
 .ms-loja.alerta { border-color: var(--danger); }
 .ms-topo { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
