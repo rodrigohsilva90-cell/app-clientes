@@ -31,6 +31,9 @@ let ligarGps = null;            // liga o GPS (fica desligado quando não há en
 let ultimoAtualId = null;
 let ultimoSnap = null;          // última leitura da fila (para redesenhar na hora após baixa sem sinal)
 let qtdRotaAnterior = 0;
+let minhasReservas = [];        // pedidos que reservei "para a volta" (a cozinha segue; pego quando chegar na loja)
+const RESERVA_VALIDA_MS = 90 * 60 * 1000;
+const reservaAtiva = (p) => Boolean(p.reservadoPor) && (Date.now() - (p.reservadoEm && p.reservadoEm.toMillis ? p.reservadoEm.toMillis() : 0)) < RESERVA_VALIDA_MS;
 const baixasGuardadas = () => new Set(lerJson(OFFLINE_QUEUE_KEY, []).map(i => i.pedidoId));
 const lerJson = (k, padrao) => { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? padrao; } catch (_) { return padrao; } };
 const gravarJson = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} };
@@ -80,6 +83,7 @@ export function iniciarMotoboy() {
     <div data-painel="rota" class="hidden">
       <!-- Container da Entrega Ativa (Visível apenas quando há rota assumida) -->
       <div id="box-entrega-ativa" class="hidden"></div>
+      <div id="mb-reservas"></div>
       <div id="mb-rota-vazia" class="card"><p style="color:var(--text-muted);">Nenhuma entrega na sua mão. Pegue uma na aba 📦 Disponíveis.</p></div>
     </div>
   `;
@@ -290,8 +294,8 @@ function mostrarAbaMotoboy(aba) {
 }
 function atualizarAbasMotoboy(qtdDisponiveis) {
   const cf = document.getElementById('mb-cont-fila'); if (cf) cf.textContent = qtdDisponiveis;
-  const cr = document.getElementById('mb-cont-rota'); if (cr) cr.textContent = minhasEntregas.length;
-  const vazia = document.getElementById('mb-rota-vazia'); if (vazia) vazia.classList.toggle('hidden', minhasEntregas.length > 0);
+  const cr = document.getElementById('mb-cont-rota'); if (cr) cr.textContent = minhasEntregas.length + (minhasReservas.length ? ` +📌${minhasReservas.length}` : '');
+  const vazia = document.getElementById('mb-rota-vazia'); if (vazia) vazia.classList.toggle('hidden', minhasEntregas.length > 0 || minhasReservas.length > 0);
   // Pegou entrega: vai direto para a rota. Terminou tudo: volta para as disponíveis
   if (minhasEntregas.length > qtdRotaAnterior) mostrarAbaMotoboy('rota');
   else if (!minhasEntregas.length && qtdRotaAnterior) mostrarAbaMotoboy('fila');
@@ -305,10 +309,52 @@ function avisarBaixasGuardadas() {
   el.textContent = n ? `📤 ${n} baixa(s) guardada(s) no celular. Envia sozinho quando o sinal voltar — pode seguir viagem.` : '';
 }
 
+// Reservar / desistir (passa pelo servidor: o pedido continua em preparo, a cozinha não depende do motoboy)
+async function reservar(pedidoId, acao) {
+  if (!navigator.onLine) { showToast('📵 Sem internet para reservar agora.'); return false; }
+  try {
+    const u = auth.currentUser;
+    const r = await fetch('/api/motoboy/reserva', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await u.getIdToken()}` }, body: JSON.stringify({ lojaId: AppState.lojaId, pedidoId, acao }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast(d.erro || 'Não foi possível reservar.', 5000); return false; }
+    return true;
+  } catch (_) { showToast('Sem conexão. Tente de novo.'); return false; }
+}
+
+function renderizarReservas(motoboyUid) {
+  const box = document.getElementById('mb-reservas');
+  if (!box) return;
+  const vazia = document.getElementById('mb-rota-vazia');
+  if (vazia) vazia.classList.toggle('hidden', minhasEntregas.length > 0 || minhasReservas.length > 0);
+  if (!minhasReservas.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="card mb-reservas">
+    <strong>📌 Reservados para buscar na loja (${minhasReservas.length})</strong>
+    <p class="gc-dica">A cozinha segue preparando. Quando chegar na loja e pegar a bag, toque em "Peguei".</p>
+    ${minhasReservas.map(p => `<div class="mb-bag-linha" style="align-items:center;">
+      <span style="flex:1; min-width:150px;"><strong>#${esc(p.numeroPedido || p.id.slice(0, 4))}</strong> · ${esc(p.enderecoPartes && p.enderecoPartes.bairro ? p.enderecoPartes.bairro : p.enderecoTexto || '')}
+        <small style="display:block;" class="${p.pronto ? 'mb-pago' : 'gc-dica'}">${p.pronto ? '✅ Pronto, esperando você' : '🍳 Ainda sendo preparado'}</small></span>
+      <button class="btn-primary" type="button" style="width:auto;" data-peguei="${esc(p.id)}">✅ Peguei na loja</button>
+      <button class="btn-outline-sm" type="button" data-desistir="${esc(p.id)}">Desistir</button>
+    </div>`).join('')}
+  </div>`;
+  box.querySelectorAll('[data-peguei]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const ok = await assumirEntregaAtomica(b.dataset.peguei, motoboyUid);
+    if (!ok) b.disabled = false; else { try { navigator.vibrate && navigator.vibrate(40); } catch (_) {} }
+  });
+  box.querySelectorAll('[data-desistir]').forEach(b => b.onclick = async () => {
+    if (!confirm('Desistir deste pedido? Ele volta para a lista de todos os entregadores.')) return;
+    b.disabled = true;
+    if (await reservar(b.dataset.desistir, 'cancelar')) showToast('Reserva desfeita.');
+    else b.disabled = false;
+  });
+}
+
 // 2. Escuta Entregas Prontas e Entrega Ativa do Próprio Motoboy (LGPD)
 function processarEntregas(motoboyUid) {
     if (!ultimoSnap) return;
     const guardadas = baixasGuardadas();
+    const reservasAgora = [];
     const disponiveis = [];
     const minhas = [];
     let trocoTotalCentavos = 0;
@@ -322,7 +368,9 @@ function processarEntregas(motoboyUid) {
           trocoTotalCentavos += (p.trocoParaCentavos - p.totalCentavos);
         }
       } else if (!p.motoboyId && p.status === 'preparo' && p.tipoEntrega !== 'retirada') {
-        disponiveis.push(p);
+        // Reservado por mim: vai para "Minha rota"; reservado por outro: some da lista dos outros
+        if (reservaAtiva(p) && p.reservadoPor === motoboyUid) reservasAgora.push(p);
+        else if (!reservaAtiva(p)) disponiveis.push(p);
       }
     });
 
@@ -338,12 +386,15 @@ function processarEntregas(motoboyUid) {
     if (trocoEl) trocoEl.textContent = formatarCentavos(trocoTotalCentavos);
 
     // Só redesenha a tela se mudou algo além do GPS (senão o mapa piscaria a cada 8 s)
-    const assinatura = JSON.stringify([minhasEntregas.map(p => [p.id, p.status, p.enderecoTexto, p.totalCentavos]), disponiveis.map(p => p.id)]);
+    const assinatura = JSON.stringify([minhasEntregas.map(p => [p.id, p.status, p.enderecoTexto, p.totalCentavos]), disponiveis.map(p => p.id), reservasAgora.map(p => [p.id, p.pronto])]);
+    minhasReservas = reservasAgora;
     atualizarAbasMotoboy(disponiveis.length);
     if (assinatura === assinaturaTela) return;
     assinaturaTela = assinatura;
     renderizarEntregaAtiva(pedidoEmRotaAtual, motoboyUid);
     renderizarFilaDisponivel(disponiveis, motoboyUid, minhasEntregas.length >= MAX_ENTREGAS_ROTA);
+    minhasReservas = reservasAgora;
+    renderizarReservas(motoboyUid);
 }
 
 function escutarEntregas(motoboyUid) {
@@ -377,6 +428,9 @@ async function assumirEntregaAtomica(pedidoId, motoboyUid) {
 
       if (dados.motoboyId) {
         throw new Error('Outro entregador acabou de assumir este pedido!');
+      }
+      if (dados.reservadoPor && dados.reservadoPor !== motoboyUid && reservaAtiva(dados)) {
+        throw new Error(`${dados.reservadoNome || 'Outro entregador'} reservou este pedido para a volta.`);
       }
 
       transaction.update(pedidoRef, {
@@ -688,6 +742,8 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
     // Pedido extra que desvia muito da rota já assumida fica para outro entregador (o balcão ainda pode forçar)
     const desvio = minhasEntregas.length ? desvioDoPedido(p) : 0;
     const foraDaRota = desvio > LIMITE_DESVIO_M;
+    const naRua = minhasEntregas.length > 0;
+    // Na rua: "Levar agora" só se cabe na rota; "Reservar para a volta" sempre (a cozinha não fica esperando)
     const travado = bloqueadoPorRotaAtiva || foraDaRota || turnoEncerrado;
     return `
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
@@ -696,13 +752,25 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
         <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoPartes && p.enderecoPartes.bairro ? p.enderecoPartes.bairro + ' · ' : '')}${esc(p.enderecoTexto)}</p>
         <span style="font-size:13px; font-weight:600;">${formatarCentavos(p.totalCentavos)} • ${esc((p.formaPagamento || '').toUpperCase())}${pago(p) ? ' · ✅ pago' : ''}</span>
         ${AppState.lojaDados.repasse ? `<small class="mb-ganho">💰 Você ganha ${formatarCentavos(calcularRepasse(AppState.lojaDados.repasse, { ...p, adicionalChuva: p.adicionalChuva }))}${p.adicionalChuva ? ' (com 🌧 adicional)' : ''}</small>` : ''}
-        ${minhasEntregas.length && p.destinoCoords ? `<small class="${foraDaRota ? 'mb-cobrar' : 'gc-dica'}" style="display:block;">${foraDaRota ? `Fora da sua rota (+${(desvio / 1000).toFixed(1).replace('.', ',')} km): deixe para outro entregador` : `Desvio de +${(desvio / 1000).toFixed(1).replace('.', ',')} km na sua rota`}</small>` : ''}
+        ${minhasEntregas.length && p.destinoCoords ? `<small class="gc-dica" style="display:block;">${foraDaRota ? `Longe da rota atual (+${(desvio / 1000).toFixed(1).replace('.', ',')} km): reserve para a próxima saída` : `Desvio de +${(desvio / 1000).toFixed(1).replace('.', ',')} km na sua rota`}</small>` : ''}
+        ${p.pronto ? '<small class="mb-pago" style="display:block;">✅ Pronto na loja</small>' : '<small class="gc-dica" style="display:block;">🍳 Ainda sendo preparado</small>'}
       </div>
-      <button class="btn-primary" style="width:auto;" ${travado ? 'disabled' : ''} data-assumir="${p.id}">
-        ${turnoEncerrado ? 'Turno encerrado' : bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : foraDaRota ? 'Fora da rota' : minhasEntregas.length ? '+ Levar também' : 'Pegar Entrega'}
+      <div class="mb-botoes-fila">
+      <button class="btn-primary" style="width:auto;${travado && naRua ? ' display:none;' : ''}" ${travado ? 'disabled' : ''} data-assumir="${p.id}">
+        ${turnoEncerrado ? 'Turno encerrado' : bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : foraDaRota ? 'Longe da rota' : minhasEntregas.length ? '+ Levar agora' : 'Pegar Entrega'}
       </button>
+      ${naRua && !turnoEncerrado ? `<button class="btn-outline-sm" type="button" data-reservar="${p.id}">📌 Reservar para a volta</button>` : ''}
+      </div>
     </div>`;
   }).join('');
+  lista.querySelectorAll('button[data-reservar]').forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = '⏳ Reservando...';
+      const ok = await reservar(btn.dataset.reservar, 'reservar');
+      if (ok) { try { navigator.vibrate && navigator.vibrate(40); } catch (_) {} showToast('📌 Reservado! Pegue na loja quando voltar. A cozinha segue preparando.', 5000); }
+      else if (document.body.contains(btn)) { btn.disabled = false; btn.textContent = '📌 Reservar para a volta'; }
+    };
+  });
 
   lista.querySelectorAll('button[data-assumir]').forEach(btn => {
     btn.onclick = async () => {

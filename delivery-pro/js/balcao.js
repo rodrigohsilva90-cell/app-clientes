@@ -448,6 +448,7 @@ function criarCardPedidoBalcao(p) {
     ${trocoTxt}
     ${p.status === 'novo' && minutos >= MIN_ALERTA ? `<div class="pedido-aviso">⚠️ Aguardando aceite há ${minutos} min — cancela sozinho com ${MIN_CANCELAR} min</div>` : ''}
     ${p.status === 'preparo' && p.pronto ? `<div class="pedido-pronto">✅ ${textoLoja('Cozinha', AppState.lojaDados)}: pronto</div>` : ''}
+    ${p.status === 'preparo' && p.reservadoPor && p.reservadoEm?.toMillis && Date.now() - p.reservadoEm.toMillis() < 90 * 60000 ? `<div class="pedido-reserva">📌 ${esc(p.reservadoNome || 'Entregador')} reservou — busca quando voltar da rota</div>` : ''}
     ${p.status === 'entrega' ? `<div style="font-size:13px; margin-bottom:8px;">🛵 Com: <strong>${esc(p.motoboyNome || (p.motoboyId ? 'entregador (app)' : 'sem entregador'))}</strong></div>` : ''}
     ${p.status === 'entrega' && linkAvisoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin-bottom:8px;" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>` : ''}
     ${botaoAcao}
@@ -823,7 +824,7 @@ async function despacharParaEntregador(p) {
         <button class="btn-outline-sm" data-fechar>✕</button>
       </div>
       ${entregadores.map(e => `
-        <button class="btn-outline-sm" data-uid="${esc(e.uid)}" style="width:100%; text-align:left; padding:12px; margin-bottom:8px; font-size:15px;">🛵 ${esc(e.nome)}</button>
+        <button class="btn-outline-sm" data-uid="${esc(e.uid)}" style="width:100%; text-align:left; padding:12px; margin-bottom:8px; font-size:15px;">🛵 ${esc(e.nome)}${p.reservadoPor === e.uid ? ' <small>📌 reservou este</small>' : ''}</button>
       `).join('')}
       <button class="btn-outline-sm" data-propria="1" style="width:100%; text-align:left; padding:12px; margin-bottom:8px; font-size:15px;">🙋 Eu mesmo / entregador sem o app</button>
       ${entregadores.length ? '' : '<p class="gc-dica">Nenhum motoboy cadastrado com o app. Cadastre em ⚙ Configurações → Equipe, ou faça a entrega você mesmo.</p>'}

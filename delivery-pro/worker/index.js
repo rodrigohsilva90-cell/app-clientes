@@ -91,6 +91,9 @@ export default {
       if (url.pathname === '/api/motoboy/turno' && request.method === 'POST') {
         return turnoMotoboy(request, env);
       }
+      if (url.pathname === '/api/motoboy/reserva' && request.method === 'POST') {
+        return reservaMotoboy(request, env);
+      }
       if (url.pathname === '/api/acertos' && request.method === 'POST') {
         return acertosMotoboy(request, env);
       }
@@ -990,6 +993,54 @@ async function extratoTurno(fs, lojaId, uid, loja) {
 }
 
 // App do motoboy: ver o extrato do turno e pedir o encerramento (o balcão confirma o acerto)
+// Motoboy na rua reserva o próximo pedido "para a volta": a cozinha segue normal (o pedido continua em preparo)
+// e, quando ele chega na loja, toca em "Peguei na loja" (aí sim vira "saiu para entrega").
+const RESERVA_VALIDA_MS = 90 * 60 * 1000;
+async function reservaMotoboy(request, env) {
+  try {
+    if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);
+    let corpo;
+    try { corpo = await request.json(); } catch (_) { throw new ErroPedido('Dados inválidos.'); }
+    const lojaId = String(corpo.lojaId || '');
+    const pedidoId = String(corpo.pedidoId || '');
+    if (!/^[A-Za-z0-9_-]{2,60}$/.test(lojaId) || !/^[A-Za-z0-9_]{6,100}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
+    const conta = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+    const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    let usuario;
+    try { usuario = await verificarTokenFirebase(token, conta.project_id); }
+    catch (_) { throw new ErroPedido('Sessão inválida. Entre de novo.', 401); }
+    const fs = await firestore(env);
+    const entregador = await fs.ler(`lojas/${lojaId}/entregadores/${usuario.sub}`);
+    if (!entregador) throw new ErroPedido('Sua conta não é de entregador desta loja.', 403);
+    const caminho = `lojas/${lojaId}/pedidos/${pedidoId}`;
+    for (let tentativa = 0; tentativa < 3; tentativa++) {
+      const lido = await fs.lerComVersao(caminho);
+      if (!lido) throw new ErroPedido('Pedido não encontrado.', 404);
+      const p = lido.dados;
+      const reservaAtiva = p.reservadoPor && (Date.now() - (Date.parse(p.reservadoEm) || 0)) < RESERVA_VALIDA_MS;
+      let dados;
+      if (corpo.acao === 'cancelar') {
+        if (p.reservadoPor !== usuario.sub) return jsonResponse({ ok: true });
+        dados = { reservadoPor: null, reservadoNome: null, reservadoEm: null };
+      } else {
+        if (p.tipoEntrega === 'retirada') throw new ErroPedido('Este pedido é para o cliente retirar na loja.', 409);
+        if (p.motoboyId || !['novo', 'preparo'].includes(p.status)) throw new ErroPedido('Este pedido já saiu com outro entregador.', 409);
+        if (reservaAtiva && p.reservadoPor !== usuario.sub) throw new ErroPedido(`${p.reservadoNome || 'Outro entregador'} já reservou este pedido.`, 409);
+        const minhas = (await fs.consultarIgual(`lojas/${lojaId}`, 'pedidos', 'reservadoPor', usuario.sub, 20))
+          .filter(x => x.id !== pedidoId && ['novo', 'preparo'].includes(x.status) && !x.motoboyId && (Date.now() - (Date.parse(x.reservadoEm) || 0)) < RESERVA_VALIDA_MS);
+        if (minhas.length >= 3) throw new ErroPedido('Você já reservou 3 pedidos. Busque esses primeiro.', 409);
+        dados = { reservadoPor: usuario.sub, reservadoNome: String(entregador.nome || 'Entregador').slice(0, 40), reservadoEm: new Date() };
+      }
+      if (await fs.atualizarSeVersao(caminho, dados, lido.versao)) return jsonResponse({ ok: true });
+    }
+    throw new ErroPedido('Muita gente mexendo neste pedido agora. Tente de novo.', 409);
+  } catch (err) {
+    if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
+    console.error('reservaMotoboy', err && err.stack || err);
+    return jsonResponse({ erro: 'Não foi possível reservar agora.' }, 500);
+  }
+}
+
 async function turnoMotoboy(request, env) {
   try {
     if (!env.FIREBASE_SERVICE_ACCOUNT) throw new ErroPedido('Indisponível.', 503);

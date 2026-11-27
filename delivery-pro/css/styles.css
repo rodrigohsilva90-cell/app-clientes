@@ -822,3 +822,9 @@ details.gc-secao > summary small { font-weight: 400; font-size: 12px; color: var
 .vt-lupa-seta { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 44px; height: 64px; border: none; background: rgba(0,0,0,.55); color: #fff; font-size: 34px; cursor: pointer; border-radius: 10px; box-shadow: 0 0 0 1px rgba(255,255,255,.3); }
 .vt-lupa-seta.esq { left: 8px; } .vt-lupa-seta.dir { right: 8px; }
 .vt-lupa-dica { color: #cbd5e1; font-size: 13px; padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); text-align: center; }
+
+/* Reserva do motoboy "para a volta" */
+.pedido-reserva { font-size: 13px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; border-radius: 8px; padding: 6px 8px; margin-bottom: 8px; }
+.mb-reservas { border: 2px dashed var(--primary); }
+.mb-botoes-fila { display: flex; flex-direction: column; gap: 6px; align-items: stretch; flex-shrink: 0; }
+.mb-botoes-fila button { min-height: 44px; }

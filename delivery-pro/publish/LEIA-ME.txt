@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 3342b2c842c4be42336f213fc90ab8e590f903390ab6f5ba53bc8b5b9504971d).
+worker.js = cópia EXATA do que está no ar (sha256 bd8512b23c8ee1eaefcca9ec0bc826f53cd79c032e2c8a3dff8da4551a09415f).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
@@ -37,3 +37,4 @@ Tamanhos: grupo com tipo "tamanho" (mín 1, máx 1, SOMA, preço base 0): editor
 Varejo (layoutVitrine 'varejo', escolhido no cadastro "O que você vende?" ou em Aparência): grupo tipo "cor"; estoque por variação produto.controlarGrade + estoqueGrade {"Tamanho|Cor": qtd} ("-" sem grupo) — Worker valida/baixa (chaveGrade), /api/estoque aceita variacao, venda do balcão manda selecoes; vitrine desabilita variação esgotada; produto.fotos (até 5, 1ª = imagemUrl) com galeria na janela; textoLoja() troca cardápio/cozinha/comanda por catálogo/separação/pedido; modelos "roupas" e "calcados".
 Lupa (varejo): fotos da janela do produto com 🔍; toque abre tela cheia (abrirLupa em js/vitrine.js), toque aproxima 2,6x no ponto, arrastar move, ‹ › troca de foto, Esc fecha.
 Velocidade: router.js carrega cada tela sob demanda (import dinâmico) e já começa a baixar junto com os dados; Worker põe <meta name="loja-id"> na página da loja (pula a leitura de slugs); sw.js: /js e /css da cópia do aparelho + atualização por trás, bibliotecas versionadas (Firebase, Leaflet) só da cópia, páginas com limite de 3 s; leaflet.js com defer. Toda publicação precisa trocar o CACHE_NAME e manter STATIC_ASSETS completo.
+Reserva do motoboy "para a volta": /api/motoboy/reserva (reservar/cancelar) grava reservadoPor/reservadoNome/reservadoEm no pedido (continua em preparo; vale 90 min; máx. 3 por motoboy). Na rua, a fila mostra "📌 Reservar para a volta" sem trava de rota; "✅ Peguei na loja" usa a mesma transação de assumir (recusa se outro reservou). Balcão mostra "📌 Fulano reservou" e pode despachar para qualquer um.
