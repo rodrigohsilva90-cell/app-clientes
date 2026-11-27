@@ -760,3 +760,15 @@ details.gc-secao > summary small { font-weight: 400; font-size: 12px; color: var
 .gc-add-linha .gc-add-prod { flex: 1; margin-top: 0; }
 .gc-add-sub { background: none; border: 1px dashed var(--border); border-radius: 8px; padding: 6px 8px; cursor: pointer; color: var(--text-muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
 .gc-add-prod-sub { font-size: 12px; padding: 4px; }
+
+/* Produto com tamanhos (ex.: Bolo → Inteiro / Fatia / Pedaço) e janela de opções */
+.vt-tamanhos { display: block; font-size: 12px; color: var(--text-muted); margin: 2px 0; }
+.vt-tamanhos b { color: var(--text); }
+.vt-grupo-opcoes { border-top: 1px solid var(--border); padding: 10px 0; }
+.vt-grupo-regra { display: block; color: var(--text-muted); margin-bottom: 6px; font-size: 12px; }
+.vt-opcao { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 4px; min-height: 44px; cursor: pointer; border-radius: 10px; }
+.vt-opcao:has(input:checked) { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.vt-opcao-preco { white-space: nowrap; color: var(--text-muted); }
+.vt-grupo-opcoes.tamanhos .vt-opcao { border: 1px solid var(--border); margin-bottom: 6px; padding: 10px 12px; }
+.vt-grupo-opcoes.tamanhos .vt-opcao:has(input:checked) { border-color: var(--primary); }
+.vt-grupo-opcoes.tamanhos .vt-opcao-preco { color: var(--text); font-weight: 700; font-size: 16px; }

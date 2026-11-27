@@ -275,6 +275,7 @@ function renderizarProdutos(dados, modoLayout) {
               <div class="vt-produto-info">
                 <strong>${esc(prod.nome)}</strong>${comSub && prod.subcategoriaNome ? `<small class="vt-sub-tag">${esc(prod.subcategoriaNome)}</small>` : ''}
                 ${prod.descricao ? `<p>${esc(prod.descricao)}</p>` : ''}
+                ${(() => { const t = (prod.grupos || []).find(g => g.tipo === 'tamanho'); return t ? `<span class="vt-tamanhos">${t.opcoes.map(o => `${esc(o.nome)} <b>${formatarCentavos(o.precoCentavos)}</b>`).join(' · ')}</span>` : ''; })()}
                 ${oferta && !esgotado ? `<span class="vt-oferta">🔥 Oferta do dia</span>` : ''}
                 <span class="vt-preco">${esgotado ? 'Esgotado' : `${temOpcoes && !oferta ? '<small>A partir de</small> ' : ''}${oferta ? `<s>${formatarCentavos(oferta.deCentavos)}</s> ` : ''}${formatarCentavos(preco)}`}</span>
               </div>
@@ -384,30 +385,36 @@ function abrirModalProduto(prod) {
       <h3>${esc(prod.nome)}</h3>
       <button class="btn-outline-sm" id="fechar-modal-prod" aria-label="Fechar">✕</button>
     </div>
-    ${(prod.grupos || []).map((grp, idx) => `
-      <div style="border-top:1px solid var(--border); padding:10px 0;">
+    ${prod.descricao ? `<p class="gc-dica" style="margin:-6px 0 10px;">${esc(prod.descricao)}</p>` : ''}
+    ${(prod.grupos || []).map((grp, idx) => {
+      const unico = Number(grp.maximo || 1) === 1;
+      const tamanho = grp.tipo === 'tamanho';
+      const regra = unico ? (Number(grp.minimo) > 0 ? 'Escolha 1 · obrigatório' : 'Escolha 1 (opcional)')
+        : `Escolha ${Number(grp.minimo) > 0 ? `de ${grp.minimo} ` : ''}até ${grp.maximo}${grp.regraDePreco === 'MAIOR_VALOR' ? ' · cobra o de maior valor' : grp.regraDePreco === 'MEDIA' ? ' · cobra a média' : ''}`;
+      return `
+      <div class="vt-grupo-opcoes${tamanho ? ' tamanhos' : ''}">
         <strong>${esc(grp.titulo)}</strong>
-        <small style="display:block; color:var(--text-muted); margin-bottom:6px;">
-          Escolha de ${grp.minimo || 0} até ${grp.maximo || 1} (${grp.regraDePreco || 'SOMA'})
-        </small>
+        <small class="vt-grupo-regra">${regra}</small>
         ${(grp.opcoes || []).map((op, opIdx) => `
-          <label style="display:flex; justify-content:space-between; padding:6px 0; cursor:pointer;">
+          <label class="vt-opcao">
             <span>
-              <input type="checkbox" data-grp="${idx}" data-op="${opIdx}" />
+              <input type="${unico ? 'radio' : 'checkbox'}" name="grp-${idx}" data-grp="${idx}" data-op="${opIdx}" />
               ${esc(op.nome)}
             </span>
-            <span>+${formatarCentavos(op.precoCentavos)}</span>
+            <span class="vt-opcao-preco">${tamanho ? formatarCentavos(op.precoCentavos) : Number(op.precoCentavos) ? `+${formatarCentavos(op.precoCentavos)}` : ''}</span>
           </label>
         `).join('')}
       </div>
-    `).join('')}
+    `; }).join('')}
     <div class="vt-gaveta-rodape"><button class="btn-primary" id="confirmar-item-modal">Adicionar</button></div>
   `;
   // Preço ao vivo no botão (conta o que já foi escolhido)
   const atualizarBotaoPreco = () => {
     const parcial = montarItem({ ...prod, grupos: (prod.grupos || []).map(g => ({ ...g, minimo: 0 })) }, selecoesAtuais, AppState.lojaDados);
     const b = document.getElementById('confirmar-item-modal');
-    if (b && parcial.item) b.textContent = `Adicionar • ${formatarCentavos(parcial.item.unitarioCentavos)}`;
+    const falta = (prod.grupos || []).find((g, i) => Number(g.minimo) > 0 && (selecoesAtuais[i] || []).length < Number(g.minimo));
+    if (b && falta) b.textContent = `Escolha: ${falta.titulo}`;
+    else if (b && parcial.item) b.textContent = `Adicionar • ${formatarCentavos(parcial.item.unitarioCentavos)}`;
   };
 
   modal.classList.remove('hidden');
@@ -415,14 +422,16 @@ function abrirModalProduto(prod) {
   document.getElementById('fechar-modal-prod').onclick = () => modal.classList.add('hidden');
   modal.onclick = (e) => { if (e.target === modal) modal.classList.add('hidden'); };
 
-  content.querySelectorAll('input[type="checkbox"]').forEach(chk => {
+  content.querySelectorAll('input[data-grp]').forEach(chk => {
     chk.onchange = () => {
       const gIdx = Number(chk.dataset.grp);
       const oIdx = Number(chk.dataset.op);
       const grupo = prod.grupos[gIdx];
       selecoesAtuais[gIdx] = selecoesAtuais[gIdx] || [];
 
-      if (chk.checked) {
+      if (chk.type === 'radio') {
+        selecoesAtuais[gIdx] = [grupo.opcoes[oIdx]];
+      } else if (chk.checked) {
         if (selecoesAtuais[gIdx].length >= (grupo.maximo || 1)) {
           chk.checked = false;
           showToast(`Máximo de ${grupo.maximo} opção(ões) neste grupo.`);

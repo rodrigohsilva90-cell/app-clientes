@@ -283,6 +283,9 @@ export async function abrirGestaoCardapio() {
       return;
     }
     const esgotado = Boolean(esgotadoAgora(p, AppState.lojaDados));
+    const gT = (p.grupos || []).findIndex(g => g.tipo === 'tamanho');
+    const tamanhos = gT >= 0 ? p.grupos[gT] : null;
+    const outrosGrupos = (p.grupos || []).filter(g => g.tipo !== 'tamanho').length;
     const foto = urlSegura(p.imagemUrl);
     p.grupos = p.grupos || [];
 
@@ -316,12 +319,29 @@ export async function abrirGestaoCardapio() {
           })()}
           <div>
             <label>Preço (R$)</label>
-            <input data-campo="preco" inputmode="decimal" value="${centavosParaTexto(p.precoCentavos)}" placeholder="0,00" />
+            ${tamanhos ? `<input value="no tamanho" disabled title="O preço vem do tamanho escolhido" />` : `<input data-campo="preco" inputmode="decimal" value="${centavosParaTexto(p.precoCentavos)}" placeholder="0,00" />`}
           </div>
         </div>
-        <p class="gc-dica">${p.grupos.length ? 'Produto com opções: o preço acima é somado ao das opções escolhidas. Para pizza por sabor, deixe 0,00.' : 'Preço final do produto.'}</p>
+        <p class="gc-dica">${tamanhos ? 'O preço é o de cada tamanho (veja abaixo).' : p.grupos.length ? 'Produto com opções: o preço acima é somado ao das opções escolhidas. Para pizza por sabor, deixe 0,00.' : 'Preço final do produto.'}</p>
 
         </section>
+        <details class="gc-secao" data-secao="tamanhos" ${aberta('tamanhos', Boolean(tamanhos))}>
+        <summary>📏 Tamanhos e preços <small>${tamanhos ? tamanhos.opcoes.map(o => esc(o.nome || '?')).join(' · ') : 'ex.: Inteiro, Fatia, Pedaço'}</small></summary>
+        ${tamanhos ? `
+          <p class="gc-dica">O cliente toca no produto, vê os tamanhos com o preço de cada um e escolhe um.</p>
+          ${tamanhos.opcoes.map((o, oi) => `
+            <div class="gc-opcao">
+              <input data-g="${gT}" data-o="${oi}" data-ocampo="nome" value="${esc(o.nome || '')}" placeholder="Ex.: Inteiro" />
+              <input data-g="${gT}" data-o="${oi}" data-ocampo="preco" inputmode="decimal" value="${centavosParaTexto(o.precoCentavos)}" placeholder="0,00" />
+              <button class="btn-outline-sm" data-acao="rem-opcao" data-g="${gT}" data-o="${oi}" title="Remover tamanho">✕</button>
+            </div>`).join('')}
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn-outline-sm" data-acao="add-opcao" data-g="${gT}">+ Tamanho</button>
+            <button class="btn-outline-sm gc-perigo" data-acao="rem-tamanhos">Tirar tamanhos</button>
+          </div>`
+        : `<p class="gc-dica">Use quando o mesmo produto tem vários tamanhos com preços diferentes. Ex.: Bolo de chocolate → Inteiro R$ 60, Fatia R$ 9, Pedaço R$ 6.</p>
+           <button class="btn-outline-sm gc-largo" data-acao="add-tamanhos">+ Adicionar tamanhos</button>`}
+        </details>
         <section class="gc-secao">
         <h4 class="gc-secao-titulo">📷 Foto</h4>
         <div class="gc-foto-linha">
@@ -363,11 +383,11 @@ export async function abrirGestaoCardapio() {
         <p class="gc-dica">Nos dias marcados o cliente vê "de ${formatarCentavos(p.precoCentavos || 0)} por ..." e paga o preço da oferta. Nos outros dias vale o preço normal.</p>
 
         </details>
-        <details class="gc-secao" data-secao="opcoes" ${aberta('opcoes', p.grupos.length > 0)}>
-        <summary>🧩 Opções: sabores, bordas, adicionais <small>${p.grupos.length ? `${p.grupos.length} grupo(s)` : 'nenhuma'}</small></summary>
+        <details class="gc-secao" data-secao="opcoes" ${aberta('opcoes', outrosGrupos > 0)}>
+        <summary>🧩 Opções: sabores, bordas, adicionais <small>${outrosGrupos ? `${outrosGrupos} grupo(s)` : 'nenhuma'}</small></summary>
         <p class="gc-dica">Use para o cliente escolher: sabores da pizza, ponto da carne, borda, adicionais. Ex.: grupo "Sabores", escolha de 1 até 2.</p>
         <div id="gc-grupos">
-          ${p.grupos.map((g, gi) => `
+          ${p.grupos.map((g, gi) => g.tipo === 'tamanho' ? '' : `
             <div class="gc-grupo">
               <div class="gc-linha">
                 <div style="flex:2;">
@@ -446,7 +466,7 @@ export async function abrirGestaoCardapio() {
       else o.precoCentavos = reaisParaCentavos(el.value);
     } else return;
     marcarAlterado();
-    if (campo === 'nome') renderLista();
+    if (campo === 'nome' || campo === 'preco' || el.dataset.ocampo === 'preco') renderLista();
   };
 
   // Mudanças que redesenham (selects, checkbox, foto)
@@ -503,7 +523,17 @@ export async function abrirGestaoCardapio() {
       });
       return;
     }
-    if (acao === 'add-grupo') {
+    if (acao === 'add-tamanhos') {
+      // O preço que já estava vira o primeiro tamanho; o produto passa a custar o tamanho escolhido
+      const base = Number(p.precoCentavos) || 0;
+      p.grupos.unshift({ tipo: 'tamanho', titulo: 'Tamanho', minimo: 1, maximo: 1, regraDePreco: 'SOMA', opcoes: [{ nome: '', precoCentavos: base }, { nome: '', precoCentavos: 0 }] });
+      p.precoCentavos = 0;
+      secoesAbertas.set(`${p.id}:tamanhos`, true);
+    } else if (acao === 'rem-tamanhos') {
+      if (!confirm('Tirar os tamanhos deste produto? Depois informe o preço único dele.')) return;
+      const i = p.grupos.findIndex(g => g.tipo === 'tamanho');
+      if (i >= 0) { p.precoCentavos = Number(p.grupos[i].opcoes[0]?.precoCentavos) || 0; p.grupos.splice(i, 1); }
+    } else if (acao === 'add-grupo') {
       p.grupos.push({ titulo: '', minimo: 0, maximo: 1, regraDePreco: 'SOMA', opcoes: [{ nome: '', precoCentavos: 0 }] });
     } else if (acao === 'rem-grupo') {
       if (!confirm('Remover este grupo de opções?')) return;
@@ -545,6 +575,13 @@ export async function abrirGestaoCardapio() {
         if (!por) { abrir(); return `Informe o preço da oferta de "${nome}" (ou desmarque os dias).`; }
         if (por >= (p.precoCentavos || 0)) { abrir(); return `A oferta de "${nome}" precisa ser mais barata que o preço normal.`; }
         if (!(p.oferta.dias || []).length) { abrir(); return `Marque em quais dias vale a oferta de "${nome}".`; }
+      }
+      const tam = (p.grupos || []).find(g => g.tipo === 'tamanho');
+      if (tam) {
+        if ((tam.opcoes || []).length < 1) { abrir(); return `"${nome}": adicione pelo menos um tamanho.`; }
+        if (tam.opcoes.some(o => !(o.nome || '').trim())) { abrir(); return `"${nome}": dê um nome para cada tamanho (ex.: Inteiro, Fatia).`; }
+        if (tam.opcoes.some(o => !(Number(o.precoCentavos) > 0))) { abrir(); return `"${nome}": informe o preço de cada tamanho.`; }
+        if (p.oferta && p.oferta.precoCentavos) { abrir(); return `"${nome}" tem tamanhos: a oferta do dia não vale para produto com tamanhos. Tire a oferta.`; }
       }
       for (const g of p.grupos || []) {
         const titulo = (g.titulo || '').trim();
@@ -589,6 +626,7 @@ export async function abrirGestaoCardapio() {
         minimo: Number(g.minimo) || 0,
         maximo: Number(g.maximo) || 1,
         regraDePreco: g.regraDePreco || 'SOMA',
+        ...(g.tipo === 'tamanho' ? { tipo: 'tamanho' } : {}),
         opcoes: g.opcoes.map(o => ({ nome: o.nome.trim(), precoCentavos: o.precoCentavos || 0 }))
       }));
     }
