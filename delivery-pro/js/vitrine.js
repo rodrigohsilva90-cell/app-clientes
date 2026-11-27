@@ -389,7 +389,8 @@ function abrirModalProduto(prod) {
     ${(() => {
       const fotos = (Array.isArray(prod.fotos) && prod.fotos.length ? prod.fotos : [prod.imagemUrl]).filter(u => typeof u === 'string' && /^https:\/\//i.test(u)).slice(0, 5);
       if (!fotos.length || (fotos.length === 1 && AppState.lojaDados.layoutVitrine !== 'varejo')) return '';
-      return `<div class="vt-galeria" id="vt-galeria">${fotos.map((u, i) => `<img src="${esc(u)}" alt="Foto ${i + 1} de ${esc(prod.nome)}" loading="${i ? 'lazy' : 'eager'}" />`).join('')}</div>
+      const lupa = AppState.lojaDados.layoutVitrine === 'varejo';
+      return `<div class="vt-galeria-moldura"><div class="vt-galeria" id="vt-galeria">${fotos.map((u, i) => `<img src="${esc(u)}" alt="Foto ${i + 1} de ${esc(prod.nome)}" loading="${i ? 'lazy' : 'eager'}"${lupa ? ` data-zoom="${i}"` : ''} />`).join('')}</div>${lupa ? '<span class="vt-lupa" aria-hidden="true">🔍</span>' : ''}</div>
         ${fotos.length > 1 ? `<div class="vt-galeria-pontos" id="vt-galeria-pontos">${fotos.map((_, i) => `<span class="${i ? '' : 'ativo'}"></span>`).join('')}</div>` : ''}`;
     })()}
     ${prod.descricao ? `<p class="gc-dica" style="margin:-6px 0 10px;">${esc(prod.descricao)}</p>` : ''}
@@ -450,6 +451,10 @@ function abrirModalProduto(prod) {
     });
   };
 
+  // Lupa (varejo): toque na foto abre em tela cheia; toque aproxima, arrastar passeia pela peça
+  content.querySelectorAll('img[data-zoom]').forEach(img => {
+    img.onclick = () => abrirLupa([...content.querySelectorAll('img[data-zoom]')].map(x => x.src), Number(img.dataset.zoom), prod.nome);
+  });
   // Pontinhos da galeria acompanham a foto que está na tela
   const galeria = document.getElementById('vt-galeria');
   const pontos = document.getElementById('vt-galeria-pontos');
@@ -497,6 +502,49 @@ function abrirModalProduto(prod) {
     adicionarAoCarrinho(resultado.item);
     modal.classList.add('hidden');
   };
+}
+
+// ---- Lupa: foto em tela cheia com zoom (toque/clique aproxima no ponto; arrastar move; ‹ › troca de foto) ----
+function abrirLupa(fotos, inicio, nome) {
+  let atual = inicio, zoom = false, origem = { x: 50, y: 50 };
+  const tela = document.createElement('div');
+  tela.className = 'vt-lupa-tela';
+  tela.innerHTML = `
+    <button type="button" class="vt-lupa-fechar" aria-label="Fechar">✕</button>
+    ${fotos.length > 1 ? '<button type="button" class="vt-lupa-seta esq" aria-label="Foto anterior">‹</button><button type="button" class="vt-lupa-seta dir" aria-label="Próxima foto">›</button>' : ''}
+    <div class="vt-lupa-area"><img alt="" /></div>
+    <p class="vt-lupa-dica">Toque na foto para aproximar · arraste para ver os detalhes</p>`;
+  document.body.appendChild(tela);
+  const img = tela.querySelector('img');
+  const area = tela.querySelector('.vt-lupa-area');
+  const pintar = () => {
+    img.style.transformOrigin = `${origem.x}% ${origem.y}%`;
+    img.style.transform = zoom ? 'scale(2.6)' : 'scale(1)';
+    area.classList.toggle('zoom', zoom);
+  };
+  const mostrar = () => { img.src = fotos[atual]; img.alt = `Foto ${atual + 1} de ${nome}`; zoom = false; origem = { x: 50, y: 50 }; pintar(); };
+  const pontoEm = (e) => { const r = img.getBoundingClientRect(); return { x: Math.min(100, Math.max(0, ((e.clientX - r.left) / r.width) * 100)), y: Math.min(100, Math.max(0, ((e.clientY - r.top) / r.height) * 100)) }; };
+  let arrastando = false, moveu = false;
+  area.addEventListener('pointerdown', (e) => { arrastando = true; moveu = false; if (zoom) area.setPointerCapture(e.pointerId); });
+  area.addEventListener('pointermove', (e) => {
+    if (!zoom) return;
+    // Com zoom: o ponto da foto acompanha o dedo/mouse (efeito lupa)
+    if (arrastando || e.pointerType === 'mouse') { moveu = true; origem = pontoEm(e); pintar(); }
+  });
+  area.addEventListener('pointerup', (e) => {
+    arrastando = false;
+    if (moveu && zoom && e.pointerType !== 'mouse') return;
+    if (!zoom) { origem = pontoEm(e); zoom = true; } else zoom = false;
+    pintar();
+  });
+  const fechar = () => { tela.remove(); document.removeEventListener('keydown', teclas); };
+  const teclas = (e) => { if (e.key === 'Escape') fechar(); if (e.key === 'ArrowRight' && fotos.length > 1) { atual = (atual + 1) % fotos.length; mostrar(); } if (e.key === 'ArrowLeft' && fotos.length > 1) { atual = (atual - 1 + fotos.length) % fotos.length; mostrar(); } };
+  document.addEventListener('keydown', teclas);
+  tela.querySelector('.vt-lupa-fechar').onclick = fechar;
+  const esq = tela.querySelector('.esq'), dir = tela.querySelector('.dir');
+  if (esq) esq.onclick = () => { atual = (atual - 1 + fotos.length) % fotos.length; mostrar(); };
+  if (dir) dir.onclick = () => { atual = (atual + 1) % fotos.length; mostrar(); };
+  mostrar();
 }
 
 // ---- Recompra rápida: "Pedir de novo" o último pedido feito neste aparelho ----
