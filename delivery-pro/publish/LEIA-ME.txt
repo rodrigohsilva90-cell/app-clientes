@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 4fdf08556af9835c46755f7898d36c2480136849eea80782d7df7ddbffd19067).
+worker.js = cópia EXATA do que está no ar (sha256 2cad5c6b3cd22ed202c932b0d451de72a6999239eb57a847e0405de1ca3124b1).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
@@ -34,3 +34,4 @@ Motoboy: abas Disponíveis / Minha rota (#mb-abas), Modo Piloto (.mb-piloto esco
 Frete: loja.frete.modo = fixo (fixoCentavos) | distancia (base/kmInclusos/porKm, padrão das lojas antigas) | faixas ([{ateKm, centavos}]) | gratis; gratisAcimaCentavos zera a entrega com subtotal >= valor. valorFreteKm() igual em js/frete.js e no Worker. Endereço da loja: loja.endereco {cep,rua,numero,bairro,cidade,uf}, enderecoTexto, mostrarEndereco (topo do cardápio + "Retirar na loja"); escrever → ViaCEP/Nominatim acha no mapa; tocar no mapa → preenche o endereço. Produtos: lista com foto e preço, categoria criada na própria lista, formulário em seções; no celular lista OU produto (← Lista).
 Subcategorias: categorias[].subcategorias [{id,nome}]; produto.subcategoriaId + subcategoriaNome (gravado ao salvar). Vitrine agrupa por subcategoria com título; nome no pedido = nomeNoPedido() "Produto (Sub)" (js/cardapio.js e Worker iguais).
 Tamanhos: grupo com tipo "tamanho" (mín 1, máx 1, SOMA, preço base 0): editor "📏 Tamanhos e preços"; vitrine mostra "Inteiro R$ · Fatia R$" no cartão e escolha única com preço cheio. Conferir JS com: node --input-type=module --check < arquivo.js (o node --check simples não pegou um erro).
+Varejo (layoutVitrine 'varejo', escolhido no cadastro "O que você vende?" ou em Aparência): grupo tipo "cor"; estoque por variação produto.controlarGrade + estoqueGrade {"Tamanho|Cor": qtd} ("-" sem grupo) — Worker valida/baixa (chaveGrade), /api/estoque aceita variacao, venda do balcão manda selecoes; vitrine desabilita variação esgotada; produto.fotos (até 5, 1ª = imagemUrl) com galeria na janela; textoLoja() troca cardápio/cozinha/comanda por catálogo/separação/pedido; modelos "roupas" e "calcados".

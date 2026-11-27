@@ -71,7 +71,7 @@ export function iniciarAcompanhamento(pedidoId) {
   linhaRota = null;
 
   root.innerHTML = `
-    <a href="/${esc(AppState.slug)}" class="btn-outline-sm" style="text-decoration:none; display:inline-block; margin-bottom:12px;">← Voltar ao cardápio</a>
+    <a href="/${esc(AppState.slug)}" class="btn-outline-sm" style="text-decoration:none; display:inline-block; margin-bottom:12px;">${AppState.lojaDados && AppState.lojaDados.layoutVitrine === 'varejo' ? '← Voltar à loja' : '← Voltar ao cardápio'}</a>
     <div class="card" id="acomp-status"><p>Carregando seu pedido...</p></div>
     <div class="card hidden acomp-chegando" id="acomp-chegando">🏁 <strong>O entregador está chegando ao seu endereço!</strong><span>Fique de olho no portão ou no interfone.</span></div>
     <div class="card hidden acomp-retirada" id="acomp-retirada"></div>

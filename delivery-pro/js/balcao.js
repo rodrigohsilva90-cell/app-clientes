@@ -22,7 +22,7 @@ import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { modoOperacaoAtual } from './frete.js';
 import { qrSvg, abrirQrLoja } from './qr.js';
 import { abrirConfigRepasse, abrirAcertos } from './repasse.js';
-import { calcularRepasse, esgotadoAgora, estoqueAtual } from './frete.js';
+import { calcularRepasse, esgotadoAgora, estoqueAtual, usaGrade, textoLoja } from './frete.js';
 import { baixarBackupLoja } from './backup.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp, Timestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
@@ -110,7 +110,7 @@ export async function iniciarBalcao() {
     <!-- Barra fixa de baixo (só no celular), na zona do polegar -->
     <nav class="bc-nav" id="bc-nav">
       <button type="button" data-nav="pedidos">📋<span>Pedidos</span></button>
-      <button type="button" data-nav="cardapio">${ehDono ? '🍕<span>Cardápio</span>' : '📦<span>Estoque</span>'}</button>
+      <button type="button" data-nav="cardapio">${ehDono ? textoLoja('🍕<span>Cardápio</span>', AppState.lojaDados) : '📦<span>Estoque</span>'}</button>
       <button type="button" data-nav="caixa">💰<span>Caixa</span></button>
       <button type="button" data-nav="ajustes">${ehDono ? '⚙<span>Ajustes</span>' : '➕<span>Pedido</span>'}</button>
     </nav>
@@ -423,7 +423,7 @@ function criarCardPedidoBalcao(p) {
       <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
       <span style="display:flex; gap:6px; align-items:center;">
         ${p.criadoEm?.toMillis ? `<span class="pedido-idade${(p.status === 'novo' && minutos >= MIN_ALERTA) || (emAberto && minutos >= 35) ? ' alerta' : ''}">⏱ ${minutos} min</span>` : ''}
-        <button class="btn-outline-sm" style="padding:2px 8px;" data-print="1" title="Imprimir Comanda">🖨️</button>
+        <button class="btn-outline-sm" style="padding:2px 8px;" data-print="1" title="${textoLoja('Imprimir Comanda', AppState.lojaDados)}">🖨️</button>
       </span>
     </div>
     <p style="font-size:14px; margin:4px 0;"><strong>${esc(p.clienteNome)}</strong> ${p.clienteWhatsapp ? `(${esc(p.clienteWhatsapp)})` : ''}${p.clienteVip ? ` <span class="badge-vip" title="${esc(p.clientePedidosAntes)} pedidos concluídos">⭐ VIP</span>` : ''}</p>
@@ -447,7 +447,7 @@ function criarCardPedidoBalcao(p) {
     </div>
     ${trocoTxt}
     ${p.status === 'novo' && minutos >= MIN_ALERTA ? `<div class="pedido-aviso">⚠️ Aguardando aceite há ${minutos} min — cancela sozinho com ${MIN_CANCELAR} min</div>` : ''}
-    ${p.status === 'preparo' && p.pronto ? '<div class="pedido-pronto">✅ Cozinha: pronto</div>' : ''}
+    ${p.status === 'preparo' && p.pronto ? `<div class="pedido-pronto">✅ ${textoLoja('Cozinha', AppState.lojaDados)}: pronto</div>` : ''}
     ${p.status === 'entrega' ? `<div style="font-size:13px; margin-bottom:8px;">🛵 Com: <strong>${esc(p.motoboyNome || (p.motoboyId ? 'entregador (app)' : 'sem entregador'))}</strong></div>` : ''}
     ${p.status === 'entrega' && linkAvisoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin-bottom:8px;" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>` : ''}
     ${botaoAcao}
@@ -554,11 +554,11 @@ async function abrirPedidoManualRapido() {
     categorias = dados.categorias || [];
   } catch (err) {
     console.error(err);
-    showToast('Erro ao carregar o cardápio.');
+    showToast(textoLoja('Erro ao carregar o cardápio.', AppState.lojaDados));
     return;
   }
   if (!produtos.length) {
-    showToast('Cardápio vazio: cadastre produtos primeiro (botão "Cardápio de exemplo").');
+    showToast(textoLoja('Cardápio vazio: cadastre produtos primeiro em ⚙ Configurações → Produtos e preços.', AppState.lojaDados));
     return;
   }
 
@@ -611,7 +611,7 @@ async function abrirPedidoManualRapido() {
           <div style="display:flex; justify-content:space-between; font-size:17px; margin:8px 0 12px;">
             <span>Total:</span><strong id="pm-total">R$ 0,00</strong>
           </div>
-          <button class="btn-primary" id="pm-lancar">Lançar pedido na cozinha</button>
+          <button class="btn-primary" id="pm-lancar">${textoLoja('Lançar pedido na cozinha', AppState.lojaDados)}</button>
         </div>
       </div>
     </div>
@@ -703,7 +703,7 @@ async function abrirPedidoManualRapido() {
   function renderOpcoes(prod) {
     const selecoes = {};
     $('#pm-cardapio').innerHTML = `
-      <button class="btn-outline-sm" data-voltar style="margin-bottom:8px;">← Voltar ao cardápio</button>
+      <button class="btn-outline-sm" data-voltar style="margin-bottom:8px;">${textoLoja('← Voltar ao cardápio', AppState.lojaDados)}</button>
       <h4>${esc(prod.nome)}</h4>
       ${prod.grupos.map((grp, gi) => `
         <div style="border-top:1px solid var(--border); padding:8px 0;">
@@ -783,17 +783,17 @@ async function abrirPedidoManualRapido() {
         criadoEm: serverTimestamp()
       });
       overlay.remove();
-      showToast('Pedido lançado direto na cozinha!');
+      showToast(textoLoja('Pedido lançado direto na cozinha!', AppState.lojaDados));
       // Dá baixa no estoque dos produtos controlados (no servidor, sem brigar com vendas do site)
-      if (sacola.some(i => produtos.find(x => x.id === i.produtoId)?.controlarEstoque)) {
-        apiEstoque({ acao: 'venda', pedidoId: novo.id, itens: sacola.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade })) })
+      if (sacola.some(i => { const pr = produtos.find(x => x.id === i.produtoId); return pr && (pr.controlarEstoque || usaGrade(pr)); })) {
+        apiEstoque({ acao: 'venda', pedidoId: novo.id, itens: sacola.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade, selecoes: i.selecoes || {} })) })
           .catch(err => showToast('⚠️ Pedido lançado, mas o estoque não baixou: ' + err.message, 6000));
       }
     } catch (err) {
       console.error(err);
       showToast('Erro ao lançar o pedido.');
       btn.disabled = false;
-      btn.textContent = 'Lançar pedido na cozinha';
+      btn.textContent = textoLoja('Lançar pedido na cozinha', AppState.lojaDados);
     }
   };
 
@@ -913,10 +913,21 @@ async function abrirEstoqueRapido() {
   async function carregar() {
     try {
       const snap = await getDoc(doc(db, 'lojas', AppState.lojaId, 'publico', 'cardapio_completo'));
-      produtos = ((snap.exists() && snap.data().produtos) || []).filter(p => p.controlarEstoque);
+      produtos = ((snap.exists() && snap.data().produtos) || []).filter(p => p.controlarEstoque || usaGrade(p));
     } catch (err) { lista.innerHTML = '<p class="gc-dica">Não foi possível carregar.</p>'; return; }
     if (!produtos.length) { lista.innerHTML = '<p class="gc-dica">Nenhum produto com controle de estoque. Ligue em ⚙ Configurações → Produtos e preços → produto → "Controlar estoque".</p>'; return; }
+    const cor = (q) => (q <= 0 ? 'var(--danger)' : q <= 3 ? 'var(--warning)' : 'inherit');
     lista.innerHTML = produtos.map(p => {
+      if (usaGrade(p)) {
+        // Produto com tamanho/cor: uma linha para cada combinação
+        return `<div class="est-grade"><strong>${esc(p.nome)}</strong>${Object.entries(p.estoqueGrade).map(([k, q]) => `
+          <div class="mb-bag-linha" style="align-items:center; gap:6px; flex-wrap:wrap;">
+            <span style="flex:1; min-width:120px;">${esc(k.split('|').filter(x => x !== '-').join(' · '))} <small style="color:${cor(q)};">${q <= 0 ? 'esgotado' : q + ' un.'}</small></span>
+            <button type="button" class="btn-outline-sm" data-perda="${esc(p.id)}" data-var="${esc(k)}" ${q <= 0 ? 'disabled' : ''}>−1 perda</button>
+            <button type="button" class="btn-outline-sm" data-mais="${esc(p.id)}" data-var="${esc(k)}">+1</button>
+            <button type="button" class="btn-outline-sm" data-definir="${esc(p.id)}" data-var="${esc(k)}">Definir</button>
+          </div>`).join('')}</div>`;
+      }
       const q = estoqueAtual(p, AppState.lojaDados);
       return `<div class="mb-bag-linha" style="align-items:center; gap:6px; flex-wrap:wrap;">
         <span style="flex:1; min-width:140px;"><strong>${esc(p.nome)}</strong><br/><small style="color:${q <= 0 ? 'var(--danger)' : q <= 3 ? 'var(--warning)' : 'inherit'};">${q <= 0 ? 'Esgotado' : q + ' un.'}${Number(p.estoqueDiario) > 0 ? ` · repõe ${Number(p.estoqueDiario)} todo dia` : ''}</small></span>
@@ -925,18 +936,20 @@ async function abrirEstoqueRapido() {
         <button type="button" class="btn-outline-sm" data-definir="${esc(p.id)}">Definir</button>
       </div>`;
     }).join('');
-    lista.querySelectorAll('[data-perda]').forEach(b => b.onclick = () => escolherMotivo(b.dataset.perda));
-    lista.querySelectorAll('[data-mais]').forEach(b => b.onclick = () => mexer({ produtoId: b.dataset.mais, delta: 1, motivo: 'reposicao' }, b));
+    const comVar = (b) => (b.dataset.var ? { variacao: b.dataset.var } : {});
+    lista.querySelectorAll('[data-perda]').forEach(b => b.onclick = () => escolherMotivo(b.dataset.perda, b.dataset.var));
+    lista.querySelectorAll('[data-mais]').forEach(b => b.onclick = () => mexer({ produtoId: b.dataset.mais, delta: 1, motivo: 'reposicao', ...comVar(b) }, b));
     lista.querySelectorAll('[data-definir]').forEach(b => b.onclick = () => {
       const p = produtos.find(x => x.id === b.dataset.definir);
-      const t = prompt(`Quantas unidades de "${p.nome}" tem agora?`, String(estoqueAtual(p, AppState.lojaDados)));
+      const atual = b.dataset.var ? Number(p.estoqueGrade[b.dataset.var]) || 0 : estoqueAtual(p, AppState.lojaDados);
+      const t = prompt(`Quantas unidades de "${p.nome}"${b.dataset.var ? ` (${b.dataset.var.split('|').filter(x => x !== '-').join(' · ')})` : ''} tem agora?`, String(atual));
       if (t === null) return;
       const valor = Math.round(Number(String(t).replace(',', '.')));
       if (!Number.isFinite(valor) || valor < 0 || valor > 100000) { showToast('Número inválido.'); return; }
-      mexer({ acao: 'definir', produtoId: p.id, valor }, b);
+      mexer({ acao: 'definir', produtoId: p.id, valor, ...comVar(b) }, b);
     });
   }
-  function escolherMotivo(produtoId) {
+  function escolherMotivo(produtoId, variacao) {
     const p = produtos.find(x => x.id === produtoId);
     const caixa = document.createElement('div');
     caixa.className = 'gc-overlay';
@@ -951,7 +964,7 @@ async function abrirEstoqueRapido() {
       </div></div>`;
     document.body.appendChild(caixa);
     caixa.querySelector('[data-cancelar]').onclick = () => caixa.remove();
-    caixa.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { caixa.remove(); mexer({ produtoId, delta: -1, motivo: b.dataset.m }); });
+    caixa.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { caixa.remove(); mexer({ produtoId, delta: -1, motivo: b.dataset.m, ...(variacao ? { variacao } : {}) }); });
   }
   async function mexer(corpo, botao) {
     if (botao) botao.disabled = true;
@@ -1015,9 +1028,9 @@ function abrirMenuConfig() {
         </div>
       </div>
       ${MENU_CONFIG.map((g, gi) => `
-        <h4 class="gc-subtitulo">${g.titulo}</h4>
+        <h4 class="gc-subtitulo">${textoLoja(g.titulo, AppState.lojaDados)}</h4>
         <div class="cfg-grade">
-          ${g.itens.map((it, ii) => `<button type="button" class="cfg-item" data-g="${gi}" data-i="${ii}"><span class="cfg-icone">${it.icone}</span><span><strong>${esc(it.nome)}</strong><small>${esc(it.dica)}</small></span></button>`).join('')}
+          ${g.itens.map((it, ii) => `<button type="button" class="cfg-item" data-g="${gi}" data-i="${ii}"><span class="cfg-icone">${textoLoja(it.icone, AppState.lojaDados)}</span><span><strong>${esc(textoLoja(it.nome, AppState.lojaDados))}</strong><small>${esc(textoLoja(it.dica, AppState.lojaDados))}</small></span></button>`).join('')}
         </div>`).join('')}
     </div>`;
   document.body.appendChild(overlay);

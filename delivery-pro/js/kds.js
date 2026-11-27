@@ -27,7 +27,7 @@ export function iniciarKds() {
   const root = document.getElementById('app-root');
   root.innerHTML = `
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
-      <strong>👨‍🍳 Cozinha — ${esc(AppState.lojaDados.nome)}</strong>
+      <strong>${AppState.lojaDados.layoutVitrine === 'varejo' ? '📦 Separação' : '👨‍🍳 Cozinha'} — ${esc(AppState.lojaDados.nome)}</strong>
       <button id="kds-som" class="btn-primary" style="width:auto;">🔊 Ativar som</button>
     </div>
     <div class="kds-grade" id="kds-lista"><p style="color:var(--text-muted);">Carregando pedidos...</p></div>

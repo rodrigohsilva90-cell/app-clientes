@@ -46,6 +46,12 @@ export function abrirCadastroLoja() {
       <label style="${rotulo}">Seu nome</label>
       <input name="nomeDono" maxlength="60" required placeholder="Ex: José da Silva" style="${campo}" />
 
+      <label style="${rotulo}">O que você vende?</label>
+      <div class="cad-tipos">
+        <label class="cad-tipo"><input type="radio" name="tipo" value="gastronomia" checked /><span><strong>🍕 Comida</strong><small>Restaurante, lanchonete, pizzaria, açaí, marmita</small></span></label>
+        <label class="cad-tipo"><input type="radio" name="tipo" value="varejo" /><span><strong>🛍️ Loja</strong><small>Roupa, sapato, mercadinho, farmácia, pet shop, presentes</small></span></label>
+      </div>
+
       <label style="${rotulo}">Nome da loja</label>
       <input name="nomeLoja" maxlength="60" required placeholder="Ex: Pizzaria do Zé" style="${campo}" />
 
@@ -89,6 +95,7 @@ export function abrirCadastroLoja() {
       nomeLoja: form.nomeLoja.value.trim(),
       slug: sugerirSlug(form.slug.value),
       whatsapp: form.whatsapp.value.replace(/\D/g, ''),
+      tipo: form.tipo.value === 'varejo' ? 'varejo' : 'gastronomia',
       parceiroRef: parceiroIndicacao(),
       aceiteTermos: form.aceite.checked ? VERSAO_TERMOS : null
     };

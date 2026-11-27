@@ -2,7 +2,7 @@ import { db, auth, formatarCentavos, showToast, esc, WORKER_API_URL } from './co
 import { AppState } from './router.js';
 import { montarItem, ofertaDoDia } from './cardapio.js';
 import { salvarPedidoLocal, pedidosRecentes, enviarAvaliacao } from './acompanhar.js';
-import { calcularFrete, coordsValidas, adicionaisAgora, modoOperacaoAtual, esgotadoAgora, valorFreteKm } from './frete.js';
+import { calcularFrete, coordsValidas, adicionaisAgora, modoOperacaoAtual, esgotadoAgora, valorFreteKm, usaGrade, chaveGradeNomes, textoLoja } from './frete.js';
 import { situacaoLoja } from './horario.js';
 import { statusAssinatura } from './plano.js';
 import { configPublica } from './push-cliente.js';
@@ -155,7 +155,7 @@ export async function iniciarVitrine() {
     ${situacao.aberta ? '' : `
       <div class="vt-fechado-aviso">🔒 <strong>${situacao.pausada ? 'A loja pausou os pedidos por alguns minutos.' : 'A loja está fechada agora.'}</strong>
         ${situacao.pausada ? '' : `<span>${esc(situacao.texto.replace('Fechado · ', '').replace(/^./, c => c.toUpperCase()))}.</span>`}
-        Você pode olhar o cardápio à vontade.</div>`}
+        ${textoLoja('Você pode olhar o cardápio à vontade.', loja)}</div>`}
 
     ${pedidosRecentes(AppState.lojaId).filter(p => p.avaliar).map(p => `
       <div class="card vt-avaliar" data-avaliar="${esc(p.id)}">
@@ -175,7 +175,7 @@ export async function iniciarVitrine() {
 
     <div class="vt-barra" id="vt-barra">
       <nav class="vt-abas" id="vt-abas"></nav>
-      <input class="vt-busca" id="vt-busca" type="search" placeholder="🔍 Buscar no cardápio" />
+      <input class="vt-busca" id="vt-busca" type="search" placeholder="${textoLoja('🔍 Buscar no cardápio', loja)}" />
     </div>
 
     <div id="lista-categorias"></div>
@@ -312,7 +312,8 @@ function renderizarProdutos(dados, modoLayout) {
     btn.onclick = () => {
       const prod = ativos.find(p => p.id === btn.dataset.prodId);
       if (!prod) return;
-      if (!prod.grupos || prod.grupos.length === 0) {
+      // Sem opções e com uma foto só: adiciona direto. Com várias fotos (loja de varejo), abre para ver as fotos
+      if ((!prod.grupos || prod.grupos.length === 0) && !(Array.isArray(prod.fotos) && prod.fotos.length > 1)) {
         adicionarAoCarrinho(montarItem(prod, {}, AppState.lojaDados).item);
       } else {
         abrirModalProduto(prod);
@@ -385,6 +386,12 @@ function abrirModalProduto(prod) {
       <h3>${esc(prod.nome)}</h3>
       <button class="btn-outline-sm" id="fechar-modal-prod" aria-label="Fechar">✕</button>
     </div>
+    ${(() => {
+      const fotos = (Array.isArray(prod.fotos) && prod.fotos.length ? prod.fotos : [prod.imagemUrl]).filter(u => typeof u === 'string' && /^https:\/\//i.test(u)).slice(0, 5);
+      if (!fotos.length || (fotos.length === 1 && AppState.lojaDados.layoutVitrine !== 'varejo')) return '';
+      return `<div class="vt-galeria" id="vt-galeria">${fotos.map((u, i) => `<img src="${esc(u)}" alt="Foto ${i + 1} de ${esc(prod.nome)}" loading="${i ? 'lazy' : 'eager'}" />`).join('')}</div>
+        ${fotos.length > 1 ? `<div class="vt-galeria-pontos" id="vt-galeria-pontos">${fotos.map((_, i) => `<span class="${i ? '' : 'ativo'}"></span>`).join('')}</div>` : ''}`;
+    })()}
     ${prod.descricao ? `<p class="gc-dica" style="margin:-6px 0 10px;">${esc(prod.descricao)}</p>` : ''}
     ${(prod.grupos || []).map((grp, idx) => {
       const unico = Number(grp.maximo || 1) === 1;
@@ -392,7 +399,7 @@ function abrirModalProduto(prod) {
       const regra = unico ? (Number(grp.minimo) > 0 ? 'Escolha 1 · obrigatório' : 'Escolha 1 (opcional)')
         : `Escolha ${Number(grp.minimo) > 0 ? `de ${grp.minimo} ` : ''}até ${grp.maximo}${grp.regraDePreco === 'MAIOR_VALOR' ? ' · cobra o de maior valor' : grp.regraDePreco === 'MEDIA' ? ' · cobra a média' : ''}`;
       return `
-      <div class="vt-grupo-opcoes${tamanho ? ' tamanhos' : ''}">
+      <div class="vt-grupo-opcoes${tamanho || grp.tipo === 'cor' ? ' tamanhos' : ''}">
         <strong>${esc(grp.titulo)}</strong>
         <small class="vt-grupo-regra">${regra}</small>
         ${(grp.opcoes || []).map((op, opIdx) => `
@@ -417,7 +424,42 @@ function abrirModalProduto(prod) {
     else if (b && parcial.item) b.textContent = `Adicionar • ${formatarCentavos(parcial.item.unitarioCentavos)}`;
   };
 
+  // Estoque por tamanho/cor: tira da escolha o que acabou (considerando o que já foi escolhido no outro grupo)
+  const atualizarDisponiveis = () => {
+    if (!usaGrade(prod)) return;
+    const gs = prod.grupos || [];
+    const iT = gs.findIndex(g => g.tipo === 'tamanho'), iC = gs.findIndex(g => g.tipo === 'cor');
+    const selNome = (i) => (i >= 0 && (selecoesAtuais[i] || [])[0] ? selecoesAtuais[i][0].nome : null);
+    const qtd = (t, c) => Number(prod.estoqueGrade[chaveGradeNomes(t, c)]) || 0;
+    const disp = (gi, nome) => {
+      if (gi === iT) { if (iC < 0) return qtd(nome, null); const c = selNome(iC); return c ? qtd(nome, c) : gs[iC].opcoes.reduce((a, o) => a + qtd(nome, o.nome), 0); }
+      if (iT < 0) return qtd(null, nome);
+      const t = selNome(iT); return t ? qtd(t, nome) : gs[iT].opcoes.reduce((a, o) => a + qtd(o.nome, nome), 0);
+    };
+    content.querySelectorAll('input[data-grp]').forEach(inp => {
+      const gi = Number(inp.dataset.grp);
+      if (gi !== iT && gi !== iC) return;
+      const n = disp(gi, gs[gi].opcoes[Number(inp.dataset.op)].nome);
+      const lab = inp.closest('.vt-opcao');
+      inp.disabled = n <= 0;
+      lab.classList.toggle('esgotada', n <= 0);
+      let tag = lab.querySelector('.vt-opcao-estoque');
+      if (!tag) { tag = document.createElement('small'); tag.className = 'vt-opcao-estoque'; lab.querySelector('span').appendChild(tag); }
+      tag.textContent = n <= 0 ? ' · esgotado' : n <= 2 ? ` · últimas ${n}` : '';
+      if (n <= 0 && inp.checked) { inp.checked = false; selecoesAtuais[gi] = []; }
+    });
+  };
+
+  // Pontinhos da galeria acompanham a foto que está na tela
+  const galeria = document.getElementById('vt-galeria');
+  const pontos = document.getElementById('vt-galeria-pontos');
+  if (galeria && pontos) galeria.onscroll = () => {
+    const i = Math.round(galeria.scrollLeft / (galeria.clientWidth || 1));
+    pontos.querySelectorAll('span').forEach((s, k) => s.classList.toggle('ativo', k === i));
+  };
+
   modal.classList.remove('hidden');
+  atualizarDisponiveis();
   atualizarBotaoPreco();
   document.getElementById('fechar-modal-prod').onclick = () => modal.classList.add('hidden');
   modal.onclick = (e) => { if (e.target === modal) modal.classList.add('hidden'); };
@@ -441,6 +483,7 @@ function abrirModalProduto(prod) {
       } else {
         selecoesAtuais[gIdx] = selecoesAtuais[gIdx].filter(o => o !== grupo.opcoes[oIdx]);
       }
+      atualizarDisponiveis();
       atualizarBotaoPreco();
     };
   });

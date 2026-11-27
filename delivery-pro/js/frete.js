@@ -139,4 +139,18 @@ export function estoqueAtual(prod, loja) {
   if (Number(prod.estoqueDiario) > 0 && prod.estoqueRepostoEm !== diaDaLoja(loja)) return Number(prod.estoqueDiario);
   return Number(prod.estoque) || 0;
 }
-export const esgotadoAgora = (prod, loja) => Boolean(prod.controlarEstoque) && estoqueAtual(prod, loja) <= 0;
+// Palavras de restaurante viram palavras de loja quando o tipo da loja é Varejo (roupa, sapato, mercadinho...)
+export const ehVarejo = (loja) => Boolean(loja && loja.layoutVitrine === 'varejo');
+export function textoLoja(texto, loja) {
+  if (!ehVarejo(loja)) return texto;
+  return String(texto)
+    .replace(/Cardápio/g, 'Catálogo').replace(/cardápio/g, 'catálogo')
+    .replace(/Cozinha/g, 'Separação').replace(/cozinha/g, 'separação')
+    .replace(/Comanda/g, 'Pedido').replace(/comanda/g, 'pedido')
+    .replace(/🍕/g, '🏷️');
+}
+// Estoque por tamanho/cor (varejo): estoqueGrade = { "Tamanho|Cor": qtd } ("-" quando o produto não tem o grupo)
+export const usaGrade = (p) => Boolean(p && p.controlarGrade && p.estoqueGrade && typeof p.estoqueGrade === 'object');
+export const chaveGradeNomes = (tamanho, cor) => `${tamanho == null ? '-' : String(tamanho).trim()}|${cor == null ? '-' : String(cor).trim()}`;
+export const totalGrade = (p) => Object.values(p.estoqueGrade || {}).reduce((a, n) => a + Math.max(0, Number(n) || 0), 0);
+export const esgotadoAgora = (prod, loja) => (usaGrade(prod) ? totalGrade(prod) <= 0 : Boolean(prod.controlarEstoque) && estoqueAtual(prod, loja) <= 0);

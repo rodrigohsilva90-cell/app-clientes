@@ -9,6 +9,15 @@ const r$ = (v) => Math.round(v * 100);
 const ops = (lista) => lista.map(([nome, preco]) => ({ nome, precoCentavos: r$(preco) }));
 const item = (cat, nome, preco, descricao = '', grupos) => ({ cat, nome, preco, descricao, grupos });
 
+// Varejo: tamanho (mesmo preço em todos) e cores — o dono liga o estoque por tamanho/cor depois
+const tamanhos = (lista, preco) => ({ tipo: 'tamanho', titulo: 'Tamanho', minimo: 1, maximo: 1, regraDePreco: 'SOMA', opcoes: lista.map(nome => ({ nome, precoCentavos: r$(preco) })) });
+const cores = (lista) => ({ tipo: 'cor', titulo: 'Cor', minimo: 1, maximo: 1, regraDePreco: 'SOMA', opcoes: lista.map(nome => ({ nome, precoCentavos: 0 })) });
+const ROUPA = ['P', 'M', 'G', 'GG'];
+const ROUPA_INF = ['2', '4', '6', '8', '10'];
+const SAPATO_F = ['34', '35', '36', '37', '38', '39'];
+const SAPATO_M = ['38', '39', '40', '41', '42', '43'];
+const roupa = (cat, nome, preco, descricao, lista = ROUPA, listaCores = ['Preto', 'Branco']) => item(cat, nome, 0, descricao, [tamanhos(lista, preco), cores(listaCores)]);
+
 const ADICIONAIS_LANCHE = { titulo: 'Adicionais', minimo: 0, maximo: 5, regraDePreco: 'SOMA', opcoes: ops([['Bacon', 5], ['Cheddar', 4], ['Ovo', 3], ['Hambúrguer extra', 9], ['Cebola caramelizada', 4]]) };
 
 const MODELOS = {
@@ -154,6 +163,43 @@ const MODELOS = {
       item('🧽 Limpeza e higiene', 'Sabão em pó 1kg', 14.9)
     ]
   },
+  roupas: {
+    nome: '👕 Loja de roupas', layout: 'varejo', cor: '#be185d', tempo: '1-2 dias',
+    descricao: 'Moda feminina, masculina e infantil com entrega na sua casa. Escolha tamanho e cor!',
+    categorias: ['👚 Feminino', '👕 Masculino', '🧒 Infantil', '👜 Acessórios'],
+    itens: [
+      roupa('👚 Feminino', 'Blusa básica de algodão', 49.9, 'Malha macia, gola redonda', ROUPA, ['Preto', 'Branco', 'Rosa']),
+      roupa('👚 Feminino', 'Vestido midi estampado', 129.9, 'Tecido leve, ideal para o dia a dia', ROUPA, ['Floral azul', 'Floral vermelho']),
+      roupa('👚 Feminino', 'Calça jeans skinny', 139.9, 'Cintura alta com elastano', ['36', '38', '40', '42', '44'], ['Azul claro', 'Azul escuro']),
+      roupa('👚 Feminino', 'Cropped canelado', 39.9, '', ['P', 'M', 'G'], ['Preto', 'Off-white', 'Verde']),
+      roupa('👕 Masculino', 'Camiseta básica', 49.9, '100% algodão', ROUPA, ['Preto', 'Branco', 'Cinza', 'Azul-marinho']),
+      roupa('👕 Masculino', 'Camisa polo', 89.9, 'Piquet com bordado', ROUPA, ['Preto', 'Branco', 'Azul']),
+      roupa('👕 Masculino', 'Bermuda de sarja', 79.9, '', ['38', '40', '42', '44', '46'], ['Bege', 'Preto']),
+      roupa('👕 Masculino', 'Calça jeans reta', 149.9, '', ['38', '40', '42', '44', '46'], ['Azul', 'Preto']),
+      roupa('🧒 Infantil', 'Conjunto moletom infantil', 89.9, 'Blusa e calça', ROUPA_INF, ['Cinza', 'Rosa', 'Azul']),
+      roupa('🧒 Infantil', 'Camiseta infantil estampada', 34.9, '', ROUPA_INF, ['Branco', 'Amarelo']),
+      item('👜 Acessórios', 'Boné aba curva', 59.9, 'Ajustável', [cores(['Preto', 'Branco', 'Bege'])]),
+      item('👜 Acessórios', 'Bolsa transversal', 99.9, 'Couro sintético', [cores(['Preto', 'Caramelo'])]),
+      item('👜 Acessórios', 'Meia (kit 3 pares)', 29.9, 'Tamanho único 35 a 42')
+    ]
+  },
+  calcados: {
+    nome: '👟 Loja de calçados', layout: 'varejo', cor: '#1e3a8a', tempo: '1-2 dias',
+    descricao: 'Tênis, sandálias e sapatos com entrega rápida. Escolha o número e a cor.',
+    categorias: ['👟 Tênis', '👡 Feminino', '👞 Masculino', '🧒 Infantil', '🧦 Acessórios'],
+    itens: [
+      roupa('👟 Tênis', 'Tênis casual de lona', 149.9, 'Confortável para o dia a dia', ['34', '35', '36', '37', '38', '39', '40', '41', '42', '43'], ['Preto', 'Branco']),
+      roupa('👟 Tênis', 'Tênis de corrida', 249.9, 'Amortecimento leve', SAPATO_M, ['Preto/Vermelho', 'Cinza/Azul']),
+      roupa('👡 Feminino', 'Sandália rasteira', 69.9, '', SAPATO_F, ['Nude', 'Preto', 'Dourado']),
+      roupa('👡 Feminino', 'Sapatilha', 89.9, 'Bico redondo', SAPATO_F, ['Preto', 'Nude']),
+      roupa('👡 Feminino', 'Bota cano curto', 199.9, 'Salto bloco 5 cm', SAPATO_F, ['Preto', 'Caramelo']),
+      roupa('👞 Masculino', 'Sapatênis', 159.9, '', SAPATO_M, ['Marrom', 'Preto']),
+      roupa('👞 Masculino', 'Chinelo slide', 49.9, '', SAPATO_M, ['Preto', 'Branco']),
+      roupa('🧒 Infantil', 'Tênis infantil com velcro', 99.9, 'Fácil de calçar', ['24', '25', '26', '27', '28', '29', '30'], ['Azul', 'Rosa']),
+      item('🧦 Acessórios', 'Palmilha de gel', 29.9, 'Recortável'),
+      item('🧦 Acessórios', 'Kit limpeza de tênis', 39.9, 'Escova + espuma')
+    ]
+  },
   farmacia: {
     nome: '💊 Farmácia', layout: 'varejo', cor: '#0f766e', tempo: '30-50 min',
     descricao: 'Higiene, cuidados e conveniência com entrega rápida perto de você.',
@@ -209,7 +255,9 @@ export const BUSCA_RAMO = {
   marmitaria: { capa: 'home cooked food table', logo: 'rice and beans' },
   petshop: { capa: 'pet shop dog', logo: 'happy dog' },
   mercadinho: { capa: 'grocery store aisle', logo: 'grocery basket' },
-  farmacia: { capa: 'pharmacy store', logo: 'pharmacy cross' }
+  farmacia: { capa: 'pharmacy store', logo: 'pharmacy cross' },
+  roupas: { capa: 'clothing store rack', logo: 'folded t-shirts' },
+  calcados: { capa: 'shoe store shelf', logo: 'sneakers' }
 };
 
 // Todas as buscas necessárias (sem repetir)
@@ -296,7 +344,7 @@ export function abrirImportarCardapio() {
 
       <h4 class="gc-subtitulo">1. Modelo pronto</h4>
       <div class="imp-modelos">
-        ${Object.entries(MODELOS).map(([k, m]) => `<button type="button" class="imp-modelo" data-modelo="${k}"><strong>${m.nome}</strong><span>${m.itens.length} itens${m.layout === 'varejo' ? ' · grade varejo' : ''}</span></button>`).join('')}
+        ${Object.entries(MODELOS).sort(([, a], [, b]) => (b.layout === (AppState.lojaDados.layoutVitrine || 'gastronomia')) - (a.layout === (AppState.lojaDados.layoutVitrine || 'gastronomia'))).map(([k, m]) => `<button type="button" class="imp-modelo" data-modelo="${k}"><strong>${m.nome}</strong><span>${m.itens.length} itens${m.layout === 'varejo' ? ' · grade varejo' : ''}</span></button>`).join('')}
       </div>
 
       <h4 class="gc-subtitulo">2. Ou uma planilha (CSV)</h4>

@@ -271,10 +271,26 @@ async function criarPedidoSeguro(request, env) {
     const hojeLoja = diaDaLoja(loja);
     const pedidoPorProduto = {};
     itensPedidos.forEach(i => { pedidoPorProduto[i.produtoId] = (pedidoPorProduto[i.produtoId] || 0) + (Number(i.quantidade) || 0); });
+    // Estoque por tamanho/cor (varejo): soma o pedido de cada variação
+    const pedidoPorVariacao = {};
+    itensPedidos.forEach(i => {
+      const pr = produtos.find(p => p.id === i.produtoId);
+      if (!pr || !usaGrade(pr)) return;
+      const k = chaveGrade(pr, i.selecoes);
+      if (k) pedidoPorVariacao[`${pr.id}#${k}`] = (pedidoPorVariacao[`${pr.id}#${k}`] || 0) + (Number(i.quantidade) || 0);
+    });
     const itens = itensPedidos.map(pedido => {
       const prod = produtos.find(p => p.id === pedido.produtoId);
-      if (!prod) throw new ErroPedido('Um item da sua sacola não está mais no cardápio. Remova-o e adicione de novo.');
-      if (prod.controlarEstoque) {
+      if (!prod) throw new ErroPedido('Um item da sua sacola não está mais à venda. Remova-o e adicione de novo.');
+      let variacao = null;
+      if (usaGrade(prod)) {
+        variacao = chaveGrade(prod, pedido.selecoes);
+        if (!variacao) throw new ErroPedido(`Escolha o tamanho e a cor de "${prod.nome}".`);
+        const tem = Number(prod.estoqueGrade[variacao]) || 0;
+        const nomeVar = variacao.split('|').filter(x => x !== '-').join(' / ');
+        if (tem <= 0) throw new ErroPedido(`"${prod.nome}" (${nomeVar}) está esgotado. Escolha outro tamanho ou cor.`);
+        if (pedidoPorVariacao[`${prod.id}#${variacao}`] > tem) throw new ErroPedido(`Só temos ${tem} unidade(s) de "${prod.nome}" (${nomeVar}). Diminua a quantidade.`);
+      } else if (prod.controlarEstoque) {
         const tem = estoqueAtual(prod, hojeLoja);
         if (tem <= 0) throw new ErroPedido(`"${prod.nome}" está esgotado.`);
         if (pedidoPorProduto[prod.id] > tem) throw new ErroPedido(`Só temos ${tem} unidade(s) de "${prod.nome}". Diminua a quantidade.`);
@@ -282,7 +298,7 @@ async function criarPedidoSeguro(request, env) {
       const quantidade = Number(pedido.quantidade);
       if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 50) throw new ErroPedido(`Quantidade inválida em "${prod.nome}".`);
       const { unitarioCentavos, detalhes } = calcularItemOficial(prod, pedido.selecoes || {}, loja);
-      return { produtoId: prod.id, nome: nomeNoPedido(prod), quantidade, unitarioCentavos, detalhes };
+      return { produtoId: prod.id, nome: nomeNoPedido(prod), quantidade, unitarioCentavos, detalhes, ...(variacao ? { variacao } : {}) };
     });
 
     const subtotalCentavos = itens.reduce((acc, i) => acc + i.unitarioCentavos * i.quantidade, 0);
@@ -395,7 +411,7 @@ async function criarPedidoSeguro(request, env) {
     }
     if (criado) { try { await fs.apagar([`lojas/${lojaId}/carrinhos/${whatsapp}`]); } catch (_) {} }
     // Estoque vivo: dá baixa do que foi vendido (com trava de versão para dois pedidos ao mesmo tempo)
-    if (criado) { try { await baixarEstoque(fs, lojaId, loja, itens.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade }))); } catch (err) { console.error('estoque', err && err.message); } }
+    if (criado) { try { await baixarEstoque(fs, lojaId, loja, itens.map(i => ({ produtoId: i.produtoId, quantidade: i.quantidade, variacao: i.variacao || null }))); } catch (err) { console.error('estoque', err && err.message); } }
     // Ficha do cliente (CRM da loja): só dados do último pedido + contadores, sem histórico duplicado
     if (criado) {
       try {
@@ -1067,6 +1083,21 @@ function estoqueAtual(prod, hoje) {
   if (Number(prod.estoqueDiario) > 0 && prod.estoqueRepostoEm !== hoje) return Number(prod.estoqueDiario);
   return Number(prod.estoque) || 0;
 }
+// Estoque por variação (varejo): produto.estoqueGrade = { "Tamanho|Cor": qtd } ("-" quando não tem o grupo)
+const usaGrade = (p) => Boolean(p && p.controlarGrade && p.estoqueGrade && typeof p.estoqueGrade === 'object');
+function chaveGrade(prod, selecoes) {
+  const g = prod.grupos || [];
+  const nomeDe = (tipo) => {
+    const gi = g.findIndex(x => x.tipo === tipo);
+    if (gi < 0) return '-';
+    const idx = selecoes && Array.isArray(selecoes[gi]) ? selecoes[gi][0] : undefined;
+    const o = Number.isInteger(idx) ? (g[gi].opcoes || [])[idx] : null;
+    return o ? String(o.nome || '').trim() : null;
+  };
+  const t = nomeDe('tamanho'), c = nomeDe('cor');
+  if (t === null || c === null || (t === '-' && c === '-')) return null;
+  return `${t}|${c}`;
+}
 // Aplica uma mudança no estoque de vários produtos; tenta de novo se outro pedido gravou no meio
 async function mexerNoEstoque(fs, lojaId, loja, mudar) {
   const caminho = `lojas/${lojaId}/publico/cardapio_completo`;
@@ -1078,6 +1109,16 @@ async function mexerNoEstoque(fs, lojaId, loja, mudar) {
     let mexeu = false;
     const resultado = {};
     for (const p of produtos) {
+      if (mudar.grade && usaGrade(p)) {
+        const deltas = mudar.grade(p);
+        if (!deltas) continue;
+        const g = { ...p.estoqueGrade };
+        for (const [k, v] of Object.entries(deltas)) if (k in g) g[k] = Math.max(0, Math.round((Number(g[k]) || 0) + v));
+        p.estoqueGrade = g;
+        resultado[p.id] = g;
+        mexeu = true;
+        continue;
+      }
       if (!p.controlarEstoque && !mudar.forcar?.includes(p.id)) continue;
       const novo = mudar.calc(p, estoqueAtual(p, hoje));
       if (novo === undefined) continue;
@@ -1095,7 +1136,16 @@ async function mexerNoEstoque(fs, lojaId, loja, mudar) {
 async function baixarEstoque(fs, lojaId, loja, itens) {
   const qtd = {};
   itens.forEach(i => { qtd[i.produtoId] = (qtd[i.produtoId] || 0) + (Number(i.quantidade) || 0); });
-  return mexerNoEstoque(fs, lojaId, loja, { calc: (p, atual) => (qtd[p.id] ? atual - qtd[p.id] : undefined) });
+  // Produto com grade: baixa só a variação vendida (pela chave pronta ou pelas escolhas do item)
+  const grade = (p) => {
+    const deltas = {};
+    itens.filter(i => i.produtoId === p.id).forEach(i => {
+      const k = i.variacao || chaveGrade(p, i.selecoes);
+      if (k) deltas[k] = (deltas[k] || 0) - (Number(i.quantidade) || 0);
+    });
+    return Object.keys(deltas).length ? deltas : null;
+  };
+  return mexerNoEstoque(fs, lojaId, loja, { calc: (p, atual) => (qtd[p.id] ? atual - qtd[p.id] : undefined), grade });
 }
 
 // Balcão: −1 por quebra/consumo/brinde, +1, repor tudo, ou baixa de venda feita no balcão
@@ -1108,7 +1158,8 @@ async function ajustarEstoque(request, env) {
     const { fs, uid } = await usuarioDaEquipe(request, env, lojaId, ['dono', 'balcao']);
     const loja = await fs.ler(`lojas/${lojaId}`);
     if (corpo.acao === 'venda') {
-      const itens = (Array.isArray(corpo.itens) ? corpo.itens : []).slice(0, 50).map(i => ({ produtoId: String(i.produtoId || ''), quantidade: Math.max(0, Math.min(50, Math.round(Number(i.quantidade) || 0))) }));
+      const limparSel = (sel) => Object.fromEntries(Object.entries(sel && typeof sel === 'object' ? sel : {}).slice(0, 20).map(([k, v]) => [k, (Array.isArray(v) ? v : []).slice(0, 20).map(n => Math.round(Number(n))).filter(n => Number.isInteger(n) && n >= 0)]));
+      const itens = (Array.isArray(corpo.itens) ? corpo.itens : []).slice(0, 50).map(i => ({ produtoId: String(i.produtoId || ''), quantidade: Math.max(0, Math.min(50, Math.round(Number(i.quantidade) || 0))), selecoes: limparSel(i.selecoes) }));
       const pedidoId = String(corpo.pedidoId || '');
       if (!/^[A-Za-z0-9]{6,64}$/.test(pedidoId)) throw new ErroPedido('Pedido inválido.');
       // Uma baixa só por pedido (se o botão for tocado duas vezes ou a internet repetir o envio)
@@ -1118,6 +1169,20 @@ async function ajustarEstoque(request, env) {
     const produtoId = String(corpo.produtoId || '');
     if (!/^[A-Za-z0-9_-]{1,60}$/.test(produtoId)) throw new ErroPedido('Produto inválido.');
     const motivo = ['quebra', 'consumo', 'brinde', 'acerto', 'reposicao'].includes(corpo.motivo) ? corpo.motivo : 'acerto';
+    const variacao = typeof corpo.variacao === 'string' ? corpo.variacao.slice(0, 80) : '';
+    if (variacao) {
+      let res;
+      const v = Math.round(Number(corpo.acao === 'definir' ? corpo.valor : corpo.delta));
+      if (!Number.isFinite(v) || Math.abs(v) > 100000 || (corpo.acao === 'definir' && v < 0) || (corpo.acao !== 'definir' && !v)) throw new ErroPedido('Quantidade inválida.');
+      const r = await mexerNoEstoque(fs, lojaId, loja, { calc: () => undefined, grade: (p) => {
+        if (p.id !== produtoId || !(variacao in p.estoqueGrade)) return null;
+        return { [variacao]: corpo.acao === 'definir' ? v - (Number(p.estoqueGrade[variacao]) || 0) : v };
+      } });
+      res = r && r[produtoId] ? r[produtoId][variacao] : undefined;
+      if (res === undefined) throw new ErroPedido('Variação não encontrada.', 409);
+      try { await fs.criarSeNaoExiste(`lojas/${lojaId}/estoqueAjustes/${Date.now()}_${uid.slice(0, 8)}`, { produtoId, variacao, acao: corpo.acao || 'delta', delta: corpo.acao === 'definir' ? null : v, valor: corpo.acao === 'definir' ? v : null, motivo, por: uid, em: new Date(), resultado: res }); } catch (_) {}
+      return jsonResponse({ ok: true, estoque: res });
+    }
     let calc;
     if (corpo.acao === 'definir') {
       const v = Math.round(Number(corpo.valor));
@@ -2033,7 +2098,8 @@ async function criarLoja(request, env) {
         caminho: `lojas/${lojaId}`, novo: true, horaServidor: ['criadoEm'],
         dados: {
           nome: nomeLoja, slug, donoUid: uid, whatsapp,
-          corPrimaria: '#ea1d2c', tempoEstimado: '30-45 min',
+          corPrimaria: '#ea1d2c', tempoEstimado: corpo.tipo === 'varejo' ? '1-2 dias' : '30-45 min',
+          layoutVitrine: corpo.tipo === 'varejo' ? 'varejo' : 'gastronomia',
           plano: 'teste', trialAte, ativo: true, origemParceiro: String(corpo.parceiroRef || '').slice(0, 40) || null,
           termosVersao: VERSAO_TERMOS, termosAceitoEm: new Date(), termosAceitoPor: uid
         }

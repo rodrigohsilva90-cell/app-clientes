@@ -3,7 +3,7 @@
 import { db, formatarCentavos, showToast, esc } from './config.js';
 import { AppState } from './router.js';
 import { enviarFoto } from './fotos.js';
-import { diaDaLoja, esgotadoAgora, estoqueAtual } from './frete.js';
+import { diaDaLoja, esgotadoAgora, estoqueAtual, usaGrade, chaveGradeNomes, totalGrade, textoLoja } from './frete.js';
 import { doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const REGRAS = [
@@ -14,6 +14,13 @@ const REGRAS = [
 
 const DIAS_OFERTA = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['sex', 'Sex'], ['sab', 'Sáb'], ['dom', 'Dom']];
 
+const ehVarejo = () => AppState.lojaDados && AppState.lojaDados.layoutVitrine === 'varejo';
+// Linhas (tamanhos) e colunas (cores) da grade de estoque; ['-'] quando o produto não tem o grupo
+function eixosGrade(p) {
+  const nomes = (tipo) => { const g = (p.grupos || []).find(x => x.tipo === tipo); return g ? g.opcoes.map(o => String(o.nome || '').trim()).filter(Boolean) : ['-']; };
+  return { tamanhos: nomes('tamanho'), cores: nomes('cor') };
+}
+const chavesGrade = (p) => { const { tamanhos, cores } = eixosGrade(p); return tamanhos.flatMap(t => cores.map(c => chaveGradeNomes(t === '-' ? null : t, c === '-' ? null : c))); };
 const novoId = (prefixo) => `${prefixo}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const copia = (obj) => JSON.parse(JSON.stringify(obj));
 const urlSegura = (u) => (typeof u === 'string' && /^https:\/\//i.test(u.trim()) ? u.trim() : '');
@@ -40,6 +47,8 @@ export async function abrirGestaoCardapio() {
     return;
   }
   rascunho.produtos = rascunho.produtos.filter(p => !p.excluido);
+  // Fotos extras (varejo): a 1ª foto continua em imagemUrl; as outras ficam em fotosExtras enquanto edita
+  rascunho.produtos.forEach(p => { p.fotosExtras = (Array.isArray(p.fotos) ? p.fotos.slice(1) : []).filter(u => urlSegura(u)); });
 
   let selecionadoId = null;  // produto aberto no formulário
   const estoqueEditado = new Set(); // produtos cujo estoque foi mexido aqui (os outros mantêm o valor do servidor ao salvar)
@@ -52,7 +61,7 @@ export async function abrirGestaoCardapio() {
       <header class="gc-topo">
         <div style="display:flex; align-items:center; gap:8px;">
           <button class="btn-outline-sm gc-voltar" id="gc-voltar" type="button">← Lista</button>
-          <h3>🍕 Produtos e preços</h3>
+          <h3>${ehVarejo() ? '🏷️' : '🍕'} Produtos e preços</h3>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <span id="gc-status" class="gc-status"></span>
@@ -254,6 +263,7 @@ export async function abrirGestaoCardapio() {
       e.stopPropagation();
       const p = rascunho.produtos.find(x => x.id === alvo.dataset.id);
       if (!p) return;
+      if (usaGrade(p)) { selecionadoId = p.id; secoesAbertas.set(`${p.id}:estoque`, true); showToast('Este produto usa estoque por tamanho/cor: ajuste as quantidades na tabela.'); renderLista(); renderEditor(); return; }
       estoqueEditado.add(p.id);
       if (esgotadoAgora(p, AppState.lojaDados)) {
         if (Number(p.estoqueDiario) > 0) { p.estoque = Number(p.estoqueDiario); p.estoqueRepostoEm = diaDaLoja(AppState.lojaDados); }
@@ -285,7 +295,11 @@ export async function abrirGestaoCardapio() {
     const esgotado = Boolean(esgotadoAgora(p, AppState.lojaDados));
     const gT = (p.grupos || []).findIndex(g => g.tipo === 'tamanho');
     const tamanhos = gT >= 0 ? p.grupos[gT] : null;
-    const outrosGrupos = (p.grupos || []).filter(g => g.tipo !== 'tamanho').length;
+    const gC = (p.grupos || []).findIndex(g => g.tipo === 'cor');
+    const cores = gC >= 0 ? p.grupos[gC] : null;
+    const outrosGrupos = (p.grupos || []).filter(g => g.tipo !== 'tamanho' && g.tipo !== 'cor').length;
+    const varejo = ehVarejo();
+    const grade = usaGrade(p);
     const foto = urlSegura(p.imagemUrl);
     p.grupos = p.grupos || [];
 
@@ -331,7 +345,7 @@ export async function abrirGestaoCardapio() {
           <p class="gc-dica">O cliente toca no produto, vê os tamanhos com o preço de cada um e escolhe um.</p>
           ${tamanhos.opcoes.map((o, oi) => `
             <div class="gc-opcao">
-              <input data-g="${gT}" data-o="${oi}" data-ocampo="nome" value="${esc(o.nome || '')}" placeholder="Ex.: Inteiro" />
+              <input data-g="${gT}" data-o="${oi}" data-ocampo="nome" data-antes="${esc(o.nome || '')}" value="${esc(o.nome || '')}" placeholder="${varejo ? 'Ex.: P, M, G ou 38' : 'Ex.: Inteiro'}" />
               <input data-g="${gT}" data-o="${oi}" data-ocampo="preco" inputmode="decimal" value="${centavosParaTexto(o.precoCentavos)}" placeholder="0,00" />
               <button class="btn-outline-sm" data-acao="rem-opcao" data-g="${gT}" data-o="${oi}" title="Remover tamanho">✕</button>
             </div>`).join('')}
@@ -342,6 +356,23 @@ export async function abrirGestaoCardapio() {
         : `<p class="gc-dica">Use quando o mesmo produto tem vários tamanhos com preços diferentes. Ex.: Bolo de chocolate → Inteiro R$ 60, Fatia R$ 9, Pedaço R$ 6.</p>
            <button class="btn-outline-sm gc-largo" data-acao="add-tamanhos">+ Adicionar tamanhos</button>`}
         </details>
+        ${varejo ? `
+        <details class="gc-secao" data-secao="cores" ${aberta('cores', Boolean(cores))}>
+        <summary>🎨 Cores <small>${cores ? cores.opcoes.map(o => esc(o.nome || '?')).join(' · ') : 'ex.: Preto, Branco, Azul'}</small></summary>
+        ${cores ? `
+          <p class="gc-dica">O cliente escolhe uma cor. Todas custam o mesmo preço do tamanho.</p>
+          ${cores.opcoes.map((o, oi) => `
+            <div class="gc-opcao gc-opcao-cor">
+              <input data-g="${gC}" data-o="${oi}" data-ocampo="nome" data-antes="${esc(o.nome || '')}" value="${esc(o.nome || '')}" placeholder="Ex.: Preto" />
+              <button class="btn-outline-sm" data-acao="rem-opcao" data-g="${gC}" data-o="${oi}" title="Remover cor">✕</button>
+            </div>`).join('')}
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn-outline-sm" data-acao="add-opcao" data-g="${gC}">+ Cor</button>
+            <button class="btn-outline-sm gc-perigo" data-acao="rem-cores">Tirar cores</button>
+          </div>`
+        : `<p class="gc-dica">Para roupa, sapato, capinha... O cliente escolhe a cor na hora de comprar.</p>
+           <button class="btn-outline-sm gc-largo" data-acao="add-cores">+ Adicionar cores</button>`}
+        </details>` : ''}
         <section class="gc-secao">
         <h4 class="gc-secao-titulo">📷 Foto</h4>
         <div class="gc-foto-linha">
@@ -351,18 +382,38 @@ export async function abrirGestaoCardapio() {
             <input data-campo="imagemUrl" value="${esc(p.imagemUrl || '')}" placeholder="ou cole um link https://..." />
           </div>
         </div>
+        ${varejo ? `
+          <label style="margin-top:12px;">Mais fotos <small>(até 4: costas, detalhe, no corpo...)</small></label>
+          <div class="gc-galeria">
+            ${(p.fotosExtras || []).map((u, i) => `
+              <div class="gc-galeria-item"><img src="${esc(urlSegura(u))}" alt="" loading="lazy" />
+                <button type="button" title="Usar como foto principal" data-acao="foto-principal" data-i="${i}">★</button>
+                <button type="button" title="Remover foto" data-acao="foto-remover" data-i="${i}">✕</button>
+              </div>`).join('')}
+            ${(p.fotosExtras || []).length < 4 ? `<button type="button" class="gc-galeria-add" data-acao="foto-extra" ${foto ? '' : 'disabled title="Envie a foto principal primeiro"'}>📷<span>+ Foto</span></button>` : ''}
+          </div>` : ''}
 
         </section>
         <details class="gc-secao" data-secao="estoque" ${aberta('estoque', esgotado || p.controlarEstoque)}>
-        <summary>📦 Disponibilidade e estoque <small>${esgotado ? '⛔ esgotado' : p.controlarEstoque ? `${esc(estoqueAtual(p, AppState.lojaDados))} em estoque` : 'à venda'}</small></summary>
-        <label class="gc-check"><input type="checkbox" data-campo="esgotado" ${esgotado ? 'checked' : ''} /> Esgotado (pausar venda deste produto)</label>
+        <summary>📦 Disponibilidade e estoque <small>${esgotado ? '⛔ esgotado' : grade ? `${totalGrade(p)} em estoque` : p.controlarEstoque ? `${esc(estoqueAtual(p, AppState.lojaDados))} em estoque` : 'à venda'}</small></summary>
+        ${varejo && (tamanhos || cores) ? `
+          <label class="gc-check"><input type="checkbox" data-campo="controlarGrade" ${grade ? 'checked' : ''} /> Controlar estoque por ${tamanhos && cores ? 'tamanho e cor' : tamanhos ? 'tamanho' : 'cor'}</label>
+          ${grade ? (() => {
+            const { tamanhos: ts, cores: cs } = eixosGrade(p);
+            return `<div class="gc-grade-scroll"><table class="gc-grade">
+              <tr><th></th>${cs.map(c => `<th>${c === '-' ? 'Qtd.' : esc(c)}</th>`).join('')}</tr>
+              ${ts.map(t => `<tr><th>${t === '-' ? 'Qtd.' : esc(t)}</th>${cs.map(c => { const k = chaveGradeNomes(t === '-' ? null : t, c === '-' ? null : c); return `<td><input type="number" min="0" inputmode="numeric" data-grade="${esc(k)}" value="${Number(p.estoqueGrade[k]) || 0}" aria-label="${esc(k.replace('|', ' '))}" /></td>`; }).join('')}</tr>`).join('')}
+            </table></div>
+            <p class="gc-dica">Quantas peças tem de cada uma. Cada venda tira 1 da combinação escolhida; com 0, o cliente não consegue escolher aquela opção.</p>`;
+          })() : ''}` : ''}
+        ${grade ? '' : `<label class="gc-check"><input type="checkbox" data-campo="esgotado" ${esgotado ? 'checked' : ''} /> Esgotado (pausar venda deste produto)</label>
         <div class="gc-linha">
           <div><label>📦 Quantidade em estoque <small>(vazio = sem controle)</small></label>
             <input data-campo="estoqueQtd" type="number" min="0" inputmode="numeric" placeholder="ex: 24" value="${p.controlarEstoque ? esc(estoqueAtual(p, AppState.lojaDados)) : ''}" /></div>
           <div><label>🔁 Repor todo dia para <small>(opcional)</small></label>
             <input data-campo="estoqueDiario" type="number" min="0" inputmode="numeric" placeholder="ex: 30" value="${Number(p.estoqueDiario) > 0 ? esc(p.estoqueDiario) : ''}" /></div>
         </div>
-        <p class="gc-dica" style="margin-top:-4px;">Cada venda tira do estoque sozinha. Quando chega a 0, aparece "Esgotado" no cardápio${Number(p.estoqueDiario) > 0 ? ' e volta cheio no dia seguinte' : ''}.</p>
+        <p class="gc-dica" style="margin-top:-4px;">Cada venda tira do estoque sozinha. Quando chega a 0, aparece "Esgotado" no cardápio${Number(p.estoqueDiario) > 0 ? ' e volta cheio no dia seguinte' : ''}.</p>`}
 
         </details>
         <details class="gc-secao" data-secao="oferta" ${aberta('oferta', Boolean(p.oferta && p.oferta.precoCentavos))}>
@@ -387,7 +438,7 @@ export async function abrirGestaoCardapio() {
         <summary>🧩 Opções: sabores, bordas, adicionais <small>${outrosGrupos ? `${outrosGrupos} grupo(s)` : 'nenhuma'}</small></summary>
         <p class="gc-dica">Use para o cliente escolher: sabores da pizza, ponto da carne, borda, adicionais. Ex.: grupo "Sabores", escolha de 1 até 2.</p>
         <div id="gc-grupos">
-          ${p.grupos.map((g, gi) => g.tipo === 'tamanho' ? '' : `
+          ${p.grupos.map((g, gi) => (g.tipo === 'tamanho' || g.tipo === 'cor') ? '' : `
             <div class="gc-grupo">
               <div class="gc-linha">
                 <div style="flex:2;">
@@ -442,6 +493,11 @@ export async function abrirGestaoCardapio() {
     const campo = el.dataset.campo;
     if (campo === 'nome' || campo === 'descricao') p[campo] = el.value;
     else if (campo === 'imagemUrl') p.imagemUrl = el.value.trim();
+    else if (el.dataset.grade !== undefined) {
+      estoqueEditado.add(p.id);
+      p.estoqueGrade = p.estoqueGrade || {};
+      p.estoqueGrade[el.dataset.grade] = Math.max(0, Math.round(Number(el.value) || 0));
+    }
     else if (campo === 'estoqueQtd') {
       estoqueEditado.add(p.id);
       if (el.value.trim() === '' && !(Number(p.estoqueDiario) > 0)) { delete p.controlarEstoque; delete p.estoque; }
@@ -484,6 +540,24 @@ export async function abrirGestaoCardapio() {
       p.categoriaId = el.value;
       const cat = rascunho.categorias.find(c => c.id === p.categoriaId);
       if (!(cat && (cat.subcategorias || []).some(sb => sb.id === p.subcategoriaId))) delete p.subcategoriaId;
+    } else if (el.dataset.ocampo === 'nome' && el.dataset.antes !== undefined) {
+      // Renomeou um tamanho/cor: a quantidade da grade acompanha o nome novo
+      const g = p.grupos[Number(el.dataset.g)];
+      const antes = el.dataset.antes.trim(), depois = el.value.trim();
+      if (usaGrade(p) && antes && depois && antes !== depois) {
+        const pos = g.tipo === 'cor' ? 1 : 0;
+        p.estoqueGrade = Object.fromEntries(Object.entries(p.estoqueGrade).map(([k, v]) => { const partes = k.split('|'); if (partes[pos] === antes) partes[pos] = depois; return [partes.join('|'), v]; }));
+      }
+      if (usaGrade(p)) { const antigo = p.estoqueGrade; p.estoqueGrade = Object.fromEntries(chavesGrade(p).map(k => [k, Number(antigo[k]) || 0])); }
+    } else if (el.dataset.campo === 'controlarGrade') {
+      estoqueEditado.add(p.id);
+      if (el.checked) {
+        const antigo = p.estoqueGrade || {};
+        p.estoqueGrade = Object.fromEntries(chavesGrade(p).map(k => [k, Number(antigo[k]) || 0]));
+        p.controlarGrade = true;
+        delete p.controlarEstoque; delete p.estoque; delete p.estoqueDiario;
+        secoesAbertas.set(`${p.id}:estoque`, true);
+      } else { delete p.controlarGrade; }
     } else if (el.dataset.campo === 'subcategoriaId') {
       if (el.value) p.subcategoriaId = el.value; else delete p.subcategoriaId;
     }
@@ -510,6 +584,26 @@ export async function abrirGestaoCardapio() {
     const gi = Number(alvo.dataset.g);
     const acao = alvo.dataset.acao;
 
+    if (acao === 'foto-extra') {
+      alvo.disabled = true;
+      enviarFoto('produto').then(url => {
+        alvo.disabled = false;
+        if (!url || !rascunho.produtos.includes(p)) return;
+        p.fotosExtras = [...(p.fotosExtras || []), url].slice(0, 4);
+        marcarAlterado(); renderEditor();
+        showToast('Foto adicionada! Toque em 💾 Salvar para publicar.');
+      });
+      return;
+    }
+    if (acao === 'foto-principal' || acao === 'foto-remover') {
+      const i = Number(alvo.dataset.i);
+      const extras = [...(p.fotosExtras || [])];
+      if (acao === 'foto-principal') { const nova = extras[i]; extras[i] = p.imagemUrl; p.imagemUrl = nova; }
+      else extras.splice(i, 1);
+      p.fotosExtras = extras.filter(u => urlSegura(u));
+      marcarAlterado(); renderLista(); renderEditor();
+      return;
+    }
     if (acao === 'enviar-foto') {
       alvo.disabled = true;
       enviarFoto('produto').then(url => {
@@ -533,6 +627,14 @@ export async function abrirGestaoCardapio() {
       if (!confirm('Tirar os tamanhos deste produto? Depois informe o preço único dele.')) return;
       const i = p.grupos.findIndex(g => g.tipo === 'tamanho');
       if (i >= 0) { p.precoCentavos = Number(p.grupos[i].opcoes[0]?.precoCentavos) || 0; p.grupos.splice(i, 1); }
+    } else if (acao === 'add-cores') {
+      const iT = p.grupos.findIndex(g => g.tipo === 'tamanho');
+      p.grupos.splice(iT + 1, 0, { tipo: 'cor', titulo: 'Cor', minimo: 1, maximo: 1, regraDePreco: 'SOMA', opcoes: [{ nome: '', precoCentavos: 0 }, { nome: '', precoCentavos: 0 }] });
+      secoesAbertas.set(`${p.id}:cores`, true);
+    } else if (acao === 'rem-cores') {
+      if (!confirm('Tirar as cores deste produto?')) return;
+      const i = p.grupos.findIndex(g => g.tipo === 'cor');
+      if (i >= 0) p.grupos.splice(i, 1);
     } else if (acao === 'add-grupo') {
       p.grupos.push({ titulo: '', minimo: 0, maximo: 1, regraDePreco: 'SOMA', opcoes: [{ nome: '', precoCentavos: 0 }] });
     } else if (acao === 'rem-grupo') {
@@ -576,6 +678,15 @@ export async function abrirGestaoCardapio() {
         if (por >= (p.precoCentavos || 0)) { abrir(); return `A oferta de "${nome}" precisa ser mais barata que o preço normal.`; }
         if (!(p.oferta.dias || []).length) { abrir(); return `Marque em quais dias vale a oferta de "${nome}".`; }
       }
+      const cor = (p.grupos || []).find(g => g.tipo === 'cor');
+      if (cor) {
+        if (cor.opcoes.some(o => !(o.nome || '').trim())) { abrir(); return `"${nome}": dê um nome para cada cor.`; }
+      }
+      for (const gv of [(p.grupos || []).find(g => g.tipo === 'tamanho'), cor].filter(Boolean)) {
+        const nomes = gv.opcoes.map(o => String(o.nome || '').trim().toLowerCase());
+        if (new Set(nomes).size !== nomes.length) { abrir(); return `"${nome}": há ${gv.tipo === 'cor' ? 'cores' : 'tamanhos'} com o mesmo nome.`; }
+        if (nomes.some(n => n.includes('|'))) { abrir(); return `"${nome}": não use o sinal | nos nomes.`; }
+      }
       const tam = (p.grupos || []).find(g => g.tipo === 'tamanho');
       if (tam) {
         if ((tam.opcoes || []).length < 1) { abrir(); return `"${nome}": adicione pelo menos um tamanho.`; }
@@ -615,9 +726,14 @@ export async function abrirGestaoCardapio() {
     };
     const foto = urlSegura(p.imagemUrl);
     if (foto) out.imagemUrl = foto;
+    const extras = (p.fotosExtras || []).map(urlSegura).filter(u => u && u !== foto).slice(0, 4);
+    if (foto && extras.length && ehVarejo()) out.fotos = [foto, ...extras];
     // Crédito do fotógrafo (fotos de exemplo do Unsplash): só vale enquanto a foto for a do Unsplash
     if (foto && p.imagemCredito && /^https:\/\/images\.unsplash\.com\//.test(foto)) out.imagemCredito = { autor: String(p.imagemCredito.autor || '').slice(0, 80), link: String(p.imagemCredito.link || '').slice(0, 300) };
-    if (p.controlarEstoque) { out.controlarEstoque = true; out.estoque = Number(p.estoque) || 0; }
+    if (usaGrade(p) && (p.grupos || []).some(g => g.tipo === 'tamanho' || g.tipo === 'cor')) {
+      out.controlarGrade = true;
+      out.estoqueGrade = Object.fromEntries(chavesGrade(p).map(k => [k, Math.max(0, Math.round(Number(p.estoqueGrade[k]) || 0))]));
+    } else if (p.controlarEstoque) { out.controlarEstoque = true; out.estoque = Number(p.estoque) || 0; }
     if (p.controlarEstoque && Number(p.estoqueDiario) > 0) { out.estoqueDiario = Number(p.estoqueDiario); if (p.estoqueRepostoEm) out.estoqueRepostoEm = String(p.estoqueRepostoEm); }
     if (p.oferta && p.oferta.precoCentavos > 0 && (p.oferta.dias || []).length) out.oferta = { precoCentavos: p.oferta.precoCentavos, dias: [...p.oferta.dias] };
     if (p.grupos?.length) {
@@ -626,7 +742,7 @@ export async function abrirGestaoCardapio() {
         minimo: Number(g.minimo) || 0,
         maximo: Number(g.maximo) || 1,
         regraDePreco: g.regraDePreco || 'SOMA',
-        ...(g.tipo === 'tamanho' ? { tipo: 'tamanho' } : {}),
+        ...(g.tipo === 'tamanho' || g.tipo === 'cor' ? { tipo: g.tipo } : {}),
         opcoes: g.opcoes.map(o => ({ nome: o.nome.trim(), precoCentavos: o.precoCentavos || 0 }))
       }));
     }
@@ -653,7 +769,7 @@ export async function abrirGestaoCardapio() {
       await setDoc(refAtual, { categorias: anterior.categorias || [], produtos, atualizadoEm: serverTimestamp() });
       alterado = false;
       overlay.remove();
-      showToast('↩ Cardápio restaurado!');
+      showToast(textoLoja('↩ Cardápio restaurado!', AppState.lojaDados));
       abrirGestaoCardapio();
     } catch (err) { console.error(err); showToast('Não foi possível desfazer agora.'); }
   };
@@ -674,6 +790,7 @@ export async function abrirGestaoCardapio() {
       const estoqueServidor = new Map((doServidor && doServidor.produtos || []).map(x => [x.id, x]));
       const produtosFinais = rascunho.produtos.map(limpar).map(x => {
         const sv = estoqueServidor.get(x.id);
+        if (!estoqueEditado.has(x.id) && sv && x.controlarGrade && sv.estoqueGrade) return { ...x, estoqueGrade: Object.fromEntries(Object.keys(x.estoqueGrade).map(k => [k, k in sv.estoqueGrade ? Number(sv.estoqueGrade[k]) || 0 : x.estoqueGrade[k]])) };
         if (estoqueEditado.has(x.id) || !sv || !x.controlarEstoque) return x;
         return { ...x, estoque: Number(sv.estoque) || 0, ...(sv.estoqueRepostoEm ? { estoqueRepostoEm: sv.estoqueRepostoEm } : {}) };
       });
@@ -685,7 +802,7 @@ export async function abrirGestaoCardapio() {
       estoqueEditado.clear();
       alterado = false;
       $('#gc-status').textContent = '✓ Salvo';
-      showToast('Cardápio salvo! Os clientes já veem a versão nova.');
+      showToast(textoLoja('Cardápio salvo! Os clientes já veem a versão nova.', AppState.lojaDados));
     } catch (err) {
       console.error(err);
       showToast(err.code === 'permission-denied' ? 'Sem permissão para alterar o cardápio.' : 'Erro ao salvar. Tente de novo.');
