@@ -1,12 +1,21 @@
 import { auth, db, showToast } from './config.js';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import { doc, getDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
-import { iniciarVitrine } from './vitrine.js';
-import { iniciarBalcao } from './balcao.js';
-import { iniciarMotoboy } from './motoboy.js';
-import { iniciarAcompanhamento } from './acompanhar.js';
-import { abrirCadastroLoja } from './cadastro.js';
-import { iniciarMaster } from './master.js';
+// Cada tela baixa só o código dela (o cliente não precisa baixar o painel do balcão, do motoboy ou do Master)
+const telas = {
+  vitrine: () => import('./vitrine.js'),
+  balcao: () => import('./balcao.js'),
+  motoboy: () => import('./motoboy.js'),
+  acompanhar: () => import('./acompanhar.js'),
+  cadastro: () => import('./cadastro.js'),
+  master: () => import('./master.js')
+};
+const iniciarVitrine = async (...a) => (await telas.vitrine()).iniciarVitrine(...a);
+const iniciarBalcao = async (...a) => (await telas.balcao()).iniciarBalcao(...a);
+const iniciarMotoboy = async (...a) => (await telas.motoboy()).iniciarMotoboy(...a);
+const iniciarAcompanhamento = async (...a) => (await telas.acompanhar()).iniciarAcompanhamento(...a);
+const abrirCadastroLoja = async (...a) => (await telas.cadastro()).abrirCadastroLoja(...a);
+const iniciarMaster = async (...a) => (await telas.master()).iniciarMaster(...a);
 import { aplicarTema } from './tema.js';
 
 // 1. Registro do Service Worker com aviso de atualização
@@ -101,6 +110,8 @@ async function resolverRota() {
   const slug = pathParts[0].toLowerCase();
   const subRota = pathParts[1] || 'vitrine';
   AppState.slug = slug;
+  // Começa a baixar o código da tela já, junto com os dados da loja (não um depois do outro)
+  (subRota === 'painel' ? telas.balcao() : subRota === 'motoboy' ? telas.motoboy() : subRota === 'pedido' ? telas.acompanhar() : telas.vitrine()).catch(() => {});
 
   // Atualiza manifest dinâmico por loja
   const manifestLink = document.getElementById('pwa-manifest');
@@ -109,14 +120,23 @@ async function resolverRota() {
   if (manifestLink) manifestLink.href = `/${slug}/manifest.webmanifest${pedidoNaUrl ? `?pedido=${pedidoNaUrl}` : ''}`;
 
   try {
-    const slugSnap = await getDoc(doc(db, 'slugs', slug));
-    if (!slugSnap.exists() || !slugSnap.data().ativo) {
+    // O servidor já manda o código da loja junto com a página: economiza uma ida ao banco
+    const meta = document.querySelector('meta[name="loja-id"]');
+    if (meta && meta.dataset.slug === slug && /^[A-Za-z0-9_-]{2,80}$/.test(meta.content)) {
+      AppState.lojaId = meta.content;
+    } else {
+      const slugSnap = await getDoc(doc(db, 'slugs', slug));
+      if (!slugSnap.exists() || !slugSnap.data().ativo) {
+        root.innerHTML = `<div class="card"><h2>Loja não encontrada ou temporariamente indisponível.</h2></div>`;
+        return;
+      }
+      AppState.lojaId = slugSnap.data().lojaId;
+    }
+    const lojaSnap = await getDoc(doc(db, 'lojas', AppState.lojaId));
+    if (!lojaSnap.exists()) {
       root.innerHTML = `<div class="card"><h2>Loja não encontrada ou temporariamente indisponível.</h2></div>`;
       return;
     }
-
-    AppState.lojaId = slugSnap.data().lojaId;
-    const lojaSnap = await getDoc(doc(db, 'lojas', AppState.lojaId));
     AppState.lojaDados = { id: AppState.lojaId, ...lojaSnap.data() };
 
     // Aplica White-Label (cor com texto de contraste automático; modo escuro só nas telas do cliente)

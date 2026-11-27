@@ -2283,6 +2283,7 @@ async function dadosPublicosLoja(env, slug, ctx) {
       if (l) {
         const https = (u) => (typeof u === 'string' && /^https:\/\/\S+$/i.test(u) ? u : null);
         dados = {
+          lojaId: String(s.lojaId),
           nome: String(l.nome || slug).slice(0, 60),
           descricao: l.descricao ? String(l.descricao).slice(0, 160) : null,
           cor: /^#[0-9a-f]{6}$/i.test(l.corPrimaria || '') ? l.corPrimaria : '#ea1d2c',
@@ -2324,7 +2325,7 @@ function personalizarCasca(html, pub, slug, url) {
     .replace(/<meta property="og:description"[^>]*>/, `<meta property="og:description" content="${escAttr(desc)}" />\n  <meta name="description" content="${escAttr(desc)}" />`)
     .replace(/<link rel="manifest"[^>]*>/, `<link rel="manifest" href="/${slug}/manifest.webmanifest${/^\/[^/]+\/pedido\/[A-Za-z0-9_]{8,100}$/.test(url.pathname) ? `?pedido=${url.pathname.split('/')[3]}` : ''}" id="pwa-manifest" />`)
     .replace(/<link rel="icon"[^>]*>/, `<link rel="icon" href="/${slug}/icone.svg" type="image/svg+xml" id="pwa-icone" />${pub.logoUrl ? `\n  <link rel="apple-touch-icon" href="${escAttr(pub.logoUrl)}" />` : ''}`)
-    .replace('</head>', `  <meta property="og:url" content="${escAttr(url.origin + '/' + slug)}" />
+    .replace('</head>', `${pub.lojaId ? `  <meta name="loja-id" content="${escAttr(pub.lojaId)}" data-slug="${escAttr(slug)}" />\n` : ''}  <meta property="og:url" content="${escAttr(url.origin + '/' + slug)}" />
   <meta property="og:site_name" content="${escAttr(pub.nome)}" />
   <meta name="apple-mobile-web-app-title" content="${escAttr(pub.nome)}" />${img ? `
   <meta property="og:image" content="${escAttr(img)}" />

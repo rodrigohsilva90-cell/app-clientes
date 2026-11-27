@@ -1,4 +1,4 @@
-const CACHE_NAME = 'delivery-pro-v49';
+const CACHE_NAME = 'delivery-pro-v50';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -56,51 +56,69 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Estratégia Network-First para código e HTML; Cache-First apenas se offline
-self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  const url = new URL(event.request.url);
+// Estratégia para abrir rápido mesmo com 4G fraco:
+// - Código e estilo do app (/js, /css) e bibliotecas com versão fixa (Firebase, Leaflet): usa a cópia do aparelho na hora
+//   e atualiza por trás. Cada publicação troca o CACHE_NAME, então a versão nova entra inteira de uma vez.
+// - Páginas (HTML): tenta a internet por até 3 s; se demorar ou cair, abre a cópia guardada.
+const ehBibliotecaVersionada = (url) =>
+  (url.hostname === 'www.gstatic.com' && url.pathname.includes('/firebasejs/')) ||
+  (url.hostname === 'unpkg.com' && /@\d+\.\d+\.\d+/.test(url.pathname)) ||
+  (url.hostname === 'cdn.jsdelivr.net' && /@\d+\.\d+\.\d+/.test(url.pathname));
 
-  // Nunca interceptar chamadas de API, Firestore ou mapas dinâmicos
-  if (url.pathname.startsWith('/api/') || url.hostname.includes('googleapis.com') || url.hostname.includes('tile.openstreetmap.org')) {
+function guardar(request, response) {
+  if (response && (response.status === 200 || response.type === 'opaque')) {
+    const copia = response.clone();
+    caches.open(CACHE_NAME).then((cache) => cache.put(request, copia)).catch(() => {});
+  }
+  return response;
+}
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+
+  // Nunca interceptar chamadas de API, Firestore, mapas, fotos de produtos e serviços de endereço
+  if (url.pathname.startsWith('/api/') || url.hostname.includes('googleapis.com') || url.hostname.includes('tile.openstreetmap.org') ||
+      url.hostname.includes('nominatim') || url.hostname.includes('viacep')) {
     return;
   }
 
-  event.respondWith(
-    fetch(event.request)
-      .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200) {
-          const clone = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return networkResponse;
-      })
-      .catch(() => caches.match(event.request))
-  );
-});
+  const mesmoSite = url.origin === self.location.origin;
 
-// Notificações do pedido (Web Push): mostra o aviso e abre o acompanhamento ao tocar
-self.addEventListener('push', (event) => {
-  let d = {};
-  try { d = event.data ? event.data.json() : {}; } catch (_) { d = { title: 'Seu pedido', body: event.data ? event.data.text() : '' }; }
-  event.waitUntil(self.registration.showNotification(d.title || 'Seu pedido', {
-    body: d.body || '',
-    icon: d.icon || '/icone.svg',
-    badge: d.icon || '/icone.svg',
-    tag: d.tag || 'pedido',
-    renotify: true,
-    data: { url: d.url || '/' }
-  }));
-});
+  // Bibliotecas com versão no endereço: nunca mudam, então a cópia do aparelho vale para sempre
+  if (ehBibliotecaVersionada(url)) {
+    event.respondWith(caches.match(req).then((c) => c || fetch(req).then((r) => guardar(req, r))));
+    return;
+  }
 
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const alvo = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin).href;
-  event.waitUntil((async () => {
-    const abertas = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const c of abertas) {
-      if (c.url === alvo && 'focus' in c) return c.focus();
-    }
-    return self.clients.openWindow(alvo);
-  })());
+  // Código e estilo do app: cópia do aparelho na hora + atualização por trás
+  if (mesmoSite && (url.pathname.startsWith('/js/') || url.pathname.startsWith('/css/'))) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) => cache.match(req).then((guardado) => {
+        const daRede = fetch(req).then((r) => guardar(req, r)).catch(() => guardado);
+        if (guardado) { event.waitUntil(daRede); return guardado; }
+        return daRede;
+      }))
+    );
+    return;
+  }
+
+  // Páginas: internet com limite de 3 s, senão a cópia guardada
+  if (req.mode === 'navigate') {
+    event.respondWith(new Promise((resolve) => {
+      let respondeu = false;
+      const usarCopia = () => caches.match(req).then((c) => c || caches.match('/index.html')).then((c) => { if (c && !respondeu) { respondeu = true; resolve(c); } });
+      const t = setTimeout(usarCopia, 3000);
+      fetch(req).then((r) => {
+        clearTimeout(t);
+        guardar(req, r);
+        if (!respondeu) { respondeu = true; resolve(r); }
+      }).catch(() => { clearTimeout(t); usarCopia().then(() => { if (!respondeu) { respondeu = true; resolve(Response.error()); } }); });
+    }));
+    return;
+  }
+
+  // Resto (ícones, manifest...): internet primeiro, cópia se estiver sem sinal
+  event.respondWith(fetch(req).then((r) => (mesmoSite ? guardar(req, r) : r)).catch(() => caches.match(req)));
 });
