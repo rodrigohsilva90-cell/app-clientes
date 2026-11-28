@@ -20,7 +20,7 @@ export const auth = getAuth(app);
 // No painel da loja e no app do motoboy, os pedidos ficam guardados no aparelho: se a internet da loja
 // cair, a tela continua mostrando os pedidos e as mudanças sincronizam sozinhas quando a conexão voltar.
 function criarBanco() {
-  if (/^\/[^/]+\/(painel|motoboy)(\/|$)/.test(window.location.pathname)) {
+  if (/^\/[^/]+\/(painel|cozinha|motoboy)(\/|$)/.test(window.location.pathname)) {
     try { return initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); } catch (_) {}
   }
   return getFirestore(app);

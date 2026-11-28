@@ -41,12 +41,15 @@ const MIN_CANCELAR = 15;  // pedido novo sem aceite: cancelado automaticamente
 const inicioDoPedido = (p) => (p.pagoEm?.toMillis ? p.pagoEm.toMillis() : p.criadoEm?.toMillis ? p.criadoEm.toMillis() : null);
 const minutosDesde = (p) => (inicioDoPedido(p) ? (Date.now() - inicioDoPedido(p)) / 60000 : 0);
 
-export async function iniciarBalcao() {
+export async function iniciarBalcao(opcoes = {}) {
   const root = document.getElementById('app-root');
 
   // Nível de acesso: dono | balcao | cozinha (documento lojas/{id}/equipe/{uid})
   papel = null;
   let meuNome = '';
+  let erroLeitura = false;
+  // Só quem entrou com uma conta da equipe vê o painel (quem digita /painel no endereço cai no login)
+  if (!auth.currentUser) return telaSoEquipe(root, 'login', opcoes.cozinha);
   if (auth.currentUser) {
     try {
       // Cópia do aparelho primeiro (abre na hora); se o papel mudou no servidor, recarrega
@@ -57,11 +60,13 @@ export async function iniciarBalcao() {
       });
       papel = papelLocal = papelDe(snap);
       meuNome = snap.exists() ? (snap.data().nome || '') : '';
-    } catch (_) { papel = null; }
+    } catch (_) { papel = null; erroLeitura = true; }
   }
+  if (!papel) return telaSoEquipe(root, erroLeitura ? 'erro' : 'fora', opcoes.cozinha);
   const assinatura = statusAssinatura(AppState.lojaDados);
   if (!assinatura.ativa) return telaBloqueio(assinatura, papel === 'dono');
-  if (papel === 'cozinha') return iniciarKds(meuNome);
+  // Tela da cozinha: conta da cozinha sempre; dono e balcão quando abrem /cozinha (ou o botão 🍳 Cozinha)
+  if (papel === 'cozinha' || opcoes.cozinha) return iniciarKds(meuNome, { voltar: papel !== 'cozinha' });
   const ehDono = papel === 'dono';
 
   root.innerHTML = `
@@ -82,6 +87,7 @@ export async function iniciarBalcao() {
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
         <button id="btn-estoque" class="btn-outline-sm">📦 Estoque</button>
         <button id="btn-frota" class="btn-outline-sm">🗺️ Motoboys</button>
+        <a id="btn-cozinha" class="btn-outline-sm" href="/${encodeURIComponent(AppState.slug)}/cozinha" style="text-decoration:none;">🍳 ${textoLoja('Cozinha', AppState.lojaDados)}</a>
         <button id="btn-despesa" class="btn-outline-sm" hidden>💸 Despesa / Sangria</button>
         ${ehDono ? '<button id="btn-config" class="btn-outline-sm btn-config-loja">⚙ Configurações</button>' : '<button id="btn-carrinhos" class="btn-outline-sm">🛒 Carrinhos abandonados</button>'}
       </div>
@@ -1330,4 +1336,29 @@ async function cancelarAceito(p) {
     avisarCliente(p.id);
     showToast(`Pedido #${p.numeroPedido || ''} cancelado.`);
   } catch (err) { console.error(err); showToast('Não foi possível cancelar.'); }
+}
+
+
+// Painel e cozinha são só da equipe: sem login (ou com uma conta de fora), mostra a porta de entrada
+function telaSoEquipe(root, motivo, cozinha) {
+  const area = cozinha ? textoLoja('Cozinha', AppState.lojaDados) : 'Painel da loja';
+  const msg = motivo === 'login'
+    ? `Esta é a área da equipe da <strong>${esc(AppState.lojaDados.nome)}</strong>. Entre com o e-mail e a senha que o dono cadastrou para você.`
+    : motivo === 'erro'
+      ? 'Não foi possível conferir o seu acesso agora (internet?). Tente de novo em instantes.'
+      : `A conta <strong>${esc((auth.currentUser && auth.currentUser.email) || '')}</strong> não faz parte da equipe da <strong>${esc(AppState.lojaDados.nome)}</strong>. Peça ao dono para te cadastrar em ⚙ Configurações → Equipe, ou entre com outra conta.`;
+  root.innerHTML = `
+    <div class="card so-equipe">
+      <h2>🔒 ${esc(area)}</h2>
+      <p>${msg}</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+        ${motivo === 'login' ? '<button class="btn-primary" type="button" data-entrar style="width:auto;">Entrar</button>'
+          : motivo === 'erro' ? '<button class="btn-primary" type="button" data-recarregar style="width:auto;">Tentar de novo</button>'
+          : '<button class="btn-primary" type="button" data-sair style="width:auto;">Entrar com outra conta</button>'}
+        <a class="btn-outline-sm" style="text-decoration:none;" href="/${encodeURIComponent(AppState.slug)}">Ver o cardápio</a>
+      </div>
+    </div>`;
+  root.querySelector('[data-entrar]')?.addEventListener('click', () => document.getElementById('btn-auth-action')?.click());
+  root.querySelector('[data-recarregar]')?.addEventListener('click', () => location.reload());
+  root.querySelector('[data-sair]')?.addEventListener('click', () => auth.signOut().then(() => location.reload()));
 }

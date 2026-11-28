@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 c2f74ff4844483246108b40bb556b74b3e2eb2d43cbc9e370dce53bff02b090c).
+worker.js = cópia EXATA do que está no ar (sha256 cf59e4b2776e61a31f29f37edc8f7641092e93143eae3d85893c885e3e4f4aaa).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
@@ -46,3 +46,4 @@ Motoboys → 💰 Hoje e acerto (frota.js chama montarAcertos de repasse.js; o m
 Motoboy com bag: ainda na loja (GPS até 300 m da loja ou sem GPS) pode "+ Levar junto" qualquer pedido liberado (se passar do desvio, pede confirmação); na rua, o que passa do desvio fica "Longe da rota" + reservar. Botões não somem: mostram o motivo (🍳 Esperando o balcão liberar, 🎒 Bag cheia). Aviso azul no topo: quantas leva e até quantas pode.
 Saudação com o nome (saudacao() em config.js): balcão/dono usa equipe/{uid}.nome, cozinha recebe o nome em iniciarKds(nome), motoboy lê entregadores/{uid}.nome (ou equipe). Só o primeiro nome + Bom dia/Boa tarde/Boa noite + frase por função.
 Cozinha x balcão: "📤 Liberar para os motoboys" grava só liberadoEm (não marca pronto); quem marca pronto é a cozinha (KDS esconde preparo+pronto). Balcão mostra "🍳 Cozinha: preparando" / "✅ pronto"; KDS mostra "📤 Balcão já chamou o motoboy", "🟢 Conectado" quando vazio e erro claro (sem permissão / sem internet). Endereço da loja: CEP busca ao digitar o 8º número (antes só no blur).
+Rota /{slug}/cozinha: tela da cozinha (KDS) para dono e balcão, com "← Voltar ao balcão" (botão 🍳 Cozinha no painel e "Modo Cozinha" no seletor). Painel/cozinha só para equipe: sem login → telaSoEquipe (Entrar); conta de fora → "não faz parte da equipe"; erro de leitura → tentar de novo. App do motoboy: sem login → Entrar; conta que não é entregador nem equipe → bloqueado. (Os dados já eram protegidos pelas regras do Firestore; agora a tela também.)

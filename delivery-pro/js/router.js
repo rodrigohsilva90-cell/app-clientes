@@ -53,12 +53,13 @@ export const AppState = {
 };
 
 // Descobre o modo pela URL logo no início (antes do login responder), para o topo já nascer certo
-const NOMES_MODO = { cliente: 'Modo Cliente', balcao: 'Modo Balcão', motoboy: 'Modo Entregador', master: 'Modo Master' };
+const NOMES_MODO = { cliente: 'Modo Cliente', balcao: 'Modo Balcão', cozinha: 'Modo Cozinha', motoboy: 'Modo Entregador', master: 'Modo Master' };
 function modoDaUrl() {
   const partes = window.location.pathname.split('/').filter(Boolean);
   if (partes[0] === 'master') return 'master';
   if (partes[1] === 'painel') return 'balcao';
   if (partes[1] === 'motoboy') return 'motoboy';
+  if (partes[1] === 'cozinha') return 'cozinha';
   return 'cliente';
 }
 AppState.modoAtual = modoDaUrl();
@@ -111,7 +112,7 @@ async function resolverRota() {
   const subRota = pathParts[1] || 'vitrine';
   AppState.slug = slug;
   // Começa a baixar o código da tela já, junto com os dados da loja (não um depois do outro)
-  (subRota === 'painel' ? telas.balcao() : subRota === 'motoboy' ? telas.motoboy() : subRota === 'pedido' ? telas.acompanhar() : telas.vitrine()).catch(() => {});
+  (['painel', 'cozinha'].includes(subRota) ? telas.balcao() : subRota === 'motoboy' ? telas.motoboy() : subRota === 'pedido' ? telas.acompanhar() : telas.vitrine()).catch(() => {});
 
   // Atualiza manifest dinâmico por loja
   const manifestLink = document.getElementById('pwa-manifest');
@@ -132,7 +133,7 @@ async function resolverRota() {
       }
       AppState.lojaId = slugSnap.data().lojaId;
     }
-    const equipeRapido = ['painel', 'motoboy'].includes(subRota);
+    const equipeRapido = ['painel', 'cozinha', 'motoboy'].includes(subRota);
     const lojaSnap = equipeRapido
       ? await lerRapido(doc(db, 'lojas', AppState.lojaId), (novo) => setTimeout(() => {
           if (!novo.exists() || !AppState.lojaDados || AppState.lojaDados.id !== AppState.lojaId) return;
@@ -151,7 +152,7 @@ async function resolverRota() {
     AppState.lojaDados = { id: AppState.lojaId, ...lojaSnap.data() };
 
     // Aplica White-Label (cor com texto de contraste automático; modo escuro só nas telas do cliente)
-    const telaDoCliente = !['painel', 'motoboy'].includes(subRota);
+    const telaDoCliente = !['painel', 'cozinha', 'motoboy'].includes(subRota);
     aplicarTema({ ...AppState.lojaDados, modoEscuro: telaDoCliente && AppState.lojaDados.modoEscuro }, telaDoCliente ? slug : null);
     document.getElementById('page-title').textContent = AppState.lojaDados.nome;
     document.getElementById('topbar-store-name').textContent = AppState.lojaDados.nome;
@@ -160,6 +161,9 @@ async function resolverRota() {
     if (subRota === 'painel') {
       AppState.modoAtual = 'balcao';
       iniciarBalcao();
+    } else if (subRota === 'cozinha') {
+      AppState.modoAtual = 'cozinha';
+      iniciarBalcao({ cozinha: true });
     } else if (subRota === 'motoboy') {
       AppState.modoAtual = 'motoboy';
       iniciarMotoboy();
@@ -243,6 +247,7 @@ onAuthStateChanged(auth, async (user) => {
 function configurarAlternadorPerfil(selectEl, profile) {
   const papeis = [...new Set(profile.roles || [profile.role || 'cliente'])];
   // Dono/balcão também pode abrir a tela do entregador (e precisa conseguir voltar dela)
+  if (papeis.includes('balcao') && !papeis.includes('cozinha')) papeis.push('cozinha');
   if (papeis.includes('balcao') && !papeis.includes('motoboy')) papeis.push('motoboy');
   const partes = window.location.pathname.split('/').filter(Boolean);
   const slugLoja = AppState.slug || (partes[0] && !['master', 'demo', 'termos', 'privacidade'].includes(partes[0]) ? partes[0].toLowerCase() : null);
@@ -265,6 +270,7 @@ function configurarAlternadorPerfil(selectEl, profile) {
     const novoModo = e.target.value;
     if (novoModo === 'balcao') window.location.pathname = `/${slugLoja}/painel`;
     if (novoModo === 'motoboy') window.location.pathname = `/${slugLoja}/motoboy`;
+    if (novoModo === 'cozinha') window.location.pathname = `/${slugLoja}/cozinha`;
     if (novoModo === 'cliente') window.location.pathname = `/${slugLoja}`;
     if (novoModo === 'master') window.location.pathname = '/master';
   };

@@ -23,13 +23,16 @@ function bipe() {
 
 const minutosDesde = (p) => { const t = p.pagoEm?.toMillis ? p.pagoEm.toMillis() : p.criadoEm?.toMillis ? p.criadoEm.toMillis() : null; return t ? Math.floor((Date.now() - t) / 60000) : 0; };
 
-export function iniciarKds(nome = '') {
+export function iniciarKds(nome = '', { voltar = false } = {}) {
   const root = document.getElementById('app-root');
   root.innerHTML = `
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
       <div style="flex-basis:100%;">${saudacao(nome, 'cozinha')}</div>
       <strong>${AppState.lojaDados.layoutVitrine === 'varejo' ? '📦 Separação' : '👨‍🍳 Cozinha'} — ${esc(AppState.lojaDados.nome)}</strong>
-      <button id="kds-som" class="btn-primary" style="width:auto;">🔊 Ativar som</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${voltar ? `<a class="btn-outline-sm" style="text-decoration:none;" href="/${encodeURIComponent(AppState.slug)}/painel">← Voltar ao balcão</a>` : ''}
+        <button id="kds-som" class="btn-primary" style="width:auto;">🔊 Ativar som</button>
+      </div>
     </div>
     <div class="kds-grade" id="kds-lista"><p style="color:var(--text-muted);">Carregando pedidos...</p></div>
   `;

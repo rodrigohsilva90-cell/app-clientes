@@ -54,7 +54,10 @@ export function iniciarMotoboy() {
   setInterval(aplicarContrasteRua, 10 * 60000);
 
   if (!user) {
-    root.innerHTML = `<div class="card"><h3>Acesso Restrito</h3><p>Faça login com sua conta de entregador para acessar a fila.</p></div>`;
+    root.innerHTML = `<div class="card so-equipe"><h2>🔒 App do entregador</h2><p>Entre com o e-mail e a senha que a <strong>${esc(AppState.lojaDados.nome)}</strong> cadastrou para você.</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;"><button class="btn-primary" type="button" data-entrar style="width:auto;">Entrar</button>
+      <a class="btn-outline-sm" style="text-decoration:none;" href="/${encodeURIComponent(AppState.slug)}">Ver o cardápio</a></div></div>`;
+    root.querySelector('[data-entrar]').onclick = () => document.getElementById('btn-auth-action')?.click();
     return;
   }
 
@@ -97,10 +100,19 @@ export function iniciarMotoboy() {
   `;
   // Nome cadastrado pelo dono (entregador) — ou o do dono/equipe, se for ele usando o app do motoboy
   (async () => {
-    const pegar = async (col) => { try { const s = await lerRapido(doc(db, 'lojas', AppState.lojaId, col, user.uid)); return s.exists() ? s.data().nome || '' : ''; } catch (_) { return ''; } };
-    const nome = (await pegar('entregadores')) || (await pegar('equipe'));
+    // null = não deu para ler (sem internet); false = não está cadastrado; texto = nome
+    const pegar = async (col) => { try { const s = await lerRapido(doc(db, 'lojas', AppState.lojaId, col, user.uid)); return s.exists() ? (s.data().nome || ' ') : false; } catch (err) { return err && err.code === 'permission-denied' ? false : null; } };
+    const ent = await pegar('entregadores');
+    const eq = ent ? null : await pegar('equipe');
+    const nome = (ent || eq || '').trim();
     const el = document.getElementById('mb-saudacao');
     if (nome && el) el.innerHTML = saudacao(nome, 'motoboy');
+    // Conta que não é entregador nem equipe desta loja: não mostra o app
+    if (ent === false && eq === false) {
+      root.innerHTML = `<div class="card so-equipe"><h2>🔒 App do entregador</h2><p>A conta <strong>${esc(user.email || '')}</strong> não é entregador da <strong>${esc(AppState.lojaDados.nome)}</strong>. Peça ao dono para te cadastrar em ⚙ Configurações → Equipe.</p>
+        <button class="btn-primary" type="button" data-sair style="width:auto; margin-top:10px;">Entrar com outra conta</button></div>`;
+      root.querySelector('[data-sair]').onclick = () => auth.signOut().then(() => location.reload());
+    }
   })();
   document.querySelectorAll('#mb-abas [data-aba]').forEach(b => { b.onclick = () => mostrarAbaMotoboy(b.dataset.aba); });
   avisarBaixasGuardadas();

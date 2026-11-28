@@ -30,7 +30,7 @@
     try {
       var sl = location.pathname.split('/')[1] || '';
       var tm = sl && JSON.parse(localStorage.getItem('tema_' + sl.toLowerCase()) || 'null');
-      if (tm && /^#[0-9a-f]{6}$/i.test(tm.c) && !/^\/[^/]+\/(painel|motoboy)/.test(location.pathname)) {
+      if (tm && /^#[0-9a-f]{6}$/i.test(tm.c) && !/^\/[^/]+\/(painel|cozinha|motoboy)/.test(location.pathname)) {
         var r = document.documentElement.style;
         r.setProperty('--primary', tm.c); r.setProperty('--primary-text', tm.t); r.setProperty('--primary-dark', tm.d);
         if (tm.e) document.documentElement.classList.add('tema-escuro');
