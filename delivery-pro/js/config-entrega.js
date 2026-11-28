@@ -131,7 +131,16 @@ export function abrirConfigEntrega() {
             </div>
           </div>
 
-          <strong style="display:block; margin-top:14px;">6. Texto no topo do cardápio (opcional)</strong>
+          <strong style="display:block; margin-top:14px;">6. Motoboys: quanto cada um leva</strong>
+          <p class="gc-dica">Depende do ramo: pizza e lanche esfriam (2 ou 3 por vez); farmácia, mercado e roupas aguentam mais.</p>
+          <div class="gc-linha">
+            <div><label>Entregas por vez (cada motoboy)</label>
+              <select id="ce-max-entregas">${[1, 2, 3, 4, 5, 6, 8, 10].map(n => `<option value="${n}" ${Number(loja.motoboyMaxEntregas || 3) === n ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+            <div><label>Pode desviar da rota até (km)</label><input id="ce-desvio" inputmode="decimal" value="${String(loja.motoboyDesvioKm || 2.5).replace('.', ',')}" /></div>
+          </div>
+          <p class="gc-dica">O app do motoboy só deixa pegar mais um pedido se ele ainda tiver espaço e se o desvio no caminho for até esse valor. Acima disso, sugere reservar para a próxima saída.</p>
+
+          <strong style="display:block; margin-top:14px;">7. Texto no topo do cardápio (opcional)</strong>
           <input id="ce-texto-taxa" maxlength="30" placeholder="Ex: R$ 5 a R$ 15 (vazio = automático)" value="${esc(loja.taxaEntregaTexto || '')}" />
         </div>
       </div>
@@ -450,6 +459,9 @@ export function abrirConfigEntrega() {
     const areaRuim = frete.areas.find(a => !a.sempre && (!horaOk(a.inicio) || !horaOk(a.fim) || a.inicio === a.fim));
     if (areaRuim) { showToast(`Confira o horário da área "${areaRuim.nome}".`); return; }
     if (desenhando) { showToast('Termine (✔ Concluir área) ou cancele o desenho antes de salvar.'); return; }
+    const motoboyMaxEntregas = Math.round(Number($('#ce-max-entregas').value) || 3);
+    const motoboyDesvioKm = Number(String($('#ce-desvio').value).replace(',', '.'));
+    if (!(motoboyDesvioKm >= 0.5 && motoboyDesvioKm <= 20)) { showToast('O desvio dos motoboys precisa ficar entre 0,5 e 20 km.'); return; }
     const btn = $('#ce-salvar');
     btn.disabled = true;
     try {
@@ -458,9 +470,10 @@ export function abrirConfigEntrega() {
         localizacao: { lat: local.lat, lng: local.lng },
         frete,
         taxaEntregaTexto: textoTaxa || null,
-        endereco, enderecoTexto: enderecoTexto || null, mostrarEndereco: $('#ce-mostrar').checked
+        endereco, enderecoTexto: enderecoTexto || null, mostrarEndereco: $('#ce-mostrar').checked,
+        motoboyMaxEntregas, motoboyDesvioKm
       });
-      AppState.lojaDados = { ...AppState.lojaDados, localizacao: local, frete, taxaEntregaTexto: textoTaxa || null, endereco, enderecoTexto: enderecoTexto || null, mostrarEndereco: $('#ce-mostrar').checked };
+      AppState.lojaDados = { ...AppState.lojaDados, localizacao: local, frete, taxaEntregaTexto: textoTaxa || null, endereco, enderecoTexto: enderecoTexto || null, mostrarEndereco: $('#ce-mostrar').checked, motoboyMaxEntregas, motoboyDesvioKm };
       showToast('Configuração de entrega salva!');
     } catch (err) {
       console.error(err);

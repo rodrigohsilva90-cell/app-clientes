@@ -73,7 +73,7 @@ export async function abrirMapaFrota({ concluidosHoje = () => [] } = {}) {
     porMotoboy.forEach((lista, uid) => {
       lista.sort((a, b) => (Number(a.motoboyCoords && a.motoboyCoords.antes) || 0) - (Number(b.motoboyCoords && b.motoboyCoords.antes) || 0));
       const comGps = lista.find(p => p.motoboyCoords && Number.isFinite(p.motoboyCoords.lat));
-      if (comGps) ultimaPos.set(uid, { lat: comGps.motoboyCoords.lat, lng: comGps.motoboyCoords.lng, em: ms(comGps.gpsAtualizadoEm) || Date.now() });
+      if (comGps) ultimaPos.set(uid, { lat: comGps.motoboyCoords.lat, lng: comGps.motoboyCoords.lng, em: ms(comGps.gpsAtualizadoEm) || Date.now(), foraDoApp: comGps.motoboyCoords.foraDoApp === true });
     });
 
     // Mapa: tira quem não está mais em rota e atualiza os outros
@@ -129,7 +129,9 @@ export async function abrirMapaFrota({ concluidosHoje = () => [] } = {}) {
       let status;
       if (lista.length) {
         status = `🛵 ${lista.length} na bag · próxima: <strong>#${esc(prox.numeroPedido || '')}</strong> ${esc(prox.enderecoPartes && prox.enderecoPartes.bairro ? prox.enderecoPartes.bairro : '')}${dist != null ? ` · faltam ${km(dist)}` : ''}`;
-        status += pos ? `<small class="${sinalVelho ? 'frota-velho' : ''}">📡 GPS ${haQuanto(pos.em)}${sinalVelho ? ' (sem sinal agora?)' : ''}</small>` : '<small class="frota-velho">📡 Esperando o GPS do celular dele</small>';
+        status += !pos ? '<small class="frota-velho">📡 Esperando o GPS do celular dele</small>'
+          : pos.foraDoApp ? `<small class="frota-velho">📱 Saiu do Delivery Pro ${haQuanto(pos.em)} (Google Maps/Waze?): posição parada até ele voltar ao app</small>`
+          : `<small class="${sinalVelho ? 'frota-velho' : ''}">📡 GPS ${haQuanto(pos.em)}${sinalVelho ? ' (sem sinal ou app fechado?)' : ''}</small>`;
       } else status = '🏪 Sem entrega na mão';
       return `<div class="frota-linha${lista.length ? '' : ' parado'}" data-uid="${esc(uid)}">
         <span class="frota-cor" style="background:${corDe(uid)}"></span>

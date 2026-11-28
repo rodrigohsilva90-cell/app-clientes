@@ -1,4 +1,4 @@
-import { auth, db, showToast } from './config.js';
+import { auth, db, showToast, lerRapido } from './config.js';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import { doc, getDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 // Cada tela baixa só o código dela (o cliente não precisa baixar o painel do balcão, do motoboy ou do Master)
@@ -132,7 +132,18 @@ async function resolverRota() {
       }
       AppState.lojaId = slugSnap.data().lojaId;
     }
-    const lojaSnap = await getDoc(doc(db, 'lojas', AppState.lojaId));
+    const equipeRapido = ['painel', 'motoboy'].includes(subRota);
+    const lojaSnap = equipeRapido
+      ? await lerRapido(doc(db, 'lojas', AppState.lojaId), (novo) => setTimeout(() => {
+          if (!novo.exists() || !AppState.lojaDados || AppState.lojaDados.id !== AppState.lojaId) return;
+          const antes = AppState.lojaDados;
+          const dados = novo.data();
+          // Mudou o plano (pagou/venceu): recarrega para mostrar a tela certa; o resto atualiza sem piscar
+          const chavePlano = (l) => JSON.stringify([l.plano || null, l.pagoAte && l.pagoAte.seconds || null, l.trialAte && l.trialAte.seconds || null]);
+          if (chavePlano(antes) !== chavePlano(dados)) { location.reload(); return; }
+          Object.assign(AppState.lojaDados, dados);
+        }, 0))
+      : await getDoc(doc(db, 'lojas', AppState.lojaId));
     if (!lojaSnap.exists()) {
       root.innerHTML = `<div class="card"><h2>Loja não encontrada ou temporariamente indisponível.</h2></div>`;
       return;
@@ -230,7 +241,13 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 function configurarAlternadorPerfil(selectEl, profile) {
-  const papeis = profile.roles || [profile.role || 'cliente'];
+  const papeis = [...new Set(profile.roles || [profile.role || 'cliente'])];
+  // Dono/balcão também pode abrir a tela do entregador (e precisa conseguir voltar dela)
+  if (papeis.includes('balcao') && !papeis.includes('motoboy')) papeis.push('motoboy');
+  const partes = window.location.pathname.split('/').filter(Boolean);
+  const slugLoja = AppState.slug || (partes[0] && !['master', 'demo', 'termos', 'privacidade'].includes(partes[0]) ? partes[0].toLowerCase() : null);
+  if (!slugLoja) return; // fora de uma loja não há para onde trocar
+  if (!papeis.includes(AppState.modoAtual) && NOMES_MODO[AppState.modoAtual]) papeis.push(AppState.modoAtual);
   if (papeis.length <= 1) return;
 
   selectEl.innerHTML = papeis.map(r => `<option value="${r}">${NOMES_MODO[r] || r}</option>`).join('');
@@ -238,15 +255,18 @@ function configurarAlternadorPerfil(selectEl, profile) {
   selectEl.classList.remove('hidden');
 
   selectEl.onchange = (e) => {
+    // Entregador não larga a rota no meio; o dono pode sair (as entregas continuam com ele)
+    if (AppState.entregaAtiva && papeis.includes('balcao') && confirm('Você tem entrega em andamento. Sair desta tela mesmo assim? (as entregas continuam com você)')) AppState.entregaAtiva = false;
     if (AppState.entregaAtiva) {
       showToast('Conclua sua entrega ativa antes de trocar de perfil!');
       e.target.value = AppState.modoAtual;
       return;
     }
     const novoModo = e.target.value;
-    if (novoModo === 'balcao') window.location.pathname = `/${AppState.slug}/painel`;
-    if (novoModo === 'motoboy') window.location.pathname = `/${AppState.slug}/motoboy`;
-    if (novoModo === 'cliente') window.location.pathname = `/${AppState.slug}`;
+    if (novoModo === 'balcao') window.location.pathname = `/${slugLoja}/painel`;
+    if (novoModo === 'motoboy') window.location.pathname = `/${slugLoja}/motoboy`;
+    if (novoModo === 'cliente') window.location.pathname = `/${slugLoja}`;
+    if (novoModo === 'master') window.location.pathname = '/master';
   };
 }
 

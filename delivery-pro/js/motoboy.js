@@ -9,6 +9,7 @@ import {
 
 let watchId = null;
 let ultimaPosicao = null;
+let ultimaLeitura = null;      // última posição lida do GPS (mesmo as que não foram enviadas)
 let ultimoEnvioTimestamp = 0;
 let wakeLockMotoboy = null;
 let pedidoEmRotaAtual = null;
@@ -16,7 +17,10 @@ let minhasEntregas = [];      // entregas deste motoboy, na ordem da rota (a pri
 let ordemRota = [];           // ids na ordem escolhida (mantida enquanto o conjunto não muda)
 const chegadaAvisada = new Set();
 let assinaturaTela = '';
-const MAX_ENTREGAS_ROTA = 3;
+// O dono escolhe (em Entrega e frete → Motoboys) quantas entregas cada um leva e quanto pode desviar
+const numLoja = (campo, padrao, min, max) => { const n = Number(AppState.lojaDados && AppState.lojaDados[campo]); return Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(min, n)) : padrao; };
+const maxRota = () => Math.round(numLoja('motoboyMaxEntregas', 3, 1, 10));
+const limiteDesvio = () => numLoja('motoboyDesvioKm', 2.5, 0.5, 20) * 1000;
 let mapaMotoboy = null;
 let marcadorMoto = null;
 let linhaRotaMoto = null;
@@ -24,7 +28,6 @@ let linhaRotaMoto = null;
 const OFFLINE_QUEUE_KEY = 'motoboy_offline_actions_v1';
 const CHAVE_ORDEM = () => `motoboy_ordem_${AppState.lojaId}`;
 const CHAVE_VIAGEM = () => `motoboy_viagem_${AppState.lojaId}`;
-const LIMITE_DESVIO_M = 2500;   // pedido extra que desvia mais que isso fica para outro entregador
 const SLA_URGENTE_MS = 35 * 60 * 1000; // pedido esperando há 35+ min passa na frente se estiver quase no caminho
 const FOLGA_URGENTE_M = 1500;
 let ligarGps = null;            // liga o GPS (fica desligado quando não há entrega, para poupar bateria)
@@ -215,6 +218,7 @@ async function iniciarTelemetriaGPS(motoboyUid) {
       const { latitude, longitude, speed, accuracy } = pos.coords;
       const agora = Date.now();
       const coords = { lat: latitude, lng: longitude, accuracy: Math.round(accuracy || 0) };
+      ultimaLeitura = coords;
 
       // Frequência adaptativa: 8s se velocidade > 1 m/s (~3.6 km/h), senão 30s
       const emMovimento = (speed !== null && speed > 1.0) ||
@@ -255,6 +259,16 @@ async function iniciarTelemetriaGPS(motoboyUid) {
   else { const b = document.getElementById('gps-status-badge'); if (b) { b.textContent = '⏸ GPS em pausa (sem entrega na mão). Liga sozinho quando você pegar uma.'; b.style.color = 'var(--text-muted)'; } }
   // Ao voltar do Google Maps/Waze o navegador pode ter pausado o GPS: lê uma posição nova na hora
   document.addEventListener('visibilitychange', () => {
+    // Saiu do app (foi para o Google Maps/Waze, WhatsApp...): o navegador para o GPS. Avisa o mapa do dono
+    // que a última posição pode ficar parada até ele voltar para o Delivery Pro.
+    const aqui = ultimaLeitura || ultimaPosicao;
+    if (document.visibilityState === 'hidden' && minhasEntregas.length && aqui && navigator.onLine) {
+      const p0 = minhasEntregas[0];
+      const d = p0.destinoCoords;
+      const perto = d && calcularDistanciaMetros(d.lat, d.lng, aqui.lat, aqui.lng) <= 50;
+      if (!perto) updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p0.id), { motoboyCoords: { ...aqui, antes: 0, foraDoApp: true }, gpsAtualizadoEm: serverTimestamp() }).catch(() => {});
+      return;
+    }
     if (document.visibilityState !== 'visible' || !minhasEntregas.length) return;
     telaAcesa(true); // o celular solta a tela acesa ao sair do app: pede de novo
     navigator.geolocation.getCurrentPosition((pos) => {
@@ -404,7 +418,7 @@ function processarEntregas(motoboyUid) {
     if (assinatura === assinaturaTela) return;
     assinaturaTela = assinatura;
     renderizarEntregaAtiva(pedidoEmRotaAtual, motoboyUid);
-    renderizarFilaDisponivel(disponiveis, motoboyUid, minhasEntregas.length >= MAX_ENTREGAS_ROTA);
+    renderizarFilaDisponivel(disponiveis, motoboyUid, minhasEntregas.length >= maxRota());
     minhasReservas = reservasAgora;
     renderizarReservas(motoboyUid);
 }
@@ -428,6 +442,7 @@ function escutarEntregas(motoboyUid) {
 // o pedido continua disponível e o motoboy é avisado para não sair com a bag.
 async function assumirEntregaAtomica(pedidoId, motoboyUid) {
   const pedidoRef = doc(db, 'lojas', AppState.lojaId, 'pedidos', pedidoId);
+  if (minhasEntregas.length >= maxRota()) { showToast(`A loja deixa levar até ${maxRota()} entrega${maxRota() > 1 ? 's' : ''} por vez. Entregue uma antes de pegar outra (ou reserve para a volta).`, 6000); return false; }
   if (!navigator.onLine) { showToast('📵 Sem internet para reservar a entrega. Conecte antes de sair com o pedido.', 6000); return false; }
   let tempoEsgotado = null;
   let tx = null;
@@ -777,10 +792,12 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
     }
     return melhor;
   };
-  const melhorId = avaliados.find(a => a.pronto && !(naRua && a.desvio > LIMITE_DESVIO_M))?.p.id;
+  const melhorId = bloqueadoPorRotaAtiva ? null : avaliados.find(a => a.pronto && !(naRua && a.desvio > limiteDesvio()))?.p.id;
 
-  lista.innerHTML = avaliados.map(({ p, desvio, espera, pronto }) => {
-    const foraDaRota = naRua && desvio > LIMITE_DESVIO_M;
+  const avisoCheia = bloqueadoPorRotaAtiva && !turnoEncerrado
+    ? `<div class="card mb-aviso-cheia">🎒 Bag cheia: a loja deixa levar até <strong>${maxRota()}</strong> por vez. Entregue uma para pegar outra — ou reserve para a volta.</div>` : '';
+  lista.innerHTML = avisoCheia + avaliados.map(({ p, desvio, espera, pronto }) => {
+    const foraDaRota = naRua && desvio > limiteDesvio();
     const travado = !pronto || bloqueadoPorRotaAtiva || foraDaRota || turnoEncerrado;
     const par = parDe(avaliados.find(a => a.p === p));
     const dicas = [];
@@ -800,7 +817,7 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
       </div>
       <div class="mb-botoes-fila">
       ${pronto ? `<button class="btn-primary" style="width:auto;${travado && naRua ? ' display:none;' : ''}" ${travado ? 'disabled' : ''} data-assumir="${p.id}">
-        ${turnoEncerrado ? 'Turno encerrado' : bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : foraDaRota ? 'Longe da rota' : naRua ? '+ Levar agora' : 'Pegar entrega'}
+        ${turnoEncerrado ? 'Turno encerrado' : bloqueadoPorRotaAtiva ? `Rota cheia (${maxRota()})` : foraDaRota ? 'Longe da rota' : naRua ? '+ Levar agora' : 'Pegar entrega'}
       </button>` : ''}
       ${(naRua || !pronto) && !turnoEncerrado ? `<button class="btn-outline-sm" type="button" data-reservar="${p.id}">📌 ${naRua ? 'Reservar para a volta' : 'Reservar para mim'}</button>` : ''}
       </div>

@@ -1,4 +1,4 @@
-import { db, auth, formatarCentavos, showToast, esc } from './config.js';
+import { db, auth, formatarCentavos, showToast, esc, lerRapido } from './config.js';
 import { AppState } from './router.js';
 import { montarItem, ofertaDoDia } from './cardapio.js';
 import { abrirGestaoCardapio } from './gestao-cardapio.js';
@@ -48,8 +48,13 @@ export async function iniciarBalcao() {
   papel = null;
   if (auth.currentUser) {
     try {
-      const snap = await getDoc(doc(db, 'lojas', AppState.lojaId, 'equipe', auth.currentUser.uid));
-      papel = snap.exists() ? (snap.data().papel || 'balcao') : null;
+      // Cópia do aparelho primeiro (abre na hora); se o papel mudou no servidor, recarrega
+      const papelDe = (s) => (s.exists() ? (s.data().papel || 'balcao') : null);
+      let papelLocal;
+      const snap = await lerRapido(doc(db, 'lojas', AppState.lojaId, 'equipe', auth.currentUser.uid), (novo) => {
+        Promise.resolve().then(() => { if (papelDe(novo) !== papelLocal) location.reload(); });
+      });
+      papel = papelLocal = papelDe(snap);
     } catch (_) { papel = null; }
   }
   const assinatura = statusAssinatura(AppState.lojaDados);

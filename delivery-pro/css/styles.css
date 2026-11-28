@@ -869,3 +869,4 @@ details.gc-secao > summary small { font-weight: 400; font-size: 12px; color: var
 .mb-sugestao { display: inline-block; background: #16a34a; color: #fff; font-weight: 800; font-size: 12px; border-radius: 99px; padding: 2px 10px; margin: 4px 0 2px; }
 .mb-combina { display: block; color: #1d4ed8; font-weight: 600; font-size: 13px; }
 :root.mb-noite .mb-combina { color: #93c5fd; }
+.mb-aviso-cheia { background: #fef3c7; border: 1px solid #fcd34d; color: #78350f; font-size: 14px; }

@@ -1,6 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import { getAuth } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, getDoc, getDocFromCache } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 // Projeto Firebase delivery-pro-38f75 (Firestore em southamerica-east1)
 export const FIREBASE_CONFIG = {
@@ -26,6 +26,19 @@ function criarBanco() {
   return getFirestore(app);
 }
 export const db = criarBanco();
+
+// Painel e motoboy abrem na hora com a cópia guardada no aparelho; a versão nova chega por trás
+// (aoAtualizar recebe os dados novos). Na primeira vez (sem cópia), espera o servidor normalmente.
+export async function lerRapido(ref, aoAtualizar) {
+  try {
+    const local = await getDocFromCache(ref);
+    if (local.exists()) {
+      getDoc(ref).then(novo => { if (aoAtualizar) aoAtualizar(novo); }).catch(() => {});
+      return local;
+    }
+  } catch (_) {}
+  return getDoc(ref);
+}
 
 // Formatação monetária segura (sempre trabalhando com centavos inteiros no banco)
 export function formatarCentavos(centavos) {
