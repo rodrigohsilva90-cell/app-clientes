@@ -476,10 +476,11 @@ function criarCardPedidoBalcao(p) {
     </div>
     ${trocoTxt}
     ${p.status === 'novo' && minutos >= MIN_ALERTA ? `<div class="pedido-aviso">⚠️ Aguardando aceite há ${minutos} min — cancela sozinho com ${MIN_CANCELAR} min</div>` : ''}
+    ${p.status === 'entrega' && p.motoboyCoords && p.motoboyCoords.naLoja ? `<div class="pedido-na-cozinha">🏪 Com ${esc(p.motoboyNome || 'o motoboy')}, ainda na loja (não iniciou a rota)</div>` : ''}
     ${p.status === 'preparo' && p.pronto ? `<div class="pedido-pronto">✅ ${textoLoja('Cozinha', AppState.lojaDados)}: pronto</div>` : p.status === 'preparo' ? `<div class="pedido-na-cozinha">🍳 ${textoLoja('Cozinha', AppState.lojaDados)}: preparando</div>` : ''}
     ${p.status === 'preparo' && p.reservadoPor && p.reservadoEm?.toMillis && Date.now() - p.reservadoEm.toMillis() < 90 * 60000 ? `<div class="pedido-reserva">📌 ${esc(p.reservadoNome || 'Entregador')} reservou — busca quando voltar da rota</div>` : ''}
     ${p.status === 'entrega' ? `<div style="font-size:13px; margin-bottom:8px;">🛵 Com: <strong>${esc(p.motoboyNome || (p.motoboyId ? 'entregador (app)' : 'sem entregador'))}</strong></div>` : ''}
-    ${p.status === 'entrega' && linkAvisoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin-bottom:8px;" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>` : ''}
+    ${p.status === 'entrega' && !(p.motoboyCoords && p.motoboyCoords.naLoja) && linkAvisoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin-bottom:8px;" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>` : ''}
     ${botaoAcao}
     ${p.tipoEntrega === 'entrega' && ['preparo', 'entrega'].includes(p.status) ? '<button class="btn-outline-sm" type="button" data-resumo style="width:100%; margin-top:6px;">📋 Copiar resumo para motoboy avulso</button>' : ''}
     ${p.status === 'preparo' ? '<button class="btn-outline-sm gc-perigo" type="button" data-cancelar-aceito style="width:100%; margin-top:6px;">✖ Cancelar pedido</button>' : ''}
@@ -908,18 +909,11 @@ async function despacharParaEntregador(p) {
           motoboyId: escolhido.uid,
           motoboyNome: escolhido.nome,
           saiuParaEntregaEm: serverTimestamp(),
+          motoboyCoords: { naLoja: true }, // o cliente é avisado quando o motoboy desliza "Iniciar rota"
           atualizadoEm: serverTimestamp()
         });
-        avisarCliente(p.id);
-        const link = linkAvisoWhats(p);
-        if (!link) { overlay.remove(); showToast(`Pedido #${p.numeroPedido || ''} enviado para ${escolhido.nome}`); return; }
-        overlay.querySelector('.card').innerHTML = `
-          <h3>✅ Pedido #${esc(p.numeroPedido || '')} com ${esc(escolhido.nome)}</h3>
-          <p class="gc-dica" style="margin:8px 0 14px;">Avise o cliente que o pedido saiu — vai com o link para ele ver a moto no mapa.</p>
-          <a class="btn-primary btn-whats" data-avisar="1" href="${esc(link)}" target="_blank" rel="noopener">📲 Avisar cliente no WhatsApp</a>
-          <button class="btn-outline-sm" data-fechar style="width:100%; margin-top:8px;">Agora não</button>`;
-        overlay.querySelector('[data-avisar]').onclick = () => { marcarAvisado(p); setTimeout(() => overlay.remove(), 300); };
-        overlay.querySelector('[data-fechar]').onclick = () => overlay.remove();
+        overlay.remove();
+        showToast(`Pedido #${p.numeroPedido || ''} na bag de ${escolhido.nome}. O cliente é avisado quando ele iniciar a rota.`, 5000);
       } catch (err) {
         console.error(err);
         btn.disabled = false;
@@ -1222,7 +1216,7 @@ function ligarIndicadorRede() {
 function cancelarEmRota(p) {
   const overlay = document.createElement('div');
   overlay.className = 'gc-overlay';
-  const valor = calcularRepasse(AppState.lojaDados.repasse, p);
+  const valor = calcularRepasse(AppState.lojaDados.repasse, p, AppState.lojaDados);
   overlay.innerHTML = `
     <div class="card" style="max-width:400px; width:100%; margin:0;">
       <h3>✖ Cancelar o pedido #${esc(p.numeroPedido || '')} em rota</h3>

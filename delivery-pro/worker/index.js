@@ -902,7 +902,7 @@ async function carimbarPedido(request, env) {
     if (p.status !== 'concluido') return jsonResponse({ ok: true, contado: false });
     if (p.contabilizadoEm) return jsonResponse({ ok: true, contado: false, jaContado: true });
     // Repasse do motoboy desta corrida (regra da loja), gravado no pedido na conclusão
-    const repasseCalc = p.motoboyId && p.repasseMotoboyCentavos == null ? { repasseMotoboyCentavos: calcularRepasse(loja && loja.repasse, p) } : {};
+    const repasseCalc = p.motoboyId && p.repasseMotoboyCentavos == null ? { repasseMotoboyCentavos: calcularRepasse(loja && loja.repasse, p, loja) } : {};
     const whatsapp = String(p.clienteWhatsapp || '').replace(/\D/g, '');
     if (whatsapp.length < 10 || whatsapp.length > 13) {
       await fs.atualizarSeVersao(caminho, { contabilizadoEm: new Date(), ...repasseCalc }, lido.versao);
@@ -935,8 +935,15 @@ async function carimbarPedido(request, env) {
 // lojas/{id}/turnosMotoboy/{uid} = { fundoTrocoCentavos, status: 'aberto'|'aguardando_acerto', encerradoEm }
 // lojas/{id}/acertos_motoboy/{id} = resumo imutável do turno acertado (e os pedidos ganham acertoId)
 // =====================================================================
-function calcularRepasse(rep, p) {
-  if (!rep) return 0;
+function calcularRepasse(rep, p, loja = null) {
+  // Loja sem regra própria de repasse: o motoboy ganha a taxa de entrega do pedido. Frete grátis para o
+  // cliente não zera o motoboy: vale o que a entrega custaria pela tabela de frete da loja.
+  if (!rep || !rep.tipo) {
+    let v = Number(p.freteCentavos) || 0;
+    if (!v && loja && loja.frete && loja.frete.modo !== 'gratis' && Number(p.distanciaKm) > 0) v = valorFreteKm(loja.frete, Number(p.distanciaKm));
+    if (p.adicionalChuva) v += Number(rep && rep.adicionalChuvaCentavos) || 0;
+    return Math.max(0, Math.round(v));
+  }
   let v;
   if (rep.tipo === 'taxa') v = Math.round((Number(p.freteCentavos) || 0) * (Number(rep.percentualTaxa) || 100) / 100);
   else if (rep.tipo === 'faixas') {
@@ -973,7 +980,8 @@ async function extratoTurno(fs, lojaId, uid, loja) {
       return {
         id: p.id, numero: p.numeroPedido || null, bairro: (p.enderecoPartes && p.enderecoPartes.bairro) || '',
         em: p.entregueEm || p.canceladoEm || null, cancelado: p.status === 'cancelado',
-        repasseCentavos: p.repasseMotoboyCentavos != null ? Number(p.repasseMotoboyCentavos) : calcularRepasse(rep, p),
+        // Corrida gravada com R$ 0 quando a loja ainda não tinha regra: recalcula (padrão = taxa de entrega)
+        repasseCentavos: p.repasseMotoboyCentavos != null && !(!rep.tipo && Number(p.repasseMotoboyCentavos) === 0) ? Number(p.repasseMotoboyCentavos) : calcularRepasse(rep, p, loja),
         subsidio: !(Number(p.freteCentavos) > 0), chuva: Boolean(p.adicionalChuva), dinheiroCentavos: dinheiro, cartaoCentavos: cartao,
         forma, valorCentavos: concluido ? valor : 0, freteCentavos: Number(p.freteCentavos) || 0
       };
@@ -1638,6 +1646,8 @@ async function notificarCliente(request, env) {
     if (!ins || !pedido) return jsonResponse({ ok: false, motivo: 'sem_inscricao' });
     const chegou = pedido.status === 'entrega' && pedido.motoboyCoords && pedido.motoboyCoords.chegou === true;
     const etapa = chegou ? 'chegou' : pedido.status;
+    // Motoboy pegou, mas ainda não deslizou "Iniciar rota": o aviso de saída vem depois
+    if (pedido.status === 'entrega' && pedido.motoboyCoords && pedido.motoboyCoords.naLoja) return jsonResponse({ ok: true, aguardandoSaida: true });
     if (etapa === ins.ultimoAviso) return jsonResponse({ ok: true, repetido: true });
     const n = pedido.numeroPedido ? ` #${pedido.numeroPedido}` : '';
     const varejo = loja && loja.layoutVitrine === 'varejo';

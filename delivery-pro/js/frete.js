@@ -116,8 +116,15 @@ export function modoOperacaoAtual(loja, agora = Date.now()) {
 
 // Quanto o motoboy ganha numa corrida (igual ao Worker): valor fixo, % da taxa ou faixa de km,
 // nunca menos que o mínimo (frete grátis não tira o ganho dele) + adicional de chuva/horário nobre.
-export function calcularRepasse(rep, p) {
-  if (!rep) return 0;
+export function calcularRepasse(rep, p, loja = null) {
+  // Loja sem regra própria de repasse: o motoboy ganha a taxa de entrega do pedido. Frete grátis para o
+  // cliente não zera o motoboy: vale o que a entrega custaria pela tabela de frete da loja.
+  if (!rep || !rep.tipo) {
+    let v = Number(p.freteCentavos) || 0;
+    if (!v && loja && loja.frete && loja.frete.modo !== 'gratis' && Number(p.distanciaKm) > 0) v = valorFreteKm(loja.frete, Number(p.distanciaKm));
+    if (p.adicionalChuva) v += Number(rep && rep.adicionalChuvaCentavos) || 0;
+    return Math.max(0, Math.round(v));
+  }
   let v;
   if (rep.tipo === 'taxa') v = Math.round((Number(p.freteCentavos) || 0) * (Number(rep.percentualTaxa) || 100) / 100);
   else if (rep.tipo === 'faixas') {

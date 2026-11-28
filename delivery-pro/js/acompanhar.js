@@ -102,7 +102,9 @@ export function iniciarAcompanhamento(pedidoId) {
         document.getElementById('acomp-status').innerHTML = '<h3>Pedido não encontrado.</h3>';
         return;
       }
-      const p = { id: snap.id, ...snap.data() };
+      let p = { id: snap.id, ...snap.data() };
+      // Já está com o motoboy, mas ele ainda não saiu da loja: para o cliente continua "pronto", sem mapa
+      if (p.status === 'entrega' && p.motoboyCoords && p.motoboyCoords.naLoja) p = { ...p, status: 'preparo', comEntregador: true, motoboyCoords: null };
       renderStatus(p);
       renderItens(p);
       renderMapa(p);
@@ -140,7 +142,7 @@ function etapasDo(p) {
   }
   return [
     { status: 'novo', icone: '📝', titulo: 'Pedido recebido', texto: 'Aguardando a loja confirmar.' },
-    { status: 'preparo', ...etapaPreparo() },
+    { status: 'preparo', ...(p.comEntregador ? { icone: '📦', titulo: 'Pronto, com o entregador', texto: 'O entregador já pegou seu pedido e sai da loja em instantes. Avisamos quando ele sair.' } : etapaPreparo()) },
     { status: 'entrega', icone: '🛵', titulo: 'Saiu para entrega', texto: 'O entregador está a caminho.' },
     { status: 'concluido', icone: '✅', titulo: 'Entregue', texto: 'Bom apetite!' }
   ];

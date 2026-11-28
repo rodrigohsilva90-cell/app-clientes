@@ -126,7 +126,7 @@ export async function abrirMapaFrota({ concluidosHoje = () => [] } = {}) {
     }
 
     // Resumo
-    const naRua = porMotoboy.size;
+    const naRua = [...porMotoboy.values()].filter(l => l.some(p => !(p.motoboyCoords && p.motoboyCoords.naLoja))).length;
     $('#fr-resumo').innerHTML = `
       <div><strong>${naRua}</strong><span>motoboys na rua</span></div>
       <div><strong>${emRota.length}</strong><span>entregas em andamento</span></div>
@@ -145,7 +145,9 @@ export async function abrirMapaFrota({ concluidosHoje = () => [] } = {}) {
       const sinalVelho = pos && Date.now() - pos.em > 2 * 60000;
       const cobrar = lista.filter(p => p.pagamentoStatus !== 'aprovado' && p.formaPagamento === 'dinheiro').reduce((a, p) => a + (Number(p.totalCentavos) || 0), 0);
       let status;
-      if (lista.length) {
+      if (lista.length && lista.every(p => p.motoboyCoords && p.motoboyCoords.naLoja)) {
+        status = `🏪 Na loja montando a rota: <strong>${lista.length}</strong> na bag (ainda não saiu; os clientes não foram avisados)`;
+      } else if (lista.length) {
         status = `🛵 ${lista.length} na bag · próxima: <strong>#${esc(prox.numeroPedido || '')}</strong> ${esc(prox.enderecoPartes && prox.enderecoPartes.bairro ? prox.enderecoPartes.bairro : '')}${dist != null ? ` · faltam ${km(dist)}` : ''}`;
         status += !pos ? '<small class="frota-velho">📡 Esperando o GPS do celular dele</small>'
           : pos.foraDoApp ? `<small class="frota-velho">📱 Saiu do Delivery Pro ${haQuanto(pos.em)} (Google Maps/Waze?): posição parada até ele voltar ao app</small>`

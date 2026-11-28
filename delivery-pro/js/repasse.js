@@ -127,7 +127,7 @@ export function montarAcertos(raiz) {
     try { d = await api({ acao: 'listar' }); } catch (err) { corpo.innerHTML = `<p class="gc-dica">${esc(err.message)}</p>`; return; }
     const tot = d.entregadores.reduce((a, e) => ({ entregas: a.entregas + e.entregas + e.acertadoHoje.entregas, vendido: a.vendido + e.vendidoCentavos + e.acertadoHoje.vendidoCentavos, ganho: a.ganho + e.receberCentavos + e.acertadoHoje.receberCentavos, rua: a.rua + e.dinheiroRecebidoCentavos }), { entregas: 0, vendido: 0, ganho: 0, rua: 0 });
     corpo.innerHTML = `
-      ${d.repasse ? '' : '<p class="mb-alerta-pino">Configure primeiro quanto paga cada entrega em ⚙ Configurações → 🛵 Repasse dos motoboys.</p>'}
+      ${d.repasse && d.repasse.tipo ? '' : '<p class="gc-dica">ℹ️ Sem regra própria de pagamento: cada motoboy ganha a <strong>taxa de entrega que o cliente pagou</strong>. Para pagar diferente (valor fixo, por km, diária), configure em ⚙ Configurações → 🛵 Repasse dos motoboys.</p>'}
       ${d.caixaAberto ? '' : '<p class="mb-alerta-pino">🔒 O caixa está fechado: o acerto fica registrado, mas o dinheiro só entra na gaveta do caixa se ele estiver aberto. Abra o caixa antes de acertar.</p>'}
       <div class="ac-totais">
         <div><small>Entregas hoje</small><strong>${tot.entregas}</strong></div>

@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 cf59e4b2776e61a31f29f37edc8f7641092e93143eae3d85893c885e3e4f4aaa).
+worker.js = cópia EXATA do que está no ar (sha256 fc91ba5718772452f664122120a933263a8d40f55e675977f122427e721ca98f).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
@@ -47,3 +47,4 @@ Motoboy com bag: ainda na loja (GPS até 300 m da loja ou sem GPS) pode "+ Levar
 Saudação com o nome (saudacao() em config.js): balcão/dono usa equipe/{uid}.nome, cozinha recebe o nome em iniciarKds(nome), motoboy lê entregadores/{uid}.nome (ou equipe). Só o primeiro nome + Bom dia/Boa tarde/Boa noite + frase por função.
 Cozinha x balcão: "📤 Liberar para os motoboys" grava só liberadoEm (não marca pronto); quem marca pronto é a cozinha (KDS esconde preparo+pronto). Balcão mostra "🍳 Cozinha: preparando" / "✅ pronto"; KDS mostra "📤 Balcão já chamou o motoboy", "🟢 Conectado" quando vazio e erro claro (sem permissão / sem internet). Endereço da loja: CEP busca ao digitar o 8º número (antes só no blur).
 Rota /{slug}/cozinha: tela da cozinha (KDS) para dono e balcão, com "← Voltar ao balcão" (botão 🍳 Cozinha no painel e "Modo Cozinha" no seletor). Painel/cozinha só para equipe: sem login → telaSoEquipe (Entrar); conta de fora → "não faz parte da equipe"; erro de leitura → tentar de novo. App do motoboy: sem login → Entrar; conta que não é entregador nem equipe → bloqueado. (Os dados já eram protegidos pelas regras do Firestore; agora a tela também.)
+Iniciar rota: ao pegar (motoboy ou balcão escolhendo), o pedido fica status entrega + motoboyCoords {naLoja:true} — cliente vê "Pronto, com o entregador", sem mapa e sem push (notificarCliente ignora). Tela "🏪 Ainda na loja" (renderizarPlanoRota): mapa com loja, paradas numeradas e caminho por todas (buscarRotaVarias/OSRM, com km e minutos por trecho), ordem otimizada (otimizarOrdem: testa todas as ordens até 7 paradas; custo = km + 0,3×espera, urgente 35+ min pesa 2×), setas para mudar (fica "manual"). Deslizar "Iniciar rota" (iniciarRota) grava motoboyCoords {antes, saiuEm} sem naLoja, avisa os clientes e mostra só a 1ª entrega. GPS só vai para entregas já iniciadas. Repasse: loja sem regra (repasse.tipo vazio) → motoboy ganha a taxa de entrega do pedido; frete grátis usa valorFreteKm da tabela; corridas antigas gravadas com 0 são recalculadas no acerto.

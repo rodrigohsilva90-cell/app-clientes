@@ -181,6 +181,24 @@ export async function buscarRota(a, b) {
   } catch (_) { return null; }
 }
 
+// Caminho pelas ruas passando por várias paradas, na ordem. Devolve { pontos, metros, segundos, trechos:[{metros,segundos}] } ou null.
+export async function buscarRotaVarias(paradas) {
+  const ok = paradas.filter(p => p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)));
+  if (ok.length < 2) return null;
+  try {
+    const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${ok.map(p => `${p.lng},${p.lat}`).join(';')}?overview=full&geometries=geojson`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const rota = d.routes && d.routes[0];
+    if (!rota) return null;
+    return {
+      pontos: rota.geometry.coordinates.map(([lng, lat]) => ({ lat, lng })),
+      metros: rota.distance, segundos: rota.duration,
+      trechos: (rota.legs || []).map(l => ({ metros: l.distance, segundos: l.duration }))
+    };
+  } catch (_) { return null; }
+}
+
 // Linha azul do caminho que FALTA até o cliente. Busca a rota de novo a cada ~1 min (ou se a
 // moto sair do caminho). A moto é "encaixada" na linha: a posição do GPS (que oscila uns metros)
 // vira o ponto mais perto da rua, e a moto anda pelas curvas até lá.

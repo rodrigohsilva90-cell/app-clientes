@@ -895,3 +895,18 @@ details.gc-secao > summary small { font-weight: 400; font-size: 12px; color: var
 .pedido-na-cozinha { font-size: 13px; background: #fff7ed; border: 1px solid #fdba74; color: #7c2d12; border-radius: 8px; padding: 6px 8px; margin-bottom: 8px; }
 .kds-liberado { font-size: 14px; font-weight: 700; color: #1d4ed8; margin-top: 4px; }
 .so-equipe { max-width: 520px; margin: 24px auto; }
+/* Motoboy: plano da rota antes de sair */
+.mb-plano-topo { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.mb-plano-mapa { height: 300px; border-radius: 10px; margin: 10px 0; z-index: 1; }
+.mb-plano-resumo { font-size: 14px; margin: 4px 0 8px; }
+.mb-plano-lista { list-style: none; padding: 0; margin: 0 0 10px; }
+.mb-plano-lista li { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.mb-plano-num { flex: none; width: 30px; height: 30px; border-radius: 50%; background: #2563eb; color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+.mb-plano-info { flex: 1; min-width: 0; }
+.mb-plano-info small { display: block; color: var(--text-muted); }
+.mb-plano-trecho { color: #1d4ed8 !important; font-weight: 600; }
+.mb-plano-pino { background: transparent; border: 0; }
+.mb-plano-pino span { display: flex; width: 30px; height: 30px; border-radius: 50%; background: #2563eb; border: 3px solid #fff; box-shadow: 0 2px 6px #0005; align-items: center; justify-content: center; }
+.mb-plano-pino span { color: #fff; font-weight: 800; font-size: 14px; }
+.mb-plano-pino-loja { background: #facc15; border: 3px solid #111827; border-radius: 50%; display: flex !important; align-items: center; justify-content: center; font-size: 15px; }
+.mb-deslizar-iniciar { background: linear-gradient(90deg, #16a34a var(--progresso), #1d4ed8 var(--progresso)); }

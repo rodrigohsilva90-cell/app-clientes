@@ -134,7 +134,7 @@ function calcularResumo(pedidos, estado) {
   // Repasse das corridas dos motoboys deste turno (o que a loja paga por entrega)
   const rep = AppState.lojaDados && AppState.lojaDados.repasse;
   r.corridasMotoboyCentavos = pedidos.filter(p => p.motoboyId && p.status === 'concluido')
-    .reduce((a, p) => a + (p.repasseMotoboyCentavos != null ? Number(p.repasseMotoboyCentavos) || 0 : (rep ? calcularRepasse(rep, p) : 0)), 0);
+    .reduce((a, p) => a + (p.repasseMotoboyCentavos != null ? Number(p.repasseMotoboyCentavos) || 0 : calcularRepasse(rep, p, AppState.lojaDados)), 0);
   return r;
 }
 

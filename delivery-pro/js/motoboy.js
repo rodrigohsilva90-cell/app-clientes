@@ -2,7 +2,7 @@ import { auth, db, formatarCentavos, showToast, esc, saudacao, lerRapido } from 
 import { AppState } from './router.js';
 import { avisarCliente, carimbarPedido } from './notificar.js';
 import { calcularRepasse } from './frete.js';
-import { validarCercaEntrega, criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros, criarLinhaRota } from './geo.js';
+import { validarCercaEntrega, criarMapaRastreamento, criarMarcadorMoto, calcularDistanciaMetros, criarLinhaRota, buscarRotaVarias } from './geo.js';
 import {
   collection, query, where, onSnapshot, doc, runTransaction, updateDoc, serverTimestamp, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
@@ -39,6 +39,9 @@ const RESERVA_VALIDA_MS = 90 * 60 * 1000;
 // Pedido liberado pelo balcão (ou marcado pronto pela cozinha): já dá para pegar
 const liberado = (p) => Boolean(p.liberadoEm) || p.pronto === true;
 const liberadosVistos = new Set();
+// Pegou na loja mas ainda não saiu: o cliente só recebe "saiu para entrega" quando o motoboy desliza "Iniciar rota"
+const aindaNaLoja = (p) => p.status === 'entrega' && Boolean(p.motoboyCoords && p.motoboyCoords.naLoja);
+const CHAVE_MANUAL = () => `motoboy_ordem_manual_${AppState.lojaId}`;
 let primeiraLeituraFila = true;
 const reservaAtiva = (p) => Boolean(p.reservadoPor) && (Date.now() - (p.reservadoEm && p.reservadoEm.toMillis ? p.reservadoEm.toMillis() : 0)) < RESERVA_VALIDA_MS;
 const baixasGuardadas = () => new Set(lerJson(OFFLINE_QUEUE_KEY, []).map(i => i.pedidoId));
@@ -131,7 +134,8 @@ export function iniciarMotoboy() {
 // antes da dele ("antes"), nunca os endereços dos outros. A 50 m do destino, para de transmitir
 // para aquele cliente e avisa "chegando" (privacidade).
 async function enviarPosicaoParaRota(coords) {
-  await Promise.all(minhasEntregas.map(async (p, indice) => {
+  // Quem ainda está "na loja" não recebe posição (o cliente não pode achar que a moto já saiu)
+  await Promise.all(minhasEntregas.filter(p => !aindaNaLoja(p)).map(async (p, indice) => {
     const d = p.destinoCoords;
     const chegou = d && calcularDistanciaMetros(d.lat, d.lng, coords.lat, coords.lng) <= 50;
     if (chegou && chegadaAvisada.has(p.id)) return;
@@ -147,35 +151,47 @@ async function enviarPosicaoParaRota(coords) {
   }));
 }
 
-// Ordem da rota: sempre a entrega mais próxima de onde a moto está (a partir da loja no começo)
+// Melhor ordem das entregas: testa todas as combinações (até 7 paradas) e fica com a de menor custo.
+// Custo = km rodados + um peso pelo tempo que cada cliente espera (quem espera há 35+ min pesa o dobro).
+function otimizarOrdem(lista, inicio) {
+  const comPino = lista.filter(p => p.destinoCoords);
+  const semPino = lista.filter(p => !p.destinoCoords);
+  if (!inicio || comPino.length < 2) return [...comPino, ...semPino];
+  const urgente = (p) => p.criadoEm && p.criadoEm.toMillis && Date.now() - p.criadoEm.toMillis() >= SLA_URGENTE_MS;
+  const dist = (a, b) => calcularDistanciaMetros(a.lat, a.lng, b.lat, b.lng);
+  const custo = (ordem) => {
+    let pos = inicio, rodado = 0, espera = 0;
+    for (const p of ordem) { rodado += dist(pos, p.destinoCoords); espera += rodado * (urgente(p) ? 2 : 1); pos = p.destinoCoords; }
+    return rodado + 0.3 * espera;
+  };
+  let melhor = null, menor = Infinity;
+  if (comPino.length <= 7) {
+    const permutar = (resto, atual) => {
+      if (!resto.length) { const c = custo(atual); if (c < menor) { menor = c; melhor = atual; } return; }
+      resto.forEach((p, i) => permutar([...resto.slice(0, i), ...resto.slice(i + 1)], [...atual, p]));
+    };
+    permutar(comPino, []);
+  } else {
+    // Muitas paradas: sempre a mais perto da anterior
+    const restantes = [...comPino]; melhor = []; let pos = inicio;
+    while (restantes.length) {
+      let i = 0; restantes.forEach((p, j) => { if (dist(pos, p.destinoCoords) < dist(pos, restantes[i].destinoCoords)) i = j; });
+      const [p] = restantes.splice(i, 1); melhor.push(p); pos = p.destinoCoords;
+    }
+  }
+  return [...melhor, ...semPino];
+}
+
 function ordenarRota(lista) {
   const ids = lista.map(p => p.id).sort().join(',');
   if (!ordemRota.length) { const salva = lerJson(CHAVE_ORDEM(), []); if (Array.isArray(salva)) ordemRota = salva; } // ordem manual sobrevive a recarregar
   const idsAtuais = [...ordemRota].sort().join(',');
   if (ids !== idsAtuais) {
-    const restantes = [...lista];
-    const nova = [];
-    let ponto = ultimaPosicao || AppState.lojaDados.localizacao || null;
-    while (restantes.length) {
-      let melhor = 0;
-      if (ponto) {
-        let menor = Infinity;
-        const dists = restantes.map(p => (p.destinoCoords ? calcularDistanciaMetros(ponto.lat, ponto.lng, p.destinoCoords.lat, p.destinoCoords.lng) : Infinity));
-        dists.forEach((d, i) => { if (d < menor) { menor = d; melhor = i; } });
-        // Urgência: pedido esperando há 35+ min passa na frente se estiver até 1,5 km "fora" do mais perto
-        let maisAntigo = -1, tempoAntigo = 0;
-        restantes.forEach((p, i) => {
-          const espera = Date.now() - (p.criadoEm && p.criadoEm.toMillis ? p.criadoEm.toMillis() : Date.now());
-          if (espera >= SLA_URGENTE_MS && dists[i] - menor <= FOLGA_URGENTE_M && espera > tempoAntigo) { tempoAntigo = espera; maisAntigo = i; }
-        });
-        if (maisAntigo >= 0) melhor = maisAntigo;
-      }
-      const [escolhido] = restantes.splice(melhor, 1);
-      nova.push(escolhido.id);
-      if (escolhido.destinoCoords) ponto = escolhido.destinoCoords;
-    }
-    ordemRota = nova;
+    // Mudou o que está na bag: calcula de novo a partir de onde a moto está (ou da loja)
+    const ponto = ultimaLeitura || ultimaPosicao || AppState.lojaDados.localizacao || null;
+    ordemRota = otimizarOrdem(lista, ponto).map(p => p.id);
     gravarJson(CHAVE_ORDEM(), ordemRota);
+    gravarJson(CHAVE_MANUAL(), false);
   }
   return ordemRota.map(id => lista.find(p => p.id === id)).filter(Boolean);
 }
@@ -207,6 +223,7 @@ function desvioDoPedido(novo) {
 function mudarOrdem(novaOrdem, motoboyUid) {
   ordemRota = novaOrdem;
   gravarJson(CHAVE_ORDEM(), ordemRota);
+  gravarJson(CHAVE_MANUAL(), true); // o motoboy escolheu: o app não troca mais a ordem sozinho
   minhasEntregas = ordemRota.map(id => minhasEntregas.find(p => p.id === id)).filter(Boolean);
   pedidoEmRotaAtual = minhasEntregas[0] || null;
   assinaturaTela = '';
@@ -432,7 +449,7 @@ function processarEntregas(motoboyUid) {
       showToast(`📤 ${novos.length > 1 ? `${novos.length} pedidos liberados` : `Pedido #${novos[0].numeroPedido || ''} liberado`} pelo balcão. Veja em 📦 Disponíveis.`, 5000);
     }
     primeiraLeituraFila = false;
-    const assinatura = JSON.stringify([minhasEntregas.map(p => [p.id, p.status, p.enderecoTexto, p.totalCentavos]), disponiveis.map(p => [p.id, liberado(p)]), reservasAgora.map(p => [p.id, liberado(p)])]);
+    const assinatura = JSON.stringify([minhasEntregas.map(p => [p.id, p.status, p.enderecoTexto, p.totalCentavos, aindaNaLoja(p)]), disponiveis.map(p => [p.id, liberado(p)]), reservasAgora.map(p => [p.id, liberado(p)])]);
     minhasReservas = reservasAgora;
     atualizarAbasMotoboy(disponiveis.length);
     if (assinatura === assinaturaTela) return;
@@ -487,13 +504,13 @@ async function assumirEntregaAtomica(pedidoId, motoboyUid) {
         motoboyId: motoboyUid,
         status: 'entrega',
         saiuParaEntregaEm: serverTimestamp(),
-        motoboyCoords: ultimaPosicao || null
+        // Ainda na loja: o cliente só é avisado quando o motoboy desliza "Iniciar rota"
+        motoboyCoords: { naLoja: true }
       });
     });
     await Promise.race([limite, tx]);
     clearTimeout(tempoEsgotado);
-    avisarCliente(pedidoId);
-    showToast('Entrega assumida! Boa viagem 🛵');
+    showToast('🎒 Na sua bag! Quando estiver pronto para sair, deslize "Iniciar rota" em 🛵 Minha rota.', 5000);
     return true;
   } catch (err) {
     clearTimeout(tempoEsgotado);
@@ -518,6 +535,8 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
     linhaRotaMoto = null;
     return;
   }
+
+  if (minhasEntregas.some(aindaNaLoja)) return renderizarPlanoRota(box, motoboyUid);
 
   box.classList.remove('hidden');
   box.classList.toggle('mb-piloto', !lerJson('motoboy_detalhes', false)); // Modo Piloto: só o essencial
@@ -673,6 +692,134 @@ function renderizarEntregaAtiva(pedido, motoboyUid) {
   document.getElementById('btn-ocorrencia-entrega').onclick = () => tentarFinalizarEntrega(pedido, 'ocorrencia');
 }
 
+// ===================== Antes de sair: plano da rota com todas as entregas no mapa =====================
+let mapaPlano = null;
+function renderizarPlanoRota(box, motoboyUid) {
+  box.classList.remove('hidden', 'mb-piloto');
+  if (mapaPlano) { try { mapaPlano.remove(); } catch (_) {} mapaPlano = null; }
+  mapaMotoboy = null; marcadorMoto = null; linhaRotaMoto = null;
+  const loja = AppState.lojaDados.localizacao;
+  const inicio = ultimaLeitura || ultimaPosicao || loja || null;
+  const lista = minhasEntregas;
+  const km = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(m)} m`);
+  const min = (sg) => `${Math.max(1, Math.round(sg / 60))} min`;
+  const cobrar = (p) => pago(p) ? '<span class="mb-pago">✅ Já pago</span>'
+    : p.formaPagamento === 'pix' ? '<span class="mb-cobrar">Pix: confirme com a loja</span>'
+    : `<span class="mb-cobrar">💵 Cobrar ${formatarCentavos(p.totalCentavos)} · ${esc(FORMA[p.formaPagamento] || p.formaPagamento || '')}</span>`;
+  const troco = lista.reduce((a, p) => a + (p.formaPagamento === 'dinheiro' && p.trocoParaCentavos > p.totalCentavos ? p.trocoParaCentavos - p.totalCentavos : 0), 0);
+  const manual = lerJson(CHAVE_MANUAL(), false);
+  box.innerHTML = `
+    <div class="card mb-plano">
+      <div class="mb-plano-topo"><span class="badge">🏪 AINDA NA LOJA</span><strong>🎒 ${lista.length} ${lista.length > 1 ? 'entregas' : 'entrega'} na bag</strong></div>
+      <p class="gc-dica">Os clientes <strong>ainda não</strong> foram avisados. Quando estiver tudo na bag, deslize <strong>Iniciar rota</strong>: só aí eles recebem "saiu para entrega" e veem a moto no mapa.</p>
+      <div id="mb-plano-mapa" class="mb-plano-mapa"></div>
+      <p class="mb-plano-resumo" id="mb-plano-resumo">${lista.length > 1 ? (manual ? '✋ Ordem escolhida por você' : '🧭 Melhor caminho calculado pelo app') : '🧭 Caminho até o cliente'}</p>
+      <ol class="mb-plano-lista">
+        ${lista.map((p, i) => `
+          <li>
+            <span class="mb-plano-num">${i + 1}</span>
+            <div class="mb-plano-info">
+              <strong>#${esc(p.numeroPedido || p.id.slice(0, 4))} · ${esc(String(p.clienteNome || '').split(/\s+/)[0])}</strong>
+              <small>${esc(p.enderecoPartes && p.enderecoPartes.bairro ? p.enderecoPartes.bairro + ' · ' : '')}${esc(p.enderecoTexto || '')}</small>
+              <small class="mb-plano-trecho" data-trecho="${i}">${!p.destinoCoords ? '⚠ sem pino no mapa' : ''}</small>
+              ${cobrar(p)}
+            </div>
+            ${lista.length > 1 ? `<div class="rota-setas">
+              ${i > 0 ? `<button class="btn-outline-sm" type="button" data-subir="${esc(p.id)}" aria-label="Entregar antes">⬆️</button>` : ''}
+              ${i < lista.length - 1 ? `<button class="btn-outline-sm" type="button" data-descer="${esc(p.id)}" aria-label="Entregar depois">⬇️</button>` : ''}
+            </div>` : ''}
+          </li>`).join('')}
+      </ol>
+      ${manual && lista.length > 1 ? '<button class="btn-outline-sm" type="button" data-otimizar style="width:100%;">🧭 Voltar para o melhor caminho do app</button>' : ''}
+      ${troco ? `<div class="mb-bag-total"><span>💵 Troco para levar</span><strong>${formatarCentavos(troco)}</strong></div>` : ''}
+      ${lista.length < maxRota() && !turnoEncerrado ? `<p class="gc-dica">Cabe mais ${maxRota() - lista.length} na bag. Quer aproveitar a viagem? Veja <a href="#" data-ver-fila>📦 Disponíveis</a> antes de sair.</p>` : ''}
+      <div id="btn-iniciar-rota" class="mb-deslizar mb-deslizar-iniciar" role="slider" aria-label="Deslize para iniciar a rota" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+        <span class="mb-deslizar-texto">Deslize para iniciar rota →</span>
+        <span class="mb-deslizar-bola">🛵</span>
+      </div>
+    </div>`;
+
+  const ids = lista.map(p => p.id);
+  const trocar = (i, j) => { const n = [...ids]; [n[i], n[j]] = [n[j], n[i]]; mudarOrdem(n, motoboyUid); };
+  box.querySelectorAll('[data-subir]').forEach(b => { b.onclick = () => { const i = ids.indexOf(b.dataset.subir); if (i > 0) trocar(i, i - 1); }; });
+  box.querySelectorAll('[data-descer]').forEach(b => { b.onclick = () => { const i = ids.indexOf(b.dataset.descer); if (i >= 0 && i < ids.length - 1) trocar(i, i + 1); }; });
+  box.querySelector('[data-otimizar]')?.addEventListener('click', () => {
+    mudarOrdem(otimizarOrdem(minhasEntregas, ultimaLeitura || ultimaPosicao || loja).map(p => p.id), motoboyUid);
+    gravarJson(CHAVE_MANUAL(), false); assinaturaTela = ''; renderizarEntregaAtiva(pedidoEmRotaAtual, motoboyUid);
+  });
+  box.querySelector('[data-ver-fila]')?.addEventListener('click', (e) => { e.preventDefault(); mostrarAbaMotoboy('fila'); });
+  ligarDeslizar(document.getElementById('btn-iniciar-rota'), () => iniciarRota(motoboyUid));
+
+  // Mapa: loja, as entregas numeradas na ordem e o caminho pelas ruas passando por todas
+  setTimeout(async () => {
+    const el = document.getElementById('mb-plano-mapa');
+    if (!el || typeof L === 'undefined') return;
+    const paradas = lista.filter(p => p.destinoCoords).map(p => p.destinoCoords);
+    mapaPlano = criarMapaRastreamento('mb-plano-mapa', inicio || paradas[0] || { lat: -23.55, lng: -46.63 }, 14);
+    const mapa = mapaPlano;
+    if (loja) L.marker([loja.lat, loja.lng], { icon: L.divIcon({ className: 'mb-plano-pino-loja', html: '🏪', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(mapa);
+    lista.forEach((p, i) => {
+      if (!p.destinoCoords) return;
+      L.marker([p.destinoCoords.lat, p.destinoCoords.lng], { icon: L.divIcon({ className: 'mb-plano-pino', html: `<span>${i + 1}</span>`, iconSize: [30, 30], iconAnchor: [15, 30] }) })
+        .addTo(mapa).bindTooltip(`${i + 1}ª · #${p.numeroPedido || ''}`);
+    });
+    if (ultimaLeitura || ultimaPosicao) criarMarcadorMoto(mapa, ultimaLeitura || ultimaPosicao);
+    const todos = [inicio, ...paradas].filter(Boolean);
+    const reta = L.polyline(todos.map(p => [p.lat, p.lng]), { color: '#2563eb', weight: 4, opacity: 0.6, dashArray: '6 8' }).addTo(mapa);
+    if (todos.length > 1) mapa.fitBounds(L.latLngBounds(todos.map(p => [p.lat, p.lng])).pad(0.2));
+    const rota = todos.length > 1 ? await buscarRotaVarias(todos) : null;
+    if (mapaPlano !== mapa) return; // a tela mudou enquanto buscava
+    const resumo = document.getElementById('mb-plano-resumo');
+    if (rota) {
+      mapa.removeLayer(reta);
+      L.polyline(rota.pontos.map(p => [p.lat, p.lng]), { color: '#ffffff', weight: 8, opacity: 0.9 }).addTo(mapa);
+      L.polyline(rota.pontos.map(p => [p.lat, p.lng]), { color: '#2563eb', weight: 5, opacity: 0.95 }).addTo(mapa);
+      if (resumo) resumo.innerHTML += ` · <strong>${km(rota.metros)}</strong> · cerca de <strong>${min(rota.segundos)}</strong> no total`;
+      let t = 0;
+      lista.forEach((p, i) => {
+        if (!p.destinoCoords) return;
+        const trecho = rota.trechos[t++];
+        const alvo = box.querySelector(`[data-trecho="${i}"]`);
+        if (trecho && alvo) alvo.textContent = `${i === 0 ? '🛵 Da loja' : `🛵 Da ${i}ª`} até aqui: ${km(trecho.metros)} · ~${min(trecho.segundos)}`;
+      });
+    } else if (inicio && resumo) {
+      let pos = inicio, total = 0;
+      lista.forEach((p, i) => {
+        if (!p.destinoCoords) return;
+        const d = calcularDistanciaMetros(pos.lat, pos.lng, p.destinoCoords.lat, p.destinoCoords.lng); total += d; pos = p.destinoCoords;
+        const alvo = box.querySelector(`[data-trecho="${i}"]`);
+        if (alvo) alvo.textContent = `🛵 ${i === 0 ? 'Da loja' : `Da ${i}ª`} até aqui: ${km(d)} (em linha reta)`;
+      });
+      resumo.innerHTML += ` · <strong>${km(total)}</strong> em linha reta`;
+    }
+  }, 60);
+}
+
+// O motoboy é quem diz que saiu: recalcula a ordem a partir de onde ele está, avisa os clientes e
+// mostra só a 1ª entrega (as outras ficam na lista "Próximas")
+function iniciarRota(motoboyUid) {
+  const aqui = ultimaLeitura || ultimaPosicao;
+  if (aqui) ultimaPosicao = aqui;
+  if (!lerJson(CHAVE_MANUAL(), false)) {
+    ordemRota = otimizarOrdem(minhasEntregas, aqui || AppState.lojaDados.localizacao).map(p => p.id);
+    gravarJson(CHAVE_ORDEM(), ordemRota);
+    minhasEntregas = ordemRota.map(id => minhasEntregas.find(p => p.id === id)).filter(Boolean);
+  }
+  const saiuEm = Date.now();
+  minhasEntregas.forEach((p, i) => {
+    const coords = i === 0 && aqui ? { lat: aqui.lat, lng: aqui.lng, accuracy: aqui.accuracy || 0, antes: 0, saiuEm } : { antes: i, saiuEm };
+    p.motoboyCoords = coords; // a tela muda na hora, mesmo com sinal fraco
+    updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), { motoboyCoords: coords, gpsAtualizadoEm: serverTimestamp() })
+      .then(() => avisarCliente(p.id)).catch(() => {});
+  });
+  pedidoEmRotaAtual = minhasEntregas[0] || null;
+  if (mapaPlano) { try { mapaPlano.remove(); } catch (_) {} mapaPlano = null; }
+  try { navigator.vibrate && navigator.vibrate([60, 40, 60]); } catch (_) {}
+  showToast(`🛵 Rota iniciada! ${minhasEntregas.length > 1 ? `Os ${minhasEntregas.length} clientes foram avisados.` : 'O cliente foi avisado.'} Boa viagem!`, 5000);
+  assinaturaTela = '';
+  renderizarEntregaAtiva(pedidoEmRotaAtual, motoboyUid);
+}
+
 // Botão deslizante: só confirma arrastando a bolinha até o fim (não dá baixa sem querer no bolso/suporte)
 function ligarDeslizar(trilho, acao) {
   if (!trilho) return;
@@ -817,7 +964,7 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
   // Ainda na loja (GPS a até 300 m dela, ou sem GPS): pode juntar qualquer pedido liberado na bag.
   // Já na rua: só o que cabe no caminho (limite de desvio do dono); o resto, reserva para a volta.
   const aqui = ultimaLeitura || ultimaPosicao;
-  const naLoja = !naRua || !aqui || !loja || calcularDistanciaMetros(aqui.lat, aqui.lng, loja.lat, loja.lng) <= 300;
+  const naLoja = !naRua || minhasEntregas.some(aindaNaLoja) || !aqui || !loja || calcularDistanciaMetros(aqui.lat, aqui.lng, loja.lat, loja.lng) <= 300;
   const avisoCheia = turnoEncerrado ? '' : bloqueadoPorRotaAtiva
     ? `<div class="card mb-aviso-cheia">🎒 Bag cheia: a loja deixa levar até <strong>${maxRota()}</strong> por vez. Entregue uma para pegar outra — ou reserve para a volta.</div>`
     : naRua ? `<div class="card mb-aviso-cheia mb-aviso-info">🛵 Você está com <strong>${minhasEntregas.length}</strong> na bag e pode levar até <strong>${maxRota()}</strong>. ${naLoja ? 'Ainda na loja: pegue os pedidos liberados com <strong>+ Levar junto</strong>.' : 'Na rua: pegue o que fica no caminho, ou reserve para a volta.'}</div>` : '';
@@ -839,7 +986,7 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
         <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
         <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoPartes && p.enderecoPartes.bairro ? p.enderecoPartes.bairro + ' · ' : '')}${esc(p.enderecoTexto)}</p>
         <span style="font-size:13px; font-weight:600;">${formatarCentavos(p.totalCentavos)} • ${esc((p.formaPagamento || '').toUpperCase())}${pago(p) ? ' · ✅ pago' : ''}</span>
-        ${AppState.lojaDados.repasse ? `<small class="mb-ganho">💰 Você ganha ${formatarCentavos(calcularRepasse(AppState.lojaDados.repasse, { ...p, adicionalChuva: p.adicionalChuva }))}${p.adicionalChuva ? ' (com 🌧 adicional)' : ''}</small>` : ''}
+        <small class="mb-ganho">💰 Você ganha ${formatarCentavos(calcularRepasse(AppState.lojaDados.repasse, { ...p, adicionalChuva: p.adicionalChuva }, AppState.lojaDados))}${p.adicionalChuva ? ' (com 🌧 adicional)' : ''}</small>
         ${pronto ? '<small class="mb-pago" style="display:block;">📤 Liberado pelo balcão: pode pegar</small>' : '<small class="gc-dica" style="display:block;">🍳 Ainda na cozinha: o balcão libera quando estiver pronto</small>'}
         ${dicas.join('')}
       </div>
