@@ -181,20 +181,9 @@ async function resolverRota() {
 }
 
 async function renderizarLandingSaaS(root) {
-  root.innerHTML = `
-    <div class="card landing">
-      <h1>Seu Delivery Próprio com Mapa ao Vivo</h1>
-      <p class="landing-sub">
-        Zero comissão por pedido. Cardápio personalizado, frete por distância e rastreamento do motoboy em tempo real.
-      </p>
-      <div id="landing-acoes" class="landing-acoes">
-        <button class="btn-primary" id="btn-teste-gratis">🚀 Testar grátis por 7 dias</button>
-        <button class="btn-outline-sm" id="btn-landing-entrar">Já tenho conta — Entrar</button>
-      </div>
-    </div>
-  `;
-  document.getElementById('btn-teste-gratis').onclick = abrirCadastroLoja;
-  document.getElementById('btn-landing-entrar').onclick = abrirModalLogin;
+  // Site de vendas (carregado só nesta página)
+  const { renderizarSite } = await import('./site.js');
+  renderizarSite(root, { abrirCadastro: abrirCadastroLoja, abrirLogin: abrirModalLogin }); // os planos chegam por trás
 
   // Já logado e com loja: atalho para o painel
   if (auth.currentUser) {
@@ -203,10 +192,10 @@ async function renderizarLandingSaaS(root) {
       const slug = perfil.exists() ? perfil.data().slug : null;
       const entregador = perfil.exists() && perfil.data().inicio === 'motoboy';
       if (slug) {
-        document.getElementById('landing-acoes').innerHTML = `
-          <a class="btn-primary" style="text-decoration:none; display:block;" href="/${encodeURIComponent(slug)}/${entregador ? 'motoboy' : 'painel'}">${entregador ? '🛵 Abrir app do entregador' : '📋 Abrir o painel da minha loja'}</a>
-          <a class="btn-outline-sm" style="text-decoration:none; display:block; text-align:center;" href="/${encodeURIComponent(slug)}">👀 Ver meu cardápio</a>
-          <button class="btn-outline-sm" id="btn-landing-sair">Sair</button>
+        document.getElementById('st-acoes').innerHTML = `
+          <a class="st-btn" href="/${encodeURIComponent(slug)}/${entregador ? 'motoboy' : 'painel'}">${entregador ? '🛵 Abrir app do entregador' : '📋 Abrir o painel da minha loja'}</a>
+          <a class="st-btn st-btn-sec" href="/${encodeURIComponent(slug)}">👀 Ver meu cardápio</a>
+          <button class="st-btn st-btn-sec" id="btn-landing-sair">Sair</button>
         `;
         document.getElementById('btn-landing-sair').onclick = () => signOut(auth).then(() => window.location.reload());
       }

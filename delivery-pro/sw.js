@@ -1,4 +1,4 @@
-const CACHE_NAME = 'delivery-pro-v62';
+const CACHE_NAME = 'delivery-pro-v63';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -39,7 +39,8 @@ const STATIC_ASSETS = [
   '/js/qr.js',
   '/js/repasse.js',
   '/js/backup.js',
-  '/js/frota.js'
+  '/js/frota.js',
+  '/js/site.js'
 ];
 
 self.addEventListener('install', (event) => {
