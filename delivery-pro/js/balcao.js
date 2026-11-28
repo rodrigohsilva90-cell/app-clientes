@@ -423,7 +423,12 @@ function criarCardPedidoBalcao(p) {
   } else if (p.status === 'preparo') {
     botaoAcao = p.tipoEntrega === 'retirada'
       ? `<button class="btn-primary" data-next="concluido">✅ Cliente retirou</button>`
-      : `<button class="btn-primary" data-next="entrega">Despachar Motoboy</button>`;
+      : p.liberadoEm
+        ? `<div class="pedido-liberado">📤 Liberado para os motoboys${p.liberadoEm.toMillis ? ` há ${Math.max(0, Math.round((Date.now() - p.liberadoEm.toMillis()) / 60000))} min` : ''} — esperando um deles pegar</div>
+           <button class="btn-outline-sm" data-desliberar="1" style="width:100%;">↩ Voltar para a cozinha</button>
+           <button class="btn-outline-sm" data-next="entrega" style="width:100%; margin-top:6px;">Outras opções (escolher motoboy / entregar sem o app)</button>`
+        : `<button class="btn-primary" data-liberar="1">📤 Liberar para os motoboys</button>
+           <button class="btn-outline-sm" data-next="entrega" style="width:100%; margin-top:6px;">Outras opções (escolher motoboy / entregar sem o app)</button>`;
   } else if (p.status === 'entrega') {
     botaoAcao = `<button class="btn-outline-sm" style="width:100%;" data-next="concluido">Marcar Entregue</button>`;
   }
@@ -485,6 +490,20 @@ function criarCardPedidoBalcao(p) {
     });
     avisarCliente(p.id);
     showToast(`Pedido #${p.numeroPedido || ''} recusado.`);
+  });
+
+  // Liberar: o pedido vai para a lista dos motoboys e cada um escolhe se pega (o app sugere o que combina com a rota)
+  div.querySelector('[data-liberar]')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), { liberadoEm: serverTimestamp(), pronto: true, atualizadoEm: serverTimestamp() });
+      try { navigator.vibrate && navigator.vibrate(40); } catch (_) {}
+      showToast(`📤 Pedido #${p.numeroPedido || ''} liberado: os motoboys já estão vendo.`);
+    } catch (err) { console.error(err); e.target.disabled = false; showToast('Não foi possível liberar agora.'); }
+  });
+  div.querySelector('[data-desliberar]')?.addEventListener('click', async () => {
+    try { await updateDoc(doc(db, 'lojas', AppState.lojaId, 'pedidos', p.id), { liberadoEm: null, pronto: false, atualizadoEm: serverTimestamp() }); }
+    catch (err) { console.error(err); showToast('Não foi possível agora.'); }
   });
 
   const btnNext = div.querySelector('[data-next]');

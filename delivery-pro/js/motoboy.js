@@ -33,6 +33,10 @@ let ultimoSnap = null;          // última leitura da fila (para redesenhar na h
 let qtdRotaAnterior = 0;
 let minhasReservas = [];        // pedidos que reservei "para a volta" (a cozinha segue; pego quando chegar na loja)
 const RESERVA_VALIDA_MS = 90 * 60 * 1000;
+// Pedido liberado pelo balcão (ou marcado pronto pela cozinha): já dá para pegar
+const liberado = (p) => Boolean(p.liberadoEm) || p.pronto === true;
+const liberadosVistos = new Set();
+let primeiraLeituraFila = true;
 const reservaAtiva = (p) => Boolean(p.reservadoPor) && (Date.now() - (p.reservadoEm && p.reservadoEm.toMillis ? p.reservadoEm.toMillis() : 0)) < RESERVA_VALIDA_MS;
 const baixasGuardadas = () => new Set(lerJson(OFFLINE_QUEUE_KEY, []).map(i => i.pedidoId));
 const lerJson = (k, padrao) => { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? padrao; } catch (_) { return padrao; } };
@@ -332,8 +336,8 @@ function renderizarReservas(motoboyUid) {
     <p class="gc-dica">A cozinha segue preparando. Quando chegar na loja e pegar a bag, toque em "Peguei".</p>
     ${minhasReservas.map(p => `<div class="mb-bag-linha" style="align-items:center;">
       <span style="flex:1; min-width:150px;"><strong>#${esc(p.numeroPedido || p.id.slice(0, 4))}</strong> · ${esc(p.enderecoPartes && p.enderecoPartes.bairro ? p.enderecoPartes.bairro : p.enderecoTexto || '')}
-        <small style="display:block;" class="${p.pronto ? 'mb-pago' : 'gc-dica'}">${p.pronto ? '✅ Pronto, esperando você' : '🍳 Ainda sendo preparado'}</small></span>
-      <button class="btn-primary" type="button" style="width:auto;" data-peguei="${esc(p.id)}">✅ Peguei na loja</button>
+        <small style="display:block;" class="${liberado(p) ? 'mb-pago' : 'gc-dica'}">${liberado(p) ? '📤 Liberado, esperando você' : '🍳 Ainda na cozinha'}</small></span>
+      ${liberado(p) ? `<button class="btn-primary" type="button" style="width:auto;" data-peguei="${esc(p.id)}">✅ Peguei na loja</button>` : '<button class="btn-outline-sm" type="button" disabled>⏳ Aguardando o balcão liberar</button>'}
       <button class="btn-outline-sm" type="button" data-desistir="${esc(p.id)}">Desistir</button>
     </div>`).join('')}
   </div>`;
@@ -386,7 +390,15 @@ function processarEntregas(motoboyUid) {
     if (trocoEl) trocoEl.textContent = formatarCentavos(trocoTotalCentavos);
 
     // Só redesenha a tela se mudou algo além do GPS (senão o mapa piscaria a cada 8 s)
-    const assinatura = JSON.stringify([minhasEntregas.map(p => [p.id, p.status, p.enderecoTexto, p.totalCentavos]), disponiveis.map(p => p.id), reservasAgora.map(p => [p.id, p.pronto])]);
+    // Balcão liberou pedido novo: bip + vibração (não toca na primeira abertura do app)
+    const novos = [...disponiveis, ...reservasAgora].filter(p => liberado(p) && !liberadosVistos.has(p.id));
+    novos.forEach(p => liberadosVistos.add(p.id));
+    if (novos.length && !primeiraLeituraFila && !turnoEncerrado) {
+      bipe(2);
+      showToast(`📤 ${novos.length > 1 ? `${novos.length} pedidos liberados` : `Pedido #${novos[0].numeroPedido || ''} liberado`} pelo balcão. Veja em 📦 Disponíveis.`, 5000);
+    }
+    primeiraLeituraFila = false;
+    const assinatura = JSON.stringify([minhasEntregas.map(p => [p.id, p.status, p.enderecoTexto, p.totalCentavos]), disponiveis.map(p => [p.id, liberado(p)]), reservasAgora.map(p => [p.id, liberado(p)])]);
     minhasReservas = reservasAgora;
     atualizarAbasMotoboy(disponiveis.length);
     if (assinatura === assinaturaTela) return;
@@ -428,6 +440,9 @@ async function assumirEntregaAtomica(pedidoId, motoboyUid) {
 
       if (dados.motoboyId) {
         throw new Error('Outro entregador acabou de assumir este pedido!');
+      }
+      if (!liberado(dados) && dados.status === 'preparo') {
+        throw new Error('O balcão ainda não liberou este pedido. Espere ficar pronto.');
       }
       if (dados.reservadoPor && dados.reservadoPor !== motoboyUid && reservaAtiva(dados)) {
         throw new Error(`${dados.reservadoNome || 'Outro entregador'} reservou este pedido para a volta.`);
@@ -734,32 +749,60 @@ async function tentarFinalizarEntrega(pedido, tipoAcao) {
 function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
   const lista = document.getElementById('lista-entregas-disponiveis');
   if (!pedidos.length) {
-    lista.innerHTML = `<div class="card"><p style="color:var(--text-muted);">Nenhuma entrega aguardando retirada no momento.</p></div>`;
+    lista.innerHTML = `<div class="card"><p style="color:var(--text-muted);">Nenhuma entrega aguardando no momento. Quando o balcão liberar um pedido, ele aparece aqui com um aviso.</p></div>`;
     return;
   }
+  const naRua = minhasEntregas.length > 0;
+  const loja = AppState.lojaDados.localizacao;
+  const kmTxt = (m) => `${(m / 1000).toFixed(1).replace('.', ',')} km`;
+  // Quanto cada pedido "custa" para ESTE motoboy: com bag, o desvio na rota dele; sem bag, a ida da loja até lá.
+  // Pedido esperando há muito tempo ganha prioridade (comida não pode esfriar).
+  const avaliados = pedidos.map(p => {
+    const desvio = naRua ? desvioDoPedido(p) : 0;
+    const ida = !naRua && loja && p.destinoCoords ? calcularDistanciaMetros(loja.lat, loja.lng, p.destinoCoords.lat, p.destinoCoords.lng) : 0;
+    const espera = p.criadoEm && p.criadoEm.toMillis ? (Date.now() - p.criadoEm.toMillis()) / 60000 : 0;
+    const custo = (naRua ? desvio : ida) - Math.min(espera, 40) * 40;
+    return { p, desvio, ida, espera, custo, pronto: liberado(p) };
+  });
+  // Liberados primeiro (dá para pegar agora), do que combina mais para o que combina menos
+  avaliados.sort((a, b) => (b.pronto - a.pronto) || (a.custo - b.custo));
+  // Sem bag: sugere levar junto dois pedidos liberados que ficam perto um do outro
+  const parDe = (x) => {
+    if (naRua || !x.pronto || !x.p.destinoCoords) return null;
+    let melhor = null;
+    for (const y of avaliados) {
+      if (y === x || !y.pronto || !y.p.destinoCoords) continue;
+      const d = calcularDistanciaMetros(x.p.destinoCoords.lat, x.p.destinoCoords.lng, y.p.destinoCoords.lat, y.p.destinoCoords.lng);
+      if (d <= 1500 && (!melhor || d < melhor.d)) melhor = { y, d };
+    }
+    return melhor;
+  };
+  const melhorId = avaliados.find(a => a.pronto && !(naRua && a.desvio > LIMITE_DESVIO_M))?.p.id;
 
-  lista.innerHTML = pedidos.map(p => {
-    // Pedido extra que desvia muito da rota já assumida fica para outro entregador (o balcão ainda pode forçar)
-    const desvio = minhasEntregas.length ? desvioDoPedido(p) : 0;
-    const foraDaRota = desvio > LIMITE_DESVIO_M;
-    const naRua = minhasEntregas.length > 0;
-    // Na rua: "Levar agora" só se cabe na rota; "Reservar para a volta" sempre (a cozinha não fica esperando)
-    const travado = bloqueadoPorRotaAtiva || foraDaRota || turnoEncerrado;
+  lista.innerHTML = avaliados.map(({ p, desvio, espera, pronto }) => {
+    const foraDaRota = naRua && desvio > LIMITE_DESVIO_M;
+    const travado = !pronto || bloqueadoPorRotaAtiva || foraDaRota || turnoEncerrado;
+    const par = parDe(avaliados.find(a => a.p === p));
+    const dicas = [];
+    if (p.id === melhorId) dicas.push(`<span class="mb-sugestao">⭐ Melhor para você${naRua ? '' : ' agora'}</span>`);
+    if (naRua && p.destinoCoords) dicas.push(foraDaRota ? `<small class="gc-dica">Longe da sua rota (+${kmTxt(desvio)}): melhor reservar para a próxima saída</small>` : `<small class="mb-combina">🧭 Combina com sua rota: +${kmTxt(desvio)}</small>`);
+    if (par) dicas.push(`<small class="mb-combina">🔗 Leve junto com o #${esc(par.y.p.numeroPedido || '')} (ficam a ${par.d < 1000 ? Math.round(par.d) + ' m' : kmTxt(par.d)} um do outro)</small>`);
+    if (espera >= 20) dicas.push(`<small class="mb-cobrar">⏰ Esperando há ${Math.round(espera)} min</small>`);
     return `
-    <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-      <div>
+    <div class="card mb-pedido-fila${p.id === melhorId ? ' destaque' : ''}${pronto ? '' : ' na-cozinha'}">
+      <div style="flex:1; min-width:0;">
         <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
         <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoPartes && p.enderecoPartes.bairro ? p.enderecoPartes.bairro + ' · ' : '')}${esc(p.enderecoTexto)}</p>
         <span style="font-size:13px; font-weight:600;">${formatarCentavos(p.totalCentavos)} • ${esc((p.formaPagamento || '').toUpperCase())}${pago(p) ? ' · ✅ pago' : ''}</span>
         ${AppState.lojaDados.repasse ? `<small class="mb-ganho">💰 Você ganha ${formatarCentavos(calcularRepasse(AppState.lojaDados.repasse, { ...p, adicionalChuva: p.adicionalChuva }))}${p.adicionalChuva ? ' (com 🌧 adicional)' : ''}</small>` : ''}
-        ${minhasEntregas.length && p.destinoCoords ? `<small class="gc-dica" style="display:block;">${foraDaRota ? `Longe da rota atual (+${(desvio / 1000).toFixed(1).replace('.', ',')} km): reserve para a próxima saída` : `Desvio de +${(desvio / 1000).toFixed(1).replace('.', ',')} km na sua rota`}</small>` : ''}
-        ${p.pronto ? '<small class="mb-pago" style="display:block;">✅ Pronto na loja</small>' : '<small class="gc-dica" style="display:block;">🍳 Ainda sendo preparado</small>'}
+        ${pronto ? '<small class="mb-pago" style="display:block;">📤 Liberado pelo balcão: pode pegar</small>' : '<small class="gc-dica" style="display:block;">🍳 Ainda na cozinha: o balcão libera quando estiver pronto</small>'}
+        ${dicas.join('')}
       </div>
       <div class="mb-botoes-fila">
-      <button class="btn-primary" style="width:auto;${travado && naRua ? ' display:none;' : ''}" ${travado ? 'disabled' : ''} data-assumir="${p.id}">
-        ${turnoEncerrado ? 'Turno encerrado' : bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : foraDaRota ? 'Longe da rota' : minhasEntregas.length ? '+ Levar agora' : 'Pegar Entrega'}
-      </button>
-      ${naRua && !turnoEncerrado ? `<button class="btn-outline-sm" type="button" data-reservar="${p.id}">📌 Reservar para a volta</button>` : ''}
+      ${pronto ? `<button class="btn-primary" style="width:auto;${travado && naRua ? ' display:none;' : ''}" ${travado ? 'disabled' : ''} data-assumir="${p.id}">
+        ${turnoEncerrado ? 'Turno encerrado' : bloqueadoPorRotaAtiva ? `Rota cheia (${MAX_ENTREGAS_ROTA})` : foraDaRota ? 'Longe da rota' : naRua ? '+ Levar agora' : 'Pegar entrega'}
+      </button>` : ''}
+      ${(naRua || !pronto) && !turnoEncerrado ? `<button class="btn-outline-sm" type="button" data-reservar="${p.id}">📌 ${naRua ? 'Reservar para a volta' : 'Reservar para mim'}</button>` : ''}
       </div>
     </div>`;
   }).join('');
