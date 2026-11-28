@@ -794,15 +794,23 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
   };
   const melhorId = bloqueadoPorRotaAtiva ? null : avaliados.find(a => a.pronto && !(naRua && a.desvio > limiteDesvio()))?.p.id;
 
-  const avisoCheia = bloqueadoPorRotaAtiva && !turnoEncerrado
-    ? `<div class="card mb-aviso-cheia">🎒 Bag cheia: a loja deixa levar até <strong>${maxRota()}</strong> por vez. Entregue uma para pegar outra — ou reserve para a volta.</div>` : '';
+  // Ainda na loja (GPS a até 300 m dela, ou sem GPS): pode juntar qualquer pedido liberado na bag.
+  // Já na rua: só o que cabe no caminho (limite de desvio do dono); o resto, reserva para a volta.
+  const aqui = ultimaLeitura || ultimaPosicao;
+  const naLoja = !naRua || !aqui || !loja || calcularDistanciaMetros(aqui.lat, aqui.lng, loja.lat, loja.lng) <= 300;
+  const avisoCheia = turnoEncerrado ? '' : bloqueadoPorRotaAtiva
+    ? `<div class="card mb-aviso-cheia">🎒 Bag cheia: a loja deixa levar até <strong>${maxRota()}</strong> por vez. Entregue uma para pegar outra — ou reserve para a volta.</div>`
+    : naRua ? `<div class="card mb-aviso-cheia mb-aviso-info">🛵 Você está com <strong>${minhasEntregas.length}</strong> na bag e pode levar até <strong>${maxRota()}</strong>. ${naLoja ? 'Ainda na loja: pegue os pedidos liberados com <strong>+ Levar junto</strong>.' : 'Na rua: pegue o que fica no caminho, ou reserve para a volta.'}</div>` : '';
   lista.innerHTML = avisoCheia + avaliados.map(({ p, desvio, espera, pronto }) => {
-    const foraDaRota = naRua && desvio > limiteDesvio();
+    const longe = naRua && desvio > limiteDesvio();
+    const foraDaRota = longe && !naLoja;
     const travado = !pronto || bloqueadoPorRotaAtiva || foraDaRota || turnoEncerrado;
     const par = parDe(avaliados.find(a => a.p === p));
     const dicas = [];
     if (p.id === melhorId) dicas.push(`<span class="mb-sugestao">⭐ Melhor para você${naRua ? '' : ' agora'}</span>`);
-    if (naRua && p.destinoCoords) dicas.push(foraDaRota ? `<small class="gc-dica">Longe da sua rota (+${kmTxt(desvio)}): melhor reservar para a próxima saída</small>` : `<small class="mb-combina">🧭 Combina com sua rota: +${kmTxt(desvio)}</small>`);
+    if (naRua && p.destinoCoords) dicas.push(foraDaRota ? `<small class="gc-dica">Longe da sua rota (+${kmTxt(desvio)}): reserve para a próxima saída</small>`
+      : longe ? `<small class="mb-cobrar">⚠ Fica fora do caminho das suas entregas (+${kmTxt(desvio)})</small>`
+      : `<small class="mb-combina">🧭 Combina com sua rota: +${kmTxt(desvio)}</small>`);
     if (par) dicas.push(`<small class="mb-combina">🔗 Leve junto com o #${esc(par.y.p.numeroPedido || '')} (ficam a ${par.d < 1000 ? Math.round(par.d) + ' m' : kmTxt(par.d)} um do outro)</small>`);
     if (espera >= 20) dicas.push(`<small class="mb-cobrar">⏰ Esperando há ${Math.round(espera)} min</small>`);
     return `
@@ -816,10 +824,10 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
         ${dicas.join('')}
       </div>
       <div class="mb-botoes-fila">
-      ${pronto ? `<button class="btn-primary" style="width:auto;${travado && naRua ? ' display:none;' : ''}" ${travado ? 'disabled' : ''} data-assumir="${p.id}">
-        ${turnoEncerrado ? 'Turno encerrado' : bloqueadoPorRotaAtiva ? `Rota cheia (${maxRota()})` : foraDaRota ? 'Longe da rota' : naRua ? '+ Levar agora' : 'Pegar entrega'}
-      </button>` : ''}
-      ${(naRua || !pronto) && !turnoEncerrado ? `<button class="btn-outline-sm" type="button" data-reservar="${p.id}">📌 ${naRua ? 'Reservar para a volta' : 'Reservar para mim'}</button>` : ''}
+      ${pronto ? `<button class="btn-primary" style="width:auto;" ${travado ? 'disabled' : ''} data-assumir="${p.id}" ${longe && naLoja ? `data-longe="${kmTxt(desvio)}"` : ''}>
+        ${turnoEncerrado ? 'Turno encerrado' : bloqueadoPorRotaAtiva ? `🎒 Bag cheia (${maxRota()})` : foraDaRota ? 'Longe da rota' : naRua ? '+ Levar junto' : 'Pegar entrega'}
+      </button>` : '<button class="btn-outline-sm" type="button" disabled>🍳 Esperando o balcão liberar</button>'}
+      ${((naRua && !naLoja) || !pronto || bloqueadoPorRotaAtiva) && !turnoEncerrado ? `<button class="btn-outline-sm" type="button" data-reservar="${p.id}">📌 ${naRua ? 'Reservar para a volta' : 'Reservar para mim'}</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -835,6 +843,7 @@ function renderizarFilaDisponivel(pedidos, motoboyUid, bloqueadoPorRotaAtiva) {
   lista.querySelectorAll('button[data-assumir]').forEach(btn => {
     btn.onclick = async () => {
       const texto = btn.textContent;
+      if (btn.dataset.longe && !confirm(`Este pedido fica fora do caminho das suas entregas (+${btn.dataset.longe}). Levar junto mesmo assim?`)) return;
       btn.disabled = true; btn.textContent = '⏳ Reservando...';
       const ok = await assumirEntregaAtomica(btn.dataset.assumir, motoboyUid);
       if (ok) { try { navigator.vibrate && navigator.vibrate(40); } catch (_) {} }
