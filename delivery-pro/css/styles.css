@@ -845,3 +845,18 @@ details.gc-secao > summary small { font-weight: 400; font-size: 12px; color: var
 .frota-rotulo { font-weight: 700; font-size: 11px; padding: 1px 6px; }
 .frota-num { background: transparent; border: none; box-shadow: none; font-weight: 800; font-size: 11px; color: #111827; }
 .frota-num::before { display: none; }
+
+/* Mapa dos motoboys ao vivo (painel do dono) */
+.frota-janela { height: min(94vh, 900px); }
+.frota-corpo { padding: 12px 16px; overflow-y: auto; flex: 1; }
+.frota-mapa-real { height: 46vh; min-height: 280px; border-radius: 10px; margin: 10px 0; z-index: 1; }
+.frota-real .frota-resumo { grid-template-columns: repeat(4, 1fr); }
+.frota-real .frota-resumo .alerta { background: #fef3c7; color: #92400e; }
+@media (max-width: 560px) { .frota-real .frota-resumo { grid-template-columns: repeat(2, 1fr); } }
+.frota-linha.parado { opacity: .6; }
+.frota-linha small { display: block; }
+.frota-velho { color: var(--warning); font-weight: 600; }
+.frota-reserva { color: #1e3a8a; font-size: 12px; }
+.frota-aviso { background: #fef3c7; color: #92400e; border-radius: 10px; padding: 10px; font-size: 14px; margin-bottom: 8px; }
+.aviso-endereco { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+.aviso-endereco span { flex: 1; min-width: 200px; }

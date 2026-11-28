@@ -22,7 +22,7 @@ import { bannerAssinatura, telaBloqueio } from './assinatura.js';
 import { modoOperacaoAtual } from './frete.js';
 import { qrSvg, abrirQrLoja } from './qr.js';
 import { abrirConfigRepasse, abrirAcertos } from './repasse.js';
-import { calcularRepasse, esgotadoAgora, estoqueAtual, usaGrade, textoLoja } from './frete.js';
+import { calcularRepasse, esgotadoAgora, estoqueAtual, usaGrade, textoLoja, coordsValidas } from './frete.js';
 import { baixarBackupLoja } from './backup.js';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, updateDoc, addDoc, setDoc, serverTimestamp, Timestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
@@ -73,6 +73,7 @@ export async function iniciarBalcao() {
         <button id="btn-pausa" class="btn-outline-sm">⏸ Pausar pedidos</button>
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
         <button id="btn-estoque" class="btn-outline-sm">📦 Estoque</button>
+        <button id="btn-frota" class="btn-outline-sm">🗺️ Motoboys</button>
         <button id="btn-despesa" class="btn-outline-sm" hidden>💸 Despesa / Sangria</button>
         ${ehDono ? '<button id="btn-config" class="btn-outline-sm btn-config-loja">⚙ Configurações</button>' : '<button id="btn-carrinhos" class="btn-outline-sm">🛒 Carrinhos abandonados</button>'}
       </div>
@@ -135,6 +136,15 @@ export async function iniciarBalcao() {
   ligarIndicadorRede();
   document.getElementById('btn-pedido-manual').onclick = abrirPedidoManualRapido;
   document.getElementById('btn-estoque').onclick = abrirEstoqueRapido;
+  document.getElementById('btn-frota').onclick = async () => {
+    try { (await import('./frota.js')).abrirMapaFrota({ concluidosHoje: () => concluidosHoje }); }
+    catch (err) { console.error(err); showToast('Não foi possível abrir o mapa agora.'); }
+  };
+  // Sem endereço da loja, o cliente não vê mapa nem cálculo de entrega: avisa o dono
+  if (ehDono && !coordsValidas(AppState.lojaDados.localizacao)) {
+    document.querySelector('.painel-topo').insertAdjacentHTML('afterend', `<div class="card aviso-endereco">⚠ <span><strong>A loja ainda não tem endereço.</strong> Sem ele, o cliente não vê o mapa nem o valor da entrega.</span><button class="btn-primary" type="button" id="btn-por-endereco" style="width:auto;">📍 Colocar endereço</button></div>`);
+    document.getElementById('btn-por-endereco').onclick = () => abrirConfigEntrega();
+  }
   document.getElementById('btn-despesa').onclick = () => lancarMovimento(estadoCaixa);
   if (ehDono) document.getElementById('btn-config').onclick = abrirMenuConfig;
   else document.getElementById('btn-carrinhos').onclick = abrirCarrinhos;
