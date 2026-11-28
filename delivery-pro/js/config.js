@@ -57,6 +57,15 @@ export function showToast(mensagem, duracao = 3500) {
 }
 
 // Escapa texto antes de colocar em innerHTML (impede que um pedido injete código no painel)
+// Saudação com o nome da pessoa (só o primeiro nome) e a hora do dia
+export function saudacao(nome, papel) {
+  const h = new Date().getHours();
+  const [ola, icone] = h >= 5 && h < 12 ? ['Bom dia', '☀️'] : h >= 12 && h < 18 ? ['Boa tarde', '🌤️'] : ['Boa noite', '🌙'];
+  const primeiro = String(nome || '').trim().split(/\s+/)[0] || '';
+  const frase = { dono: 'Bora vender! 🚀', balcao: 'Bom trabalho no balcão! 💪', cozinha: 'Bom preparo hoje! 👨‍🍳', motoboy: 'Boas entregas e cuidado no trânsito! 🛵' }[papel] || 'Bom trabalho! 💪';
+  return `<div class="saudacao"><span class="saudacao-ola">${icone} ${ola}${primeiro ? `, <strong>${esc(primeiro)}</strong>` : ''}!</span> <span class="saudacao-frase">${frase}</span></div>`;
+}
+
 export function esc(valor) {
   return String(valor ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }

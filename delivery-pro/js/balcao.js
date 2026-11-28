@@ -1,4 +1,4 @@
-import { db, auth, formatarCentavos, showToast, esc, lerRapido } from './config.js';
+import { db, auth, formatarCentavos, showToast, esc, lerRapido, saudacao } from './config.js';
 import { AppState } from './router.js';
 import { montarItem, ofertaDoDia } from './cardapio.js';
 import { abrirGestaoCardapio } from './gestao-cardapio.js';
@@ -46,6 +46,7 @@ export async function iniciarBalcao() {
 
   // Nível de acesso: dono | balcao | cozinha (documento lojas/{id}/equipe/{uid})
   papel = null;
+  let meuNome = '';
   if (auth.currentUser) {
     try {
       // Cópia do aparelho primeiro (abre na hora); se o papel mudou no servidor, recarrega
@@ -55,16 +56,18 @@ export async function iniciarBalcao() {
         Promise.resolve().then(() => { if (papelDe(novo) !== papelLocal) location.reload(); });
       });
       papel = papelLocal = papelDe(snap);
+      meuNome = snap.exists() ? (snap.data().nome || '') : '';
     } catch (_) { papel = null; }
   }
   const assinatura = statusAssinatura(AppState.lojaDados);
   if (!assinatura.ativa) return telaBloqueio(assinatura, papel === 'dono');
-  if (papel === 'cozinha') return iniciarKds();
+  if (papel === 'cozinha') return iniciarKds(meuNome);
   const ehDono = papel === 'dono';
 
   root.innerHTML = `
     <div class="card painel-topo">
       <div>
+        ${saudacao(meuNome || (auth.currentUser && auth.currentUser.displayName), papel)}
         <strong>Painel Operacional — ${esc(AppState.lojaDados.nome)}</strong>
         <div id="status-loja" class="painel-status">⏳ Verificando loja...</div>
         <div id="status-caixa" class="painel-status">⏳ Verificando caixa...</div>

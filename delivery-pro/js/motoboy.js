@@ -1,4 +1,4 @@
-import { auth, db, formatarCentavos, showToast, esc } from './config.js';
+import { auth, db, formatarCentavos, showToast, esc, saudacao, lerRapido } from './config.js';
 import { AppState } from './router.js';
 import { avisarCliente, carimbarPedido } from './notificar.js';
 import { calcularRepasse } from './frete.js';
@@ -62,7 +62,8 @@ export function iniciarMotoboy() {
     <!-- Resumo do Turno e Carteira de Troco -->
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
       <div>
-        <strong>🛵 Painel do Entregador — ${AppState.lojaDados.nome}</strong>
+        <div id="mb-saudacao">${saudacao(user.displayName || '', 'motoboy')}</div>
+        <strong>🛵 Painel do Entregador — ${esc(AppState.lojaDados.nome)}</strong>
         <div id="gps-status-badge" style="font-size:13px; color:var(--warning);">📡 Aguardando ativação do GPS...</div>
       </div>
       <div style="text-align:right;">
@@ -94,6 +95,13 @@ export function iniciarMotoboy() {
       <div id="mb-rota-vazia" class="card"><p style="color:var(--text-muted);">Nenhuma entrega na sua mão. Pegue uma na aba 📦 Disponíveis.</p></div>
     </div>
   `;
+  // Nome cadastrado pelo dono (entregador) — ou o do dono/equipe, se for ele usando o app do motoboy
+  (async () => {
+    const pegar = async (col) => { try { const s = await lerRapido(doc(db, 'lojas', AppState.lojaId, col, user.uid)); return s.exists() ? s.data().nome || '' : ''; } catch (_) { return ''; } };
+    const nome = (await pegar('entregadores')) || (await pegar('equipe'));
+    const el = document.getElementById('mb-saudacao');
+    if (nome && el) el.innerHTML = saudacao(nome, 'motoboy');
+  })();
   document.querySelectorAll('#mb-abas [data-aba]').forEach(b => { b.onclick = () => mostrarAbaMotoboy(b.dataset.aba); });
   avisarBaixasGuardadas();
   setInterval(sincronizarFilaOffline, 30000); // o "online" do celular nem sempre avisa quando o sinal volta

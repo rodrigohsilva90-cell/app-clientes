@@ -889,3 +889,6 @@ details.gc-secao > summary small { font-weight: 400; font-size: 12px; color: var
 .gc-form label.ac-opcao { display: flex; flex-direction: row; }
 .gc-form label.ac-opcao input { width: 20px; height: 20px; margin: 2px 0 0; padding: 0; }
 .mb-aviso-info { background: #e0f2fe; border-color: #7dd3fc; color: #0c4a6e; }
+/* Saudação com o nome (balcão, cozinha, motoboy) */
+.saudacao { font-size: 18px; margin-bottom: 4px; line-height: 1.3; }
+.saudacao-frase { display: block; font-size: 13px; color: var(--text-muted); }

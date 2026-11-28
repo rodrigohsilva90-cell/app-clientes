@@ -1,5 +1,5 @@
 // Tela da cozinha (KDS): só os itens, em letra grande, sem valores nem dados do cliente.
-import { db, showToast, esc } from './config.js';
+import { db, showToast, esc, saudacao } from './config.js';
 import { AppState } from './router.js';
 import { avisarCliente } from './notificar.js';
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
@@ -23,10 +23,11 @@ function bipe() {
 
 const minutosDesde = (p) => { const t = p.pagoEm?.toMillis ? p.pagoEm.toMillis() : p.criadoEm?.toMillis ? p.criadoEm.toMillis() : null; return t ? Math.floor((Date.now() - t) / 60000) : 0; };
 
-export function iniciarKds() {
+export function iniciarKds(nome = '') {
   const root = document.getElementById('app-root');
   root.innerHTML = `
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+      <div style="flex-basis:100%;">${saudacao(nome, 'cozinha')}</div>
       <strong>${AppState.lojaDados.layoutVitrine === 'varejo' ? '📦 Separação' : '👨‍🍳 Cozinha'} — ${esc(AppState.lojaDados.nome)}</strong>
       <button id="kds-som" class="btn-primary" style="width:auto;">🔊 Ativar som</button>
     </div>
