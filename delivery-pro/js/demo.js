@@ -85,6 +85,20 @@ export async function iniciarDemo(root) {
       <p class="gc-dica">Isto é exatamente o que o cliente vê no celular depois de pedir. A moto é virtual e anda pelas ruas reais até <strong>onde você está agora</strong>. Nenhum pedido de verdade é criado.</p>
       <button class="btn-primary" type="button" id="demo-iniciar">▶ Iniciar simulação</button>
     </div>
+    <div class="card demo-frota-topo">
+      <h3>👀 Visão do dono: vários motoboys ao mesmo tempo</h3>
+      <p class="gc-dica">Mostra no mapa os motoboys saindo da loja, cada um com as suas entregas, e o painel do dono acompanhando tudo. Também é só demonstração.</p>
+      <div class="demo-frota-campos">
+        <label>Motoboys<select id="frota-qtd">${[2, 3, 4, 5, 6, 8].map(n => `<option value="${n}" ${n === 4 ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <label>Entregas por motoboy<select id="frota-entregas">${[1, 2, 3].map(n => `<option value="${n}" ${n === 2 ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      </div>
+      <button class="btn-primary" type="button" id="frota-iniciar">▶ Simular vários motoboys</button>
+    </div>
+    <div class="card hidden" id="frota-card">
+      <div class="frota-resumo" id="frota-resumo"></div>
+      <div id="frota-mapa" style="height:380px; border-radius:8px; margin:10px 0; z-index:1;"></div>
+      <div id="frota-lista"></div>
+    </div>
     <div class="card" id="demo-status" style="display:none;"></div>
     <div class="card hidden acomp-chegando" id="demo-chegando">🏁 <strong>O entregador está chegando ao seu endereço!</strong><span>Fique de olho no portão ou no interfone.</span></div>
     <div class="card" id="demo-mapa-card" style="display:none;">
@@ -95,6 +109,16 @@ export async function iniciarDemo(root) {
 
   const btn = root.querySelector('#demo-iniciar');
   let rodando = false;
+  root.querySelector('#frota-iniciar').onclick = async (e) => {
+    if (rodando) return;
+    rodando = true;
+    const b = e.currentTarget;
+    b.disabled = true; btn.disabled = true;
+    try { await simularFrota(root, loja, nomeLoja, Number(root.querySelector('#frota-qtd').value), Number(root.querySelector('#frota-entregas').value), b); }
+    catch (err) { console.error(err); }
+    b.disabled = false; btn.disabled = false; b.textContent = '🔁 Simular de novo';
+    rodando = false;
+  };
   btn.onclick = async () => {
     if (rodando) return;
     rodando = true;
@@ -165,4 +189,104 @@ export async function iniciarDemo(root) {
     btn.textContent = '🔁 Repetir simulação';
     rodando = false;
   };
+}
+
+// ===================== Frota: vários motoboys entregando ao mesmo tempo =====================
+const NOMES_FROTA = ['João', 'Maria', 'Pedro', 'Ana', 'Lucas', 'Bia', 'Rafa', 'Duda'];
+const CORES_FROTA = ['#e11d48', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#4b5563'];
+const METROS_POR_SEGUNDO = 90; // velocidade acelerada da demonstração (~10x a moto real)
+const km = (m) => `${(m / 1000).toFixed(1).replace('.', ',')} km`;
+
+async function simularFrota(root, loja, nomeLoja, qtd, entregasCada, botao) {
+  botao.textContent = '📍 Montando as rotas...';
+  const aqui = await minhaPosicao();
+  const lojaPos = loja && loja.localizacao && Number.isFinite(loja.localizacao.lat) ? loja.localizacao : (aqui || PADRAO);
+  const card = root.querySelector('#frota-card');
+  card.classList.remove('hidden');
+  const divMapa = root.querySelector('#frota-mapa');
+  divMapa.innerHTML = '';
+  if (divMapa._leaflet_id) divMapa._leaflet_id = null;
+  const mapa = criarMapaRastreamento('frota-mapa', lojaPos, 14);
+  L.circleMarker([lojaPos.lat, lojaPos.lng], { radius: 10, color: '#111827', fillColor: '#facc15', fillOpacity: 1, weight: 3 }).addTo(mapa).bindTooltip('🏪 Loja', { permanent: true, direction: 'bottom', offset: [0, 8] });
+
+  // Cada motoboy vai para um lado da cidade, com 1 a 3 entregas
+  const motos = [];
+  for (let i = 0; i < qtd; i++) {
+    const base = (360 / qtd) * i + Math.random() * 30;
+    const paradas = Array.from({ length: entregasCada }, (_, k) => deslocar(lojaPos, 900 + k * 700 + Math.random() * 900, base + (Math.random() * 50 - 25)));
+    motos.push({ nome: NOMES_FROTA[i % NOMES_FROTA.length], cor: CORES_FROTA[i % CORES_FROTA.length], paradas, entregues: 0, status: '🏪 Na loja, esperando o pedido', pernas: [], metros: 0 });
+  }
+  // Rotas pelas ruas: loja → entrega 1 → entrega 2 → ... → volta à loja (poucas de cada vez, para o serviço de rotas não recusar)
+  const pedacos = [];
+  motos.forEach((m, i) => { const pts = [lojaPos, ...m.paradas, lojaPos]; for (let k = 0; k < pts.length - 1; k++) pedacos.push({ i, k, a: pts[k], b: pts[k + 1] }); });
+  for (let x = 0; x < pedacos.length; x += 3) {
+    await Promise.all(pedacos.slice(x, x + 3).map(async (pc) => { motos[pc.i].pernas[pc.k] = await rotaPelasRuas(pc.a, pc.b); }));
+  }
+  const todos = [lojaPos];
+  motos.forEach((m) => {
+    m.metros = m.pernas.reduce((a, r) => a + comprimentoCaminho(r), 0);
+    L.polyline(m.pernas.flat().map(p => [p.lat, p.lng]), { color: m.cor, weight: 4, opacity: 0.35, interactive: false }).addTo(mapa);
+    m.pinos = m.paradas.map((p, k) => {
+      todos.push(p);
+      return L.circleMarker([p.lat, p.lng], { radius: 9, color: m.cor, fillColor: '#fff', fillOpacity: 1, weight: 3 }).addTo(mapa).bindTooltip(`${k + 1}`, { permanent: true, direction: 'center', className: 'frota-num' });
+    });
+  });
+  mapa.fitBounds(L.latLngBounds(todos.map(p => [p.lat, p.lng])).pad(0.15));
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  botao.textContent = '🔁 Simulação em andamento...';
+
+  const inicio = Date.now();
+  const relogio = () => { const d = new Date(Date.now() + (Date.now() - inicio) * 9); return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); };
+  const total = qtd * entregasCada;
+  const desenhar = () => {
+    const feitas = motos.reduce((a, m) => a + m.entregues, 0);
+    const naRua = motos.filter(m => m.naRua).length;
+    root.querySelector('#frota-resumo').innerHTML = `
+      <div><strong>${feitas}/${total}</strong><span>entregas feitas</span></div>
+      <div><strong>${naRua}</strong><span>motoboys na rua</span></div>
+      <div><strong>${relogio()}</strong><span>relógio simulado</span></div>`;
+    root.querySelector('#frota-lista').innerHTML = motos.map(m => `
+      <div class="frota-linha">
+        <span class="frota-cor" style="background:${m.cor}"></span>
+        <div><strong>🛵 ${esc(m.nome)}</strong> <small>${m.entregues}/${m.paradas.length} entregas · ${km(m.metros)} no total</small><span>${m.status}</span></div>
+      </div>`).join('');
+  };
+  desenhar();
+  const relogioTimer = setInterval(desenhar, 1000);
+
+  // Cada motoboy sai alguns segundos depois do outro (como a cozinha liberando os pedidos)
+  await Promise.all(motos.map(async (m, i) => {
+    await espera(i * 3000);
+    m.naRua = true;
+    const moto = criarMarcadorMoto(mapa, lojaPos);
+    moto.marker.bindTooltip(m.nome, { permanent: true, direction: 'top', offset: [0, -16], className: 'frota-rotulo' });
+    const el = moto.marker.getElement();
+    const circulo = el && el.querySelector('.moto-icone');
+    if (circulo) { circulo.style.borderColor = m.cor; circulo.style.boxShadow = `0 0 0 3px ${m.cor}55`; }
+    for (let k = 0; k < m.pernas.length; k++) {
+      const voltando = k === m.paradas.length;
+      const rota = m.pernas[k];
+      const metros = comprimentoCaminho(rota);
+      const passos = Math.max(3, Math.round(metros / METROS_POR_SEGUNDO));
+      for (let t = 1; t <= passos; t++) {
+        const trecho = trechoPorDistancia(rota, (metros * (t - 1)) / passos, (metros * t) / passos);
+        moto.moverPeloCaminho(trecho.slice(1), 1000);
+        const falta = metros - (metros * t) / passos;
+        m.status = voltando ? `↩ Voltando para a loja · ${km(falta)}` : `➡ Indo para a ${k + 1}ª entrega · faltam ${km(falta)}`;
+        await espera(1000);
+      }
+      if (!voltando) {
+        m.status = `📦 Entregando a ${k + 1}ª encomenda...`;
+        await espera(2500);
+        m.entregues++;
+        m.pinos[k].setStyle({ fillColor: m.cor });
+        m.pinos[k].setTooltipContent('✔');
+      }
+    }
+    m.naRua = false;
+    m.status = '✅ De volta na loja, pronto para a próxima';
+  }));
+  clearInterval(relogioTimer);
+  desenhar();
+  root.querySelector('#frota-resumo').insertAdjacentHTML('beforeend', '<div class="frota-fim"><strong>🏁 Todas as entregas concluídas!</strong><span>No app de verdade, cada cliente acompanha a sua moto e o dono vê tudo no painel.</span></div>');
 }

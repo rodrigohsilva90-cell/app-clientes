@@ -828,3 +828,20 @@ details.gc-secao > summary small { font-weight: 400; font-size: 12px; color: var
 .mb-reservas { border: 2px dashed var(--primary); }
 .mb-botoes-fila { display: flex; flex-direction: column; gap: 6px; align-items: stretch; flex-shrink: 0; }
 .mb-botoes-fila button { min-height: 44px; }
+
+/* Simulador: vários motoboys */
+.demo-frota-campos { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 12px; }
+.demo-frota-campos label { display: flex; flex-direction: column; font-size: 13px; font-weight: 600; gap: 4px; }
+.demo-frota-campos select { padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 16px; min-width: 120px; background: var(--surface); color: var(--text); }
+.frota-resumo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.frota-resumo > div { background: var(--bg); border-radius: 10px; padding: 8px; text-align: center; }
+.frota-resumo strong { display: block; font-size: 20px; }
+.frota-resumo span { font-size: 12px; color: var(--text-muted); }
+.frota-resumo .frota-fim { grid-column: 1 / -1; background: #dcfce7; color: #14532d; }
+.frota-linha { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.frota-linha small { color: var(--text-muted); }
+.frota-linha span:not(.frota-cor) { display: block; font-size: 13px; }
+.frota-cor { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+.frota-rotulo { font-weight: 700; font-size: 11px; padding: 1px 6px; }
+.frota-num { background: transparent; border: none; box-shadow: none; font-weight: 800; font-size: 11px; color: #111827; }
+.frota-num::before { display: none; }
