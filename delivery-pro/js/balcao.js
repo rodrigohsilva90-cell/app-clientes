@@ -87,7 +87,7 @@ export async function iniciarBalcao(opcoes = {}) {
         <button id="btn-pedido-manual" class="btn-outline-sm">+ Pedido Balcão / Tel</button>
         <button id="btn-estoque" class="btn-outline-sm">📦 Estoque</button>
         <button id="btn-frota" class="btn-outline-sm">🗺️ Motoboys</button>
-        <a id="btn-cozinha" class="btn-outline-sm" href="/${encodeURIComponent(AppState.slug)}/cozinha" style="text-decoration:none;">🍳 ${textoLoja('Cozinha', AppState.lojaDados)}</a>
+        <a id="btn-cozinha" class="btn-outline-sm" href="/${encodeURIComponent(AppState.slug)}/cozinha" style="text-decoration:none; color:inherit; display:inline-flex; align-items:center;">🍳 ${textoLoja('Cozinha', AppState.lojaDados)}</a>
         <button id="btn-despesa" class="btn-outline-sm" hidden>💸 Despesa / Sangria</button>
         ${ehDono ? '<button id="btn-config" class="btn-outline-sm btn-config-loja">⚙ Configurações</button>' : '<button id="btn-carrinhos" class="btn-outline-sm">🛒 Carrinhos abandonados</button>'}
       </div>
@@ -415,6 +415,9 @@ function renderizarConcluidos() {
   });
 }
 
+// Pedidos com "Ver detalhes" aberto (continuam abertos quando a lista atualiza)
+const cardsAbertos = new Set();
+
 function criarCardPedidoBalcao(p) {
   const div = document.createElement('div');
   const minutos = Math.floor(minutosDesde(p));
@@ -426,67 +429,79 @@ function criarCardPedidoBalcao(p) {
   if (chegou && !clientesChegaramAvisados.has(p.id)) { clientesChegaramAvisados.add(p.id); tocarAvisoChegada(); }
   div.style.borderLeft = p.status === 'novo' ? '4px solid var(--danger)' : '4px solid var(--primary)';
 
-  const trocoTxt = (p.formaPagamento === 'dinheiro' && p.trocoParaCentavos > p.totalCentavos)
-    ? `<div style="color:var(--warning); font-weight:700; font-size:13px;">💵 Levar troco: ${formatarCentavos(p.trocoParaCentavos - p.totalCentavos)}</div>`
-    : '';
+  // Cartão enxuto: na frente só o essencial e o botão principal; o resto fica em "Ver detalhes"
+  const naBagNaLoja = p.status === 'entrega' && p.motoboyCoords && p.motoboyCoords.naLoja;
+  const primeiroNome = String(p.clienteNome || '').trim().split(/\s+/)[0] || 'Cliente';
+  const qtdItens = (p.itens || []).reduce((a, i) => a + (Number(i.quantidade) || 0), 0);
+  const pagoOk = p.pagamentoStatus === 'aprovado';
+  const bairro = p.enderecoPartes && p.enderecoPartes.bairro;
 
-  let botaoAcao = '';
+  let principal = '';
+  let secundarios = '';
   if (p.status === 'novo') {
-    botaoAcao = `<button class="btn-primary" data-next="preparo">Aceitar Pedido</button>
-      <button class="btn-outline-sm gc-perigo" style="width:100%; margin-top:6px;" data-recusar="1">Recusar</button>`;
+    principal = `<div class="pc-acoes"><button class="btn-primary" data-next="preparo">Aceitar</button><button class="btn-outline-sm gc-perigo" data-recusar="1">Recusar</button></div>`;
   } else if (p.status === 'preparo') {
-    botaoAcao = p.tipoEntrega === 'retirada'
-      ? `<button class="btn-primary" data-next="concluido">✅ Cliente retirou</button>`
-      : p.liberadoEm
-        ? `<div class="pedido-liberado">📤 Liberado para os motoboys${p.liberadoEm.toMillis ? ` há ${Math.max(0, Math.round((Date.now() - p.liberadoEm.toMillis()) / 60000))} min` : ''} — esperando um deles pegar</div>
-           <button class="btn-outline-sm" data-desliberar="1" style="width:100%;">↩ Voltar para a cozinha</button>
-           <button class="btn-outline-sm" data-next="entrega" style="width:100%; margin-top:6px;">Outras opções (escolher motoboy / entregar sem o app)</button>`
-        : `<button class="btn-primary" data-liberar="1">📤 Liberar para os motoboys</button>
-           <button class="btn-outline-sm" data-next="entrega" style="width:100%; margin-top:6px;">Outras opções (escolher motoboy / entregar sem o app)</button>`;
+    if (p.tipoEntrega === 'retirada') principal = `<button class="btn-primary" data-next="concluido">✅ Cliente retirou</button>`;
+    else if (p.liberadoEm) {
+      principal = '';
+      secundarios += `<button class="btn-outline-sm" data-desliberar="1">↩ Voltar para a cozinha (desfazer liberação)</button>
+        <button class="btn-outline-sm" data-next="entrega">Escolher motoboy / entregar sem o app</button>`;
+    } else {
+      principal = `<button class="btn-primary" data-liberar="1">📤 Liberar para os motoboys</button>`;
+      secundarios += `<button class="btn-outline-sm" data-next="entrega">Escolher motoboy / entregar sem o app</button>`;
+    }
   } else if (p.status === 'entrega') {
-    botaoAcao = `<button class="btn-outline-sm" style="width:100%;" data-next="concluido">Marcar Entregue</button>`;
+    principal = `<button class="btn-outline-sm pc-largo" data-next="concluido">Marcar entregue</button>`;
   }
+  if (p.status === 'entrega' && !naBagNaLoja && linkAvisoWhats(p)) secundarios += `<a class="btn-outline-sm btn-whats" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>`;
+  if (p.tipoEntrega === 'retirada' && p.status === 'preparo' && linkProntoWhats(p)) secundarios += `<a class="btn-outline-sm btn-whats" href="${esc(linkProntoWhats(p))}" target="_blank" rel="noopener">📲 Avisar: pronto para retirada</a>`;
+  secundarios += `<button class="btn-outline-sm" type="button" data-print="1">🖨️ ${textoLoja('Imprimir Comanda', AppState.lojaDados)}</button>`;
+  if (p.tipoEntrega === 'entrega' && ['preparo', 'entrega'].includes(p.status)) secundarios += '<button class="btn-outline-sm" type="button" data-resumo>📋 Copiar resumo para motoboy avulso</button>';
+  if (p.tipoEntrega === 'entrega' && ['novo', 'preparo'].includes(p.status)) secundarios += '<button class="btn-outline-sm" type="button" data-converter>🔄 Sem entregador? Converter para retirada</button>';
+  if (p.status === 'preparo') secundarios += '<button class="btn-outline-sm gc-perigo" type="button" data-cancelar-aceito>✖ Cancelar pedido</button>';
+  if (p.status === 'entrega') secundarios += '<button class="btn-outline-sm gc-perigo" type="button" data-cancelar-rota>✖ Cancelar entrega em rota</button>';
+
+  // Situação em uma linha (só a que vale agora)
+  const situacao = chegou ? '<div class="pedido-chegou">🙋 <strong>O cliente chegou no balcão!</strong> Entregue o pedido.</div>'
+    : p.status === 'novo' && minutos >= MIN_ALERTA ? `<div class="pedido-aviso">⚠️ Aguardando aceite há ${minutos} min — cancela sozinho com ${MIN_CANCELAR} min</div>`
+    : p.status === 'entrega' && p.tentativaAusente ? `<div class="pedido-aviso">📵 Cliente não atendeu o motoboy. ${p.clienteWhatsapp ? `<a href="https://wa.me/55${esc(String(p.clienteWhatsapp).replace(/\D/g, '').replace(/^55/, ''))}" target="_blank" rel="noopener">📲 Chamar o cliente</a>` : 'Ligue para o cliente.'}</div>`
+    : naBagNaLoja ? `<div class="pedido-na-cozinha">🏪 Com ${esc(p.motoboyNome || 'o motoboy')}, ainda na loja</div>`
+    : p.status === 'entrega' ? `<div class="pc-linha">🛵 Com <strong>${esc(p.motoboyNome || (p.motoboyId ? 'entregador (app)' : 'sem entregador'))}</strong>${p.entregaPropria ? ' · entrega própria' : ''}</div>`
+    : p.status === 'preparo' && p.liberadoEm ? `<div class="pedido-liberado">📤 Liberado${p.liberadoEm.toMillis ? ` há ${Math.max(0, Math.round((Date.now() - p.liberadoEm.toMillis()) / 60000))} min` : ''} — esperando motoboy${p.pronto ? ' · ✅ pronto' : ' · 🍳 preparando'}</div>`
+    : p.status === 'preparo' && p.reservadoPor && p.reservadoEm?.toMillis && Date.now() - p.reservadoEm.toMillis() < 90 * 60000 ? `<div class="pedido-reserva">📌 ${esc(p.reservadoNome || 'Entregador')} reservou${p.pronto ? ' · ✅ pronto' : ' · 🍳 preparando'}</div>`
+    : p.status === 'preparo' && p.pronto ? `<div class="pedido-pronto">✅ ${textoLoja('Cozinha', AppState.lojaDados)}: pronto</div>`
+    : p.status === 'preparo' ? `<div class="pedido-na-cozinha">🍳 ${textoLoja('Cozinha', AppState.lojaDados)}: preparando</div>` : '';
 
   div.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-      <strong>Pedido #${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
-      <span style="display:flex; gap:6px; align-items:center;">
-        ${p.criadoEm?.toMillis ? `<span class="pedido-idade${(p.status === 'novo' && minutos >= MIN_ALERTA) || (emAberto && minutos >= 35) ? ' alerta' : ''}">⏱ ${minutos} min</span>` : ''}
-        <button class="btn-outline-sm" style="padding:2px 8px;" data-print="1" title="${textoLoja('Imprimir Comanda', AppState.lojaDados)}">🖨️</button>
-      </span>
+    <div class="pc-topo">
+      <strong>#${esc(p.numeroPedido || p.id.slice(0, 4))} · ${esc(primeiroNome)}${p.clienteVip ? ' <span class="badge-vip" title="Cliente fiel">⭐</span>' : ''}</strong>
+      ${p.criadoEm?.toMillis ? `<span class="pedido-idade${(p.status === 'novo' && minutos >= MIN_ALERTA) || (emAberto && minutos >= 35) ? ' alerta' : ''}">⏱ ${minutos} min</span>` : ''}
     </div>
-    <p style="font-size:14px; margin:4px 0;"><strong>${esc(p.clienteNome)}</strong> ${p.clienteWhatsapp ? `(${esc(p.clienteWhatsapp)})` : ''}${p.clienteVip ? ` <span class="badge-vip" title="${esc(p.clientePedidosAntes)} pedidos concluídos">⭐ VIP</span>` : ''}</p>
-    ${p.clienteVip ? `<p class="gc-dica" style="margin:0 0 4px;">Cliente fiel (${esc(p.clientePedidosAntes)} pedidos): que tal um mimo ou prioridade no preparo?</p>` : ''}
-    ${p.recebedorNome ? `<p style="font-size:13px; margin:2px 0;">👤 Quem recebe: <strong>${esc(p.recebedorNome)}</strong>${p.recebedorWhats ? ` (${esc(p.recebedorWhats)})` : ''}</p>` : ''}
-    ${p.clienteRestrito ? '<p style="font-size:12px; color:#9a3412; margin:2px 0;">⚠ Cliente com 2 ausências seguidas</p>' : ''}
-    ${chegou ? '<div class="pedido-chegou">🙋 <strong>O cliente chegou no balcão!</strong> Entregue o pedido.</div>' : ''}
-    ${p.tipoEntrega === 'retirada' && p.status === 'preparo' && linkProntoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin:4px 0 8px;" href="${esc(linkProntoWhats(p))}" target="_blank" rel="noopener">📲 Avisar: pronto para retirada</a>` : ''}
-    ${p.status === 'entrega' && p.entregaPropria ? '<p style="font-size:13px; margin:2px 0;">🙋 Entrega própria da loja (sem app de motoboy)</p>' : ''}
-    ${p.status === 'entrega' && p.tentativaAusente ? `<div class="pedido-aviso">📵 O motoboy chegou${p.tentativaAusente.em && p.tentativaAusente.em.toDate ? ` às ${p.tentativaAusente.em.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : ''} e o cliente não atendeu. Ele foi fazer outra entrega e volta depois. ${p.clienteWhatsapp ? `<a href="https://wa.me/55${esc(String(p.clienteWhatsapp).replace(/\D/g, '').replace(/^55/, ''))}" target="_blank" rel="noopener">📲 Chamar o cliente</a>` : 'Ligue para o cliente.'}</div>` : ''}
-    <p style="font-size:13px; color:var(--text-muted);">${esc(p.enderecoTexto)}</p>
-    ${p.pinoManual ? '<p style="font-size:12px; color:#92400e; margin:2px 0;">📍 Pino ajustado à mão pelo cliente</p>' : ''}
-    ${p.descontoFidelidadeCentavos ? `<div class="pedido-premio">🎁 Prêmio fidelidade usado: −${formatarCentavos(p.descontoFidelidadeCentavos)} (já descontado do total)</div>` : ''}
-    <div style="margin:8px 0; padding:8px; background:var(--bg); border-radius:8px; font-size:13px;">
-      ${(p.itens || []).map(i => `<div>${esc(i.quantidade)}x ${esc(i.nome)} ${i.detalhes?.length ? `(${esc(i.detalhes.join(', '))})` : ''}</div>`).join('')}
+    <div class="pc-linha pc-resumo">
+      <span>${p.tipoEntrega === 'retirada' ? '🏪 Retirada' : `🛵 ${esc(bairro || 'Entrega')}`} · ${qtdItens} ${qtdItens === 1 ? 'item' : 'itens'}</span>
+      <span><strong>${formatarCentavos(p.totalCentavos)}</strong> ${pagoOk ? '<strong class="pago-ok">✅ PAGO</strong>' : esc(({ dinheiro: 'Dinheiro', cartao: 'Cartão', cartao_entrega: 'Cartão', pix: 'Pix' })[p.formaPagamento] || p.formaPagamento || '')}</span>
     </div>
-    ${p.freteCentavos ? `<div style="display:flex; justify-content:space-between; font-size:13px; color:var(--text-muted);"><span>🛵 Entrega${p.distanciaKm ? ` (${esc(p.distanciaKm)} km)` : ''}</span><span>${formatarCentavos(p.freteCentavos)}</span></div>` : ''}
-    <div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:8px;">
-      <span>${esc((p.formaPagamento || '').toUpperCase())}${p.pagamentoStatus === 'aprovado' ? ' <strong class="pago-ok">✅ PAGO</strong>' : ''}${p.tipoEntrega === 'retirada' ? ' · 🏪 RETIRADA' : ''}</span>
-      <strong>${formatarCentavos(p.totalCentavos)}</strong>
-    </div>
-    ${trocoTxt}
-    ${p.status === 'novo' && minutos >= MIN_ALERTA ? `<div class="pedido-aviso">⚠️ Aguardando aceite há ${minutos} min — cancela sozinho com ${MIN_CANCELAR} min</div>` : ''}
-    ${p.status === 'entrega' && p.motoboyCoords && p.motoboyCoords.naLoja ? `<div class="pedido-na-cozinha">🏪 Com ${esc(p.motoboyNome || 'o motoboy')}, ainda na loja (não iniciou a rota)</div>` : ''}
-    ${p.status === 'preparo' && p.pronto ? `<div class="pedido-pronto">✅ ${textoLoja('Cozinha', AppState.lojaDados)}: pronto</div>` : p.status === 'preparo' ? `<div class="pedido-na-cozinha">🍳 ${textoLoja('Cozinha', AppState.lojaDados)}: preparando</div>` : ''}
-    ${p.status === 'preparo' && p.reservadoPor && p.reservadoEm?.toMillis && Date.now() - p.reservadoEm.toMillis() < 90 * 60000 ? `<div class="pedido-reserva">📌 ${esc(p.reservadoNome || 'Entregador')} reservou — busca quando voltar da rota</div>` : ''}
-    ${p.status === 'entrega' ? `<div style="font-size:13px; margin-bottom:8px;">🛵 Com: <strong>${esc(p.motoboyNome || (p.motoboyId ? 'entregador (app)' : 'sem entregador'))}</strong></div>` : ''}
-    ${p.status === 'entrega' && !(p.motoboyCoords && p.motoboyCoords.naLoja) && linkAvisoWhats(p) ? `<a class="btn-outline-sm btn-whats" style="margin-bottom:8px;" data-avisar="1" href="${esc(linkAvisoWhats(p))}" target="_blank" rel="noopener">${p.avisoWhatsEm ? '✓ Cliente avisado · avisar de novo' : '📲 Avisar cliente no WhatsApp'}</a>` : ''}
-    ${botaoAcao}
-    ${p.tipoEntrega === 'entrega' && ['preparo', 'entrega'].includes(p.status) ? '<button class="btn-outline-sm" type="button" data-resumo style="width:100%; margin-top:6px;">📋 Copiar resumo para motoboy avulso</button>' : ''}
-    ${p.status === 'preparo' ? '<button class="btn-outline-sm gc-perigo" type="button" data-cancelar-aceito style="width:100%; margin-top:6px;">✖ Cancelar pedido</button>' : ''}
-    ${p.status === 'entrega' ? '<button class="btn-outline-sm gc-perigo" type="button" data-cancelar-rota style="width:100%; margin-top:6px;">✖ Cancelar entrega em rota</button>' : ''}
-    ${p.tipoEntrega === 'entrega' && ['novo', 'preparo'].includes(p.status) ? '<button class="btn-outline-sm" type="button" data-converter style="width:100%; margin-top:6px;">🔄 Sem entregador? Converter para retirada</button>' : ''}
+    ${p.formaPagamento === 'dinheiro' && p.trocoParaCentavos > p.totalCentavos ? `<div class="pc-troco">💵 Troco: ${formatarCentavos(p.trocoParaCentavos - p.totalCentavos)}</div>` : ''}
+    ${situacao}
+    ${principal}
+    <details class="pc-detalhes" data-detalhes${cardsAbertos.has(p.id) ? ' open' : ''}>
+      <summary>Ver detalhes</summary>
+      <p class="pc-linha"><strong>${esc(p.clienteNome)}</strong> ${p.clienteWhatsapp ? `· ${esc(p.clienteWhatsapp)}` : ''}</p>
+      ${p.clienteVip ? `<p class="gc-dica">⭐ Cliente fiel (${esc(p.clientePedidosAntes)} pedidos): que tal um mimo ou prioridade no preparo?</p>` : ''}
+      ${p.recebedorNome ? `<p class="pc-linha">👤 Quem recebe: <strong>${esc(p.recebedorNome)}</strong>${p.recebedorWhats ? ` (${esc(p.recebedorWhats)})` : ''}</p>` : ''}
+      ${p.clienteRestrito ? '<p class="pc-linha" style="color:#9a3412;">⚠ Cliente com 2 ausências seguidas</p>' : ''}
+      ${p.tipoEntrega !== 'retirada' ? `<p class="pc-linha" style="color:var(--text-muted);">📍 ${esc(p.enderecoTexto)}</p>` : ''}
+      ${p.pinoManual ? '<p class="pc-linha" style="color:#92400e;">📍 Pino ajustado à mão pelo cliente</p>' : ''}
+      ${p.descontoFidelidadeCentavos ? `<div class="pedido-premio">🎁 Prêmio fidelidade usado: −${formatarCentavos(p.descontoFidelidadeCentavos)} (já descontado do total)</div>` : ''}
+      ${(p.itens || []).length ? `<div class="pc-itens">
+        ${p.itens.map(i => `<div>${esc(i.quantidade)}x ${esc(i.nome)} ${i.detalhes?.length ? `(${esc(i.detalhes.join(', '))})` : ''}</div>`).join('')}
+      </div>` : ''}
+      ${p.freteCentavos ? `<div class="pc-linha pc-resumo" style="color:var(--text-muted);"><span>🛵 Entrega${p.distanciaKm ? ` (${esc(p.distanciaKm)} km)` : ''}</span><span>${formatarCentavos(p.freteCentavos)}</span></div>` : ''}
+      <div class="pc-sec">${secundarios}</div>
+    </details>
   `;
+  const det = div.querySelector('[data-detalhes]');
+  det.addEventListener('toggle', () => { if (det.open) cardsAbertos.add(p.id); else cardsAbertos.delete(p.id); });
 
   div.querySelector('[data-print]')?.addEventListener('click', () => imprimirComandaTermica(p));
   div.querySelector('[data-resumo]')?.addEventListener('click', () => copiarResumoAvulso(p));
