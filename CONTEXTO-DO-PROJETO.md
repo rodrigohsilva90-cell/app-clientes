@@ -99,7 +99,7 @@
 ## 8. Armadilhas conhecidas
 
 - `clients.js` usa **CRLF**: ao editar com script, preserve as quebras de linha (senão o diff mostra o arquivo inteiro mudado).
-- Algumas ferramentas de escrita de arquivo transformam `̀` (texto de escape) em caracteres reais. Depois de escrever código com `\uXXXX`, confira.
+- Algumas ferramentas de escrita de arquivo transformam `\u0300` (texto de escape) em caracteres reais. Depois de escrever código com `\uXXXX`, confira.
 - Toda mudança de arquivo em cache exige subir `CACHE_VERSION` no `sw.js`.
 - Notificações não funcionam no APK do AppsGeyser nem com dados do Chrome apagados; no iPhone só com o app adicionado à Tela de Início.
 - O Cloudflare pode levar até 15 min para ativar um agendamento (cron) novo.
