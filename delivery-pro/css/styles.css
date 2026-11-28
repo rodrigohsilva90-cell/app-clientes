@@ -870,3 +870,21 @@ details.gc-secao > summary small { font-weight: 400; font-size: 12px; color: var
 .mb-combina { display: block; color: #1d4ed8; font-weight: 600; font-size: 13px; }
 :root.mb-noite .mb-combina { color: #93c5fd; }
 .mb-aviso-cheia { background: #fef3c7; border: 1px solid #fcd34d; color: #78350f; font-size: 14px; }
+/* Motoboys: hoje e acerto */
+.frota-abas { padding: 8px 16px 0; margin: 0; }
+.ac-totais { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px 0; }
+.ac-totais > div { background: var(--bg, #f8fafc); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.ac-totais small { display: block; color: var(--text-muted); font-size: 12px; }
+.ac-totais strong { font-size: 18px; }
+@media (min-width: 640px) { .ac-totais { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.ac-bloco { border-top: 1px dashed var(--border); margin-top: 8px; padding-top: 6px; }
+.ac-bloco small { color: var(--text-muted); font-weight: 400; }
+.ac-corridas { margin-top: 8px; font-size: 13px; }
+.ac-bloco .mb-bag-total { gap: 8px; }
+.ac-bloco .mb-bag-total strong { white-space: nowrap; }
+.ac-opcao { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-top: 8px; cursor: pointer; font-weight: 600; }
+.ac-opcao input { width: 20px; height: 20px; flex: none; margin-top: 2px; }
+.ac-opcao small { font-weight: 400; }
+.ac-opcao:has(input:checked) { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
+.gc-form label.ac-opcao { display: flex; flex-direction: row; }
+.gc-form label.ac-opcao input { width: 20px; height: 20px; margin: 2px 0 0; padding: 0; }

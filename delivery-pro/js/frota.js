@@ -22,13 +22,18 @@ export async function abrirMapaFrota({ concluidosHoje = () => [] } = {}) {
   overlay.innerHTML = `
     <div class="gc-janela frota-janela">
       <header class="gc-topo">
-        <h3>🗺️ Motoboys ao vivo</h3>
+        <h3>🛵 Motoboys</h3>
         <div style="display:flex; gap:8px;">
           <button class="btn-outline-sm" type="button" data-centralizar>🎯 Ver todos</button>
           <button class="btn-outline-sm" type="button" data-fechar>✕</button>
         </div>
       </header>
-      <div class="frota-corpo">
+      <div class="rl-periodos frota-abas">
+        <button type="button" class="rl-chip ativo" data-aba-frota="vivo">🗺️ Ao vivo</button>
+        <button type="button" class="rl-chip" data-aba-frota="acerto">💰 Hoje e acerto</button>
+      </div>
+      <div class="frota-corpo hidden" data-painel-frota="acerto"><div id="fr-acerto"></div></div>
+      <div class="frota-corpo" data-painel-frota="vivo">
         ${lojaPos ? '' : '<div class="frota-aviso">⚠ A loja ainda não tem endereço no mapa. Coloque em ⚙ Configurações → 🛵 Entrega e frete para ver a loja aqui e para o mapa aparecer para os clientes.</div>'}
         <div class="frota-resumo" id="fr-resumo"></div>
         <div id="fr-mapa" class="frota-mapa-real"></div>
@@ -38,6 +43,19 @@ export async function abrirMapaFrota({ concluidosHoje = () => [] } = {}) {
     </div>`;
   document.body.appendChild(overlay);
   const $ = (s) => overlay.querySelector(s);
+  // Abas: mapa ao vivo / ganhos do dia e acerto (com o caixa)
+  let acertoMontado = false;
+  overlay.querySelectorAll('[data-aba-frota]').forEach(b => b.onclick = async () => {
+    const aba = b.dataset.abaFrota;
+    overlay.querySelectorAll('[data-aba-frota]').forEach(x => x.classList.toggle('ativo', x === b));
+    overlay.querySelectorAll('[data-painel-frota]').forEach(x => x.classList.toggle('hidden', x.dataset.painelFrota !== aba));
+    $('[data-centralizar]').classList.toggle('hidden', aba !== 'vivo');
+    if (aba === 'vivo' && mapa) setTimeout(() => mapa.invalidateSize(), 50);
+    if (aba === 'acerto') {
+      if (!acertoMontado) { acertoMontado = true; (await import('./repasse.js')).montarAcertos($('#fr-acerto')); }
+      else $('#fr-acerto [data-aba="turnos"]')?.click(); // atualiza os números
+    }
+  });
 
   if (typeof L === 'undefined') { $('#fr-mapa').innerHTML = '<p style="padding:20px;">Mapa indisponível. Confira a internet e abra de novo.</p>'; }
   const mapa = typeof L !== 'undefined' ? L.map($('#fr-mapa')).setView(lojaPos ? [lojaPos.lat, lojaPos.lng] : [-23.55, -46.63], 14) : null;

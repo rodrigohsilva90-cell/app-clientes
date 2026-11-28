@@ -121,7 +121,16 @@ function calcularResumo(pedidos, estado) {
   r.despesasCentavos = movs.filter(m => m.tipo === 'despesa').reduce((a, m) => a + (Number(m.valorCentavos) || 0), 0);
   r.sangriasCentavos = movs.filter(m => m.tipo === 'sangria').reduce((a, m) => a + (Number(m.valorCentavos) || 0), 0);
   r.movimentos = movs.map(m => ({ tipo: m.tipo, valorCentavos: Number(m.valorCentavos) || 0, descricao: String(m.descricao || '') }));
-  r.dinheiroEsperadoCentavos = r.fundoTrocoCentavos + (r.porPagamento.Dinheiro || 0) - r.despesasCentavos - r.sangriasCentavos;
+  // Dinheiro de entrega feita pelo motoboy do app fica com ele até o acerto: não está na gaveta ainda.
+  // Quando o acerto é confirmado, entra aqui como movimento (entrada_motoboy / saida_motoboy).
+  const dinheiroComMotoboy = (p) => p.motoboyId && p.formaPagamento === 'dinheiro' && p.pagamentoStatus !== 'aprovado' && !['cancelado', 'ocorrencia'].includes(p.status);
+  const soma = (tipo) => movs.filter(m => m.tipo === tipo).reduce((a, m) => a + (Number(m.valorCentavos) || 0), 0);
+  r.dinheiroBalcaoCentavos = (r.porPagamento.Dinheiro || 0) - pedidos.filter(dinheiroComMotoboy).reduce((a, p) => a + (Number(p.totalCentavos) || 0), 0);
+  r.dinheiroPendenteMotoboyCentavos = pedidos.filter(p => dinheiroComMotoboy(p) && !p.acertoId).reduce((a, p) => a + (Number(p.totalCentavos) || 0), 0);
+  r.motoboyEntradaCentavos = soma('entrada_motoboy') + soma('troco_motoboy_volta');
+  r.motoboySaidaCentavos = soma('saida_motoboy') + soma('troco_motoboy');
+  r.dinheiroEsperadoCentavos = r.fundoTrocoCentavos + r.dinheiroBalcaoCentavos - r.despesasCentavos - r.sangriasCentavos
+    + r.motoboyEntradaCentavos - r.motoboySaidaCentavos;
   // Repasse das corridas dos motoboys deste turno (o que a loja paga por entrega)
   const rep = AppState.lojaDados && AppState.lojaDados.repasse;
   r.corridasMotoboyCentavos = pedidos.filter(p => p.motoboyId && p.status === 'concluido')
@@ -148,10 +157,13 @@ function htmlResumo(r, estado, paraImpressao = false) {
     ${linha('Fundo de troco', formatarCentavos(r.fundoTrocoCentavos))}
     ${r.despesasCentavos ? linha('Despesas pagas da gaveta', '− ' + formatarCentavos(r.despesasCentavos)) : ''}
     ${r.sangriasCentavos ? linha('Sangrias (dinheiro retirado)', '− ' + formatarCentavos(r.sangriasCentavos)) : ''}
+    ${r.motoboyEntradaCentavos ? linha('Acertos dos motoboys (entrou na gaveta)', '+ ' + formatarCentavos(r.motoboyEntradaCentavos)) : ''}
+    ${r.motoboySaidaCentavos ? linha('Troco/pagamento a motoboys (saiu da gaveta)', '− ' + formatarCentavos(r.motoboySaidaCentavos)) : ''}
     ${linha('Dinheiro esperado na gaveta', formatarCentavos(r.dinheiroEsperadoCentavos))}
+    ${r.dinheiroPendenteMotoboyCentavos ? (paraImpressao ? linha('Ainda com motoboys (sem acerto)', formatarCentavos(r.dinheiroPendenteMotoboyCentavos)) : `<div class="tr-alerta">🛵 Motoboys ainda estão com ${formatarCentavos(r.dinheiroPendenteMotoboyCentavos)} em dinheiro de clientes. Faça o acerto em 🗺️ Motoboys → 💰 Hoje e acerto antes de fechar, para esse dinheiro entrar na gaveta.</div>`) : ''}
     ${linha('Cancelados', r.cancelados)}
     ${linha('Com ocorrência', r.ocorrencias)}
-    ${r.movimentos.length ? (paraImpressao ? '<br/>' : '<hr/>') + r.movimentos.map(m => linha(`${m.tipo === 'sangria' ? '💵 Sangria' : '🧾 Despesa'}: ${esc(m.descricao)}`, formatarCentavos(m.valorCentavos))).join('') : ''}
+    ${r.movimentos.length ? (paraImpressao ? '<br/>' : '<hr/>') + r.movimentos.map(m => linha(`${({ sangria: '💵 Sangria', despesa: '🧾 Despesa', troco_motoboy: '🛵 Troco entregue', troco_motoboy_volta: '🛵 Troco devolvido', entrada_motoboy: '🛵 Acerto (entrou)', saida_motoboy: '🛵 Acerto (saiu)' })[m.tipo] || m.tipo}: ${esc(m.descricao)}`, formatarCentavos(m.valorCentavos))).join('') : ''}
     ${r.lucro ? (paraImpressao ? '<br/>' : '<hr/>') + `
       ${linha('Faturamento', formatarCentavos(r.totalCentavos))}
       ${linha('− Corridas dos motoboys', formatarCentavos(r.lucro.corridasCentavos))}

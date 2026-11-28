@@ -963,13 +963,19 @@ async function extratoTurno(fs, lojaId, uid, loja) {
     .filter(p => !p.acertoId && (p.status === 'concluido' || (p.status === 'cancelado' && p.manterRepasse)))
     .filter(p => (Date.parse(p.entregueEm || p.canceladoEm || p.criadoEm) || 0) >= limite)
     .map(p => {
-      const dinheiro = p.status === 'concluido' && !pago(p) && p.formaPagamento === 'dinheiro' ? Number(p.totalCentavos) || 0 : 0;
-      const cartao = p.status === 'concluido' && !pago(p) && /cartao/.test(p.formaPagamento || '') ? Number(p.totalCentavos) || 0 : 0;
+      const concluido = p.status === 'concluido';
+      const valor = Number(p.totalCentavos) || 0;
+      const dinheiro = concluido && !pago(p) && p.formaPagamento === 'dinheiro' ? valor : 0;
+      const cartao = concluido && !pago(p) && /cartao/.test(p.formaPagamento || '') ? valor : 0;
+      // Como o cliente pagou: online (já caiu na conta da loja), dinheiro (está com o motoboy),
+      // cartão na maquininha da loja, ou Pix ainda não confirmado pelo banco
+      const forma = !concluido ? 'cancelado' : pago(p) ? 'online' : p.formaPagamento === 'dinheiro' ? 'dinheiro' : /cartao/.test(p.formaPagamento || '') ? 'cartao' : p.formaPagamento === 'pix' ? 'pix_pendente' : 'outro';
       return {
         id: p.id, numero: p.numeroPedido || null, bairro: (p.enderecoPartes && p.enderecoPartes.bairro) || '',
         em: p.entregueEm || p.canceladoEm || null, cancelado: p.status === 'cancelado',
         repasseCentavos: p.repasseMotoboyCentavos != null ? Number(p.repasseMotoboyCentavos) : calcularRepasse(rep, p),
-        subsidio: !(Number(p.freteCentavos) > 0), chuva: Boolean(p.adicionalChuva), dinheiroCentavos: dinheiro, cartaoCentavos: cartao
+        subsidio: !(Number(p.freteCentavos) > 0), chuva: Boolean(p.adicionalChuva), dinheiroCentavos: dinheiro, cartaoCentavos: cartao,
+        forma, valorCentavos: concluido ? valor : 0, freteCentavos: Number(p.freteCentavos) || 0
       };
     })
     .sort((a, b) => String(a.em).localeCompare(String(b.em)));
@@ -987,6 +993,9 @@ async function extratoTurno(fs, lojaId, uid, loja) {
     corridas, entregas, diariaCentavos: diaria, somaCorridasCentavos: somaCorridas, bonusCentavos: bonus,
     meta, bonusMetaCentavos: Number(rep.bonusMetaCentavos) || 0, fundoTrocoCentavos: fundoTroco,
     dinheiroRecebidoCentavos: dinheiroRecebido, cartaoCentavos: corridas.reduce((a, c) => a + c.cartaoCentavos, 0),
+    porForma: ['online', 'dinheiro', 'cartao', 'pix_pendente'].reduce((o, f) => { const cs = corridas.filter(c => c.forma === f); o[f] = { qtd: cs.length, centavos: cs.reduce((a, c) => a + c.valorCentavos, 0) }; return o; }, {}),
+    vendidoCentavos: corridas.reduce((a, c) => a + c.valorCentavos, 0),
+    cancelados: corridas.filter(c => c.cancelado).length,
     receberCentavos: receber, devolverCentavos: devolver, saldoCentavos: receber - devolver,
     emRota: pedidos.filter(p => p.status === 'entrega').length, chuvaAtiva: Boolean(rep.chuvaAtiva)
   };
@@ -1070,6 +1079,21 @@ async function turnoMotoboy(request, env) {
   }
 }
 
+// Caixa aberto agora (lojas/{id}/publico/estado) → id do turno, ou null
+async function caixaAberto(fs, lojaId) {
+  const est = await fs.ler(`lojas/${lojaId}/publico/estado`);
+  return est && est.caixaAberto && est.turnoId ? String(est.turnoId) : null;
+}
+// Lança um movimento de dinheiro na gaveta do caixa aberto (troco do motoboy, acerto). Sem caixa aberto: não lança.
+async function lancarNoCaixa(fs, lojaId, mov) {
+  try {
+    const turnoId = await caixaAberto(fs, lojaId);
+    if (!turnoId) return false;
+    await fs.adicionarNaLista(`lojas/${lojaId}/turnos/${turnoId}`, 'movimentos', [{ ...mov, valorCentavos: Math.round(mov.valorCentavos), em: new Date(), id: crypto.randomUUID() }]);
+    return true;
+  } catch (err) { console.error('lancarNoCaixa', err && err.message); return false; }
+}
+
 // Balcão: turnos dos motoboys, troco inicial, confirmação do acerto e histórico
 async function acertosMotoboy(request, env) {
   try {
@@ -1081,23 +1105,29 @@ async function acertosMotoboy(request, env) {
     const loja = await fs.ler(`lojas/${lojaId}`);
     if (corpo.acao === 'historico') {
       const lista = (await fs.listar(`lojas/${lojaId}/acertos_motoboy`)).sort((a, b) => String(b.confirmadoEm).localeCompare(String(a.confirmadoEm))).slice(0, 500);
-      return jsonResponse({ acertos: lista.map(a => ({ id: a.id, nome: a.nome, confirmadoEm: a.confirmadoEm, entregas: a.entregas, receberCentavos: a.receberCentavos, devolverCentavos: a.devolverCentavos, saldoCentavos: a.saldoCentavos, diariaCentavos: a.diariaCentavos, somaCorridasCentavos: a.somaCorridasCentavos, bonusCentavos: a.bonusCentavos, fundoTrocoCentavos: a.fundoTrocoCentavos, dinheiroRecebidoCentavos: a.dinheiroRecebidoCentavos })) });
+      return jsonResponse({ acertos: lista.map(a => ({ id: a.id, nome: a.nome, confirmadoEm: a.confirmadoEm, entregas: a.entregas, receberCentavos: a.receberCentavos, devolverCentavos: a.devolverCentavos, saldoCentavos: a.saldoCentavos, diariaCentavos: a.diariaCentavos, somaCorridasCentavos: a.somaCorridasCentavos, bonusCentavos: a.bonusCentavos, fundoTrocoCentavos: a.fundoTrocoCentavos, dinheiroRecebidoCentavos: a.dinheiroRecebidoCentavos, cartaoCentavos: a.cartaoCentavos || 0, porForma: a.porForma || null, vendidoCentavos: a.vendidoCentavos || 0, pagoComo: a.pagoComo || null, uid: a.uid || null })) });
     }
     const uid = String(corpo.uid || '');
     if (corpo.acao !== 'listar' && !/^[A-Za-z0-9]{6,128}$/.test(uid)) throw new ErroPedido('Entregador inválido.');
     if (corpo.acao === 'fundoTroco') {
       const v = Math.round(Number(corpo.centavos) || 0);
       if (v < 0 || v > 100000000) throw new ErroPedido('Valor inválido.');
-      const t = (await fs.ler(`lojas/${lojaId}/turnosMotoboy/${uid}`)) || {};
+      const [t0, ent] = await Promise.all([fs.ler(`lojas/${lojaId}/turnosMotoboy/${uid}`), fs.ler(`lojas/${lojaId}/entregadores/${uid}`)]);
+      const t = t0 || {};
       await fs.gravarJuntos([{ caminho: `lojas/${lojaId}/turnosMotoboy/${uid}`, dados: { ...t, fundoTrocoCentavos: v, status: t.status || 'aberto' } }]);
-      return jsonResponse({ ok: true });
+      // O troco sai da gaveta do caixa (ou volta, se diminuiu)
+      const dif = v - (Number(t.fundoTrocoCentavos) || 0);
+      const noCaixa = dif ? await lancarNoCaixa(fs, lojaId, { tipo: dif > 0 ? 'troco_motoboy' : 'troco_motoboy_volta', valorCentavos: Math.abs(dif), descricao: `Troco ${dif > 0 ? 'entregue a' : 'devolvido por'} ${(ent && ent.nome) || 'motoboy'}`, por: quem }) : false;
+      return jsonResponse({ ok: true, noCaixa });
     }
     if (corpo.acao === 'confirmar') {
       const ent = await fs.ler(`lojas/${lojaId}/entregadores/${uid}`);
       const ext = await extratoTurno(fs, lojaId, uid, loja);
       if (ext.emRota) throw new ErroPedido('Este entregador ainda tem entrega em rota.', 409);
       const acertoId = 'a_' + [...crypto.getRandomValues(new Uint8Array(8))].map(b => b.toString(16).padStart(2, '0')).join('');
-      const resumo = { uid, nome: (ent && ent.nome) || 'Entregador', confirmadoPor: quem, confirmadoEm: new Date(),
+      const pagoComo = corpo.pagoComo === 'pix' ? 'pix' : 'dinheiro';
+      const resumo = { uid, nome: (ent && ent.nome) || 'Entregador', confirmadoPor: quem, confirmadoEm: new Date(), pagoComo,
+        porForma: ext.porForma, vendidoCentavos: ext.vendidoCentavos,
         entregas: ext.entregas, diariaCentavos: ext.diariaCentavos, somaCorridasCentavos: ext.somaCorridasCentavos, bonusCentavos: ext.bonusCentavos,
         fundoTrocoCentavos: ext.fundoTrocoCentavos, dinheiroRecebidoCentavos: ext.dinheiroRecebidoCentavos, cartaoCentavos: ext.cartaoCentavos,
         receberCentavos: ext.receberCentavos, devolverCentavos: ext.devolverCentavos, saldoCentavos: ext.saldoCentavos,
@@ -1105,16 +1135,28 @@ async function acertosMotoboy(request, env) {
       if (!(await fs.criarSeNaoExiste(`lojas/${lojaId}/acertos_motoboy/${acertoId}`, resumo))) throw new ErroPedido('Tente de novo.', 409);
       await fs.atualizarVarios(ext.corridas.map(c => ({ caminho: `lojas/${lojaId}/pedidos/${c.id}`, dados: { acertoId } })));
       await fs.apagar([`lojas/${lojaId}/turnosMotoboy/${uid}`]);
-      return jsonResponse({ ok: true, acertoId, resumo: { ...resumo, confirmadoEm: new Date().toISOString() } });
+      // Na gaveta: o motoboy entrega o dinheiro dos clientes + o troco; se a loja pagou em dinheiro, sai o ganho dele
+      const nome = resumo.nome;
+      const naGaveta = pagoComo === 'dinheiro' ? ext.devolverCentavos - ext.receberCentavos : ext.devolverCentavos;
+      const movs = [];
+      if (naGaveta > 0) movs.push({ tipo: 'entrada_motoboy', valorCentavos: naGaveta, descricao: `Acerto ${nome}: ${pagoComo === 'dinheiro' ? 'devolveu (já descontado o ganho dele)' : 'dinheiro dos clientes + troco'}` });
+      if (naGaveta < 0) movs.push({ tipo: 'saida_motoboy', valorCentavos: -naGaveta, descricao: `Acerto ${nome}: pago em dinheiro da gaveta` });
+      let noCaixa = false;
+      for (const m of movs) noCaixa = (await lancarNoCaixa(fs, lojaId, { ...m, por: quem, acertoId })) || noCaixa;
+      if (!movs.length) noCaixa = Boolean(await caixaAberto(fs, lojaId));
+      return jsonResponse({ ok: true, acertoId, noCaixa, resumo: { ...resumo, confirmadoEm: new Date().toISOString() } });
     }
     // listar: um resumo por entregador cadastrado
-    const entregadores = await fs.listar(`lojas/${lojaId}/entregadores`);
-    const lista = [];
-    for (const e of entregadores.slice(0, 20)) {
+    const [entregadores, acertos] = await Promise.all([fs.listar(`lojas/${lojaId}/entregadores`), fs.listar(`lojas/${lojaId}/acertos_motoboy`)]);
+    const hoje = diaDaLoja(loja);
+    const deHoje = acertos.filter(a => a.confirmadoEm && diaDaLoja(loja, new Date(a.confirmadoEm)) === hoje);
+    const lista = await Promise.all(entregadores.slice(0, 20).map(async (e) => {
       const ext = await extratoTurno(fs, lojaId, e.id, loja);
-      lista.push({ uid: e.id, nome: e.nome || 'Entregador', ...ext });
-    }
-    return jsonResponse({ entregadores: lista, repasse: (loja && loja.repasse) || null });
+      const meus = deHoje.filter(a => a.uid === e.id);
+      return { uid: e.id, nome: e.nome || 'Entregador', ...ext,
+        acertadoHoje: { acertos: meus.length, entregas: meus.reduce((x, a) => x + (Number(a.entregas) || 0), 0), receberCentavos: meus.reduce((x, a) => x + (Number(a.receberCentavos) || 0), 0), vendidoCentavos: meus.reduce((x, a) => x + (Number(a.vendidoCentavos) || 0), 0) } };
+    }));
+    return jsonResponse({ entregadores: lista, repasse: (loja && loja.repasse) || null, caixaAberto: Boolean(await caixaAberto(fs, lojaId)) });
   } catch (err) {
     if (err instanceof ErroPedido) return jsonResponse({ erro: err.message }, err.status);
     console.error('acertosMotoboy', err && err.stack || err);
@@ -2016,6 +2058,15 @@ async function firestore(env) {
         });
         if (!resp.ok) throw new Error(`Firestore commit: ${resp.status} ${await resp.text()}`);
       }
+    },
+    // Acrescenta itens numa lista do documento (como arrayUnion), sem reescrever o que já está lá
+    async adicionarNaLista(caminho, campo, itens) {
+      const resp = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
+        method: 'POST',
+        headers: await cabecalhos(),
+        body: JSON.stringify({ writes: [{ transform: { document: `${base}/${caminho}`, fieldTransforms: [{ fieldPath: campo, appendMissingElements: { values: itens.map(paraValor) } }] }, currentDocument: { exists: true } }] })
+      });
+      if (!resp.ok) throw new Error(`Firestore lista ${caminho}: ${resp.status} ${await resp.text()}`);
     },
     // Lê com a "versão" do documento (para gravar só se ninguém mexeu antes)
     async lerComVersao(caminho) {
