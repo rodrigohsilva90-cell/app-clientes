@@ -47,7 +47,7 @@ export function iniciarKds(nome = '') {
     if (!lista) return;
     const visiveis = ultimos.filter(p => !(p.status === 'preparo' && p.pronto));
     if (!visiveis.length) {
-      lista.innerHTML = '<div class="card"><p style="color:var(--text-muted);">Nenhum pedido para preparar agora. 🎉</p></div>';
+      lista.innerHTML = `<div class="card"><p style="color:var(--text-muted);">Nenhum pedido para preparar agora. 🎉</p><p class="gc-dica">🟢 Conectado à ${esc(AppState.lojaDados.nome)}. Pedido novo aparece aqui sozinho, com som (toque em 🔊 Ativar som).</p></div>`;
       return;
     }
     lista.innerHTML = visiveis.map(p => {
@@ -58,6 +58,7 @@ export function iniciarKds(nome = '') {
             <strong>#${esc(p.numeroPedido || p.id.slice(0, 4))}</strong>
             <span>${p.tipoEntrega === 'retirada' ? '🏪 RETIRADA' : '🛵 ENTREGA'} · ⏱ ${min} min</span>
           </div>
+          ${p.liberadoEm ? '<div class="kds-liberado">📤 Balcão já chamou o motoboy</div>' : ''}
           <ul class="kds-itens">
             ${(p.itens || []).map(i => `
               <li><strong>${esc(i.quantidade)}x</strong> ${esc(i.nome)}
@@ -97,7 +98,9 @@ export function iniciarKds(nome = '') {
     },
     (err) => {
       console.error(err);
-      document.getElementById('kds-lista').innerHTML = '<div class="card">🔒 Sem permissão. Entre com uma conta da equipe desta loja.</div>';
+      document.getElementById('kds-lista').innerHTML = err && err.code === 'permission-denied'
+        ? '<div class="card">🔒 Esta conta não tem acesso aos pedidos desta loja. Peça ao dono para conferir o cadastro em ⚙ Configurações → Equipe (e entre de novo).</div>'
+        : '<div class="card">📵 Não foi possível carregar os pedidos (internet?). A tela tenta de novo sozinha; se continuar, feche e abra o app.</div>';
     }
   );
   setInterval(render, 60000); // atualiza os minutos

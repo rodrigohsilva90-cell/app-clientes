@@ -1,6 +1,6 @@
 Worker "delivery-pro" (Cloudflare) — https://delivery-pro.rodrigo-h-silva90.workers.dev
 
-worker.js = cópia EXATA do que está no ar (sha256 ef2da2b8698d61c41e5b2828f7c8606792ab6a6d0a0e9e8f54975d48388aab91).
+worker.js = cópia EXATA do que está no ar (sha256 c2f74ff4844483246108b40bb556b74b3e2eb2d43cbc9e370dce53bff02b090c).
 Ele junta worker/index.js + todos os arquivos do app (index.html, css, js, sw.js) num arquivo só.
 
 Para gerar de novo depois de mudar algum arquivo (rodar dentro da pasta delivery-pro):
@@ -45,3 +45,4 @@ Limite por motoboy (Entrega e frete → 6. Motoboys): loja.motoboyMaxEntregas (1
 Motoboys → 💰 Hoje e acerto (frota.js chama montarAcertos de repasse.js; o menu "Acerto dos motoboys" abre o mesmo): por motoboy, entregas, vendido por forma (online / dinheiro / maquininha / Pix pendente: extratoTurno.porForma), ganho (diária+corridas+bônus), acerto, lista de corridas e "já acertado hoje". Acerto pergunta pagoComo (dinheiro|pix) e o Worker lança no caixa aberto (turnos/{id}.movimentos via adicionarNaLista): troco_motoboy / troco_motoboy_volta / entrada_motoboy / saida_motoboy. Fechamento do caixa: dinheiro de entrega com motoboyId não conta na gaveta até o acerto; aviso de dinheiro ainda com motoboys.
 Motoboy com bag: ainda na loja (GPS até 300 m da loja ou sem GPS) pode "+ Levar junto" qualquer pedido liberado (se passar do desvio, pede confirmação); na rua, o que passa do desvio fica "Longe da rota" + reservar. Botões não somem: mostram o motivo (🍳 Esperando o balcão liberar, 🎒 Bag cheia). Aviso azul no topo: quantas leva e até quantas pode.
 Saudação com o nome (saudacao() em config.js): balcão/dono usa equipe/{uid}.nome, cozinha recebe o nome em iniciarKds(nome), motoboy lê entregadores/{uid}.nome (ou equipe). Só o primeiro nome + Bom dia/Boa tarde/Boa noite + frase por função.
+Cozinha x balcão: "📤 Liberar para os motoboys" grava só liberadoEm (não marca pronto); quem marca pronto é a cozinha (KDS esconde preparo+pronto). Balcão mostra "🍳 Cozinha: preparando" / "✅ pronto"; KDS mostra "📤 Balcão já chamou o motoboy", "🟢 Conectado" quando vazio e erro claro (sem permissão / sem internet). Endereço da loja: CEP busca ao digitar o 8º número (antes só no blur).

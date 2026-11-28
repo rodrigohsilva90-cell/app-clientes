@@ -371,10 +371,14 @@ export function abrirConfigEntrega() {
     bairro: $('#ce-bairro').value.trim().slice(0, 60), cidade: $('#ce-cidade').value.trim().slice(0, 60), uf: $('#ce-uf').value.trim().toUpperCase().slice(0, 2)
   });
   const textoEndereco = (e) => [[e.rua, e.numero].filter(Boolean).join(', '), e.bairro, [e.cidade, e.uf].filter(Boolean).join('/')].filter(Boolean).join(' - ');
-  $('#ce-cep').addEventListener('blur', async () => {
-    const cep = $('#ce-cep').value.replace(/\D/g, '');
-    if (cep.length !== 8) return;
-    $('#ce-cep').value = cep.replace(/^(\d{5})(\d{3})$/, '$1-$2');
+  // Busca o CEP assim que o 8º número é digitado (no celular o "sair do campo" quase nunca acontece)
+  let ultimoCep = '';
+  const buscarCepLoja = async () => {
+    const cep = $('#ce-cep').value.replace(/\D/g, '').slice(0, 8);
+    $('#ce-cep').value = cep.length > 5 ? `${cep.slice(0, 5)}-${cep.slice(5)}` : cep;
+    if (cep.length !== 8 || cep === ultimoCep) return;
+    ultimoCep = cep;
+    statusEnd('🔎 Buscando o CEP...');
     try {
       const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
       const d = await r.json();
@@ -385,8 +389,10 @@ export function abrirConfigEntrega() {
       if (d.uf) $('#ce-uf').value = d.uf;
       statusEnd('✅ CEP encontrado. Coloque o número e toque em 🔎 Achar no mapa.');
       $('#ce-num').focus();
-    } catch (_) { statusEnd('Sem internet para buscar o CEP. Preencha à mão.'); }
-  });
+    } catch (_) { ultimoCep = ''; statusEnd('Sem internet para buscar o CEP. Preencha à mão.'); }
+  };
+  $('#ce-cep').addEventListener('input', buscarCepLoja);
+  $('#ce-cep').addEventListener('blur', buscarCepLoja);
   $('#ce-achar').onclick = async () => {
     const e = lerEndereco();
     if (!e.rua || !e.cidade) { statusEnd('Preencha pelo menos a rua e a cidade (ou o CEP).'); return; }
